@@ -161,6 +161,15 @@ setup() {
   [[ "$result" == *"(no git)"* ]]
 }
 
+@test "Git: gitリポジトリのコールドスタートで(no git)を表示しないこと" {
+  # Clear cache to simulate cold start
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" != *"(no git)"* ]]
+}
+
 # ============================================================================
 # 統合テスト: セッション表示 — 状態に応じた表示がされること
 # ============================================================================

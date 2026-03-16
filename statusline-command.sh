@@ -385,10 +385,9 @@ else
 fi
 
 # Git info (strip repo name if same as dir basename to avoid redundancy)
+_git_root="${project_dir:-$current_dir}"
 if [[ -n "$git_cached" ]]; then
-  # Compare against project_dir if available (that's the repo root)
-  _compare_dir="${project_dir:-$current_dir}"
-  dir_basename="${_compare_dir##*/}"
+  dir_basename="${_git_root##*/}"
   # repo_name is always plain text at start of git_cached (no ANSI prefix)
   repo_name="${git_cached%% *}"
   if [[ "$dir_basename" == "$repo_name" ]]; then
@@ -402,7 +401,11 @@ if [[ -n "$git_cached" ]]; then
   fi
   [[ -n "$git_cached" ]] && line2+=("$git_cached")
 else
-  line2+=("${DIM}(no git)${RST}")
+  # No cached git info — check if truly non-git using pure bash (no fork)
+  if [[ ! -d "${_git_root}/.git" && ! -f "${_git_root}/.git" ]]; then
+    line2+=("${DIM}(no git)${RST}")
+  fi
+  # If .git exists, background build_git is in progress; next render will show info
 fi
 
 
