@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.1] - 2026-03-16
+
+### Fixed
+
+- Suppress false "(no git)" on cold start for git repositories — use pure-bash `.git` check instead of relying on empty cache
+
 ## [1.0.0] - 2026-03-16
 
 ### Added
