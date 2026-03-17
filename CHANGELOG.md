@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.0] - 2026-03-17
+
+### Added
+
+- Show session cost and token count on Line 4 for Bedrock/Vertex/Foundry (pay-per-use providers)
+- Anthropic users continue to see rate limit bars as before
+
+### Changed
+
+- `format_tokens()` now displays one decimal place with lowercase suffix (e.g., `133.5k`, `1.5M`)
+
 ## [1.1.0] - 2026-03-17
 
 ### Changed

@@ -32,12 +32,13 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 - **Model display**: Prefers `display_name`, falls back to `model_id` when empty (e.g. Bedrock). Colors match Anthropic's official brand: Opus=coral(`CORAL`), Sonnet 4.6=teal(`TEAL`), Sonnet 4.5/3.5=amber(`AMBER`), Haiku=lavender(`LAVENDER`).
 - **Git info (Line 2)**: `build_git()` shows dirty state (+staged/~modified/?untracked/!conflicts), ahead/behind, stash count, last commit age+message (20char truncated), detached HEAD (red), worktree indicator. Non-git dirs show `(no git)`. Cold start (no cache yet) uses pure-bash `.git` check to suppress false `(no git)` for actual git repos.
 - **Upstream tracking**: `~/ghq/github.com/anthropics/claude-code/CHANGELOG.md` で Claude Code の変更を確認。公開リポにソースコードはなく、CHANGELOG + plugins + scripts のみ。
-- **Rate limit (Line 4)**: Fetched via undocumented OAuth API (`api.anthropic.com/api/oauth/usage`). OAuth token resolved from env var → macOS Keychain → `~/.claude/.credentials.json`. 300s background-cached. On API error, `touch` cache to prevent retry storm. 5-hour in Anthropic sand (`ANTH`, `38;5;180`), weekly in dim with absolute day/time reset (`format_reset_absolute`).
+- **Line 4 (provider-aware)**: Anthropic = rate limit via undocumented OAuth API (`api.anthropic.com/api/oauth/usage`), 300s background-cached. On API error, `touch` cache to prevent retry storm. 5-hour in Anthropic sand (`ANTH`, `38;5;180`), weekly in dim with absolute day/time reset (`format_reset_absolute`). Bedrock/Vertex/Foundry = session cost (`cost.total_cost_usd`) and token count (`total_input_tokens` + `total_output_tokens`) from stdin JSON. `fetch_usage()` is skipped entirely for non-Anthropic providers.
 
 ## Key Constraints
 
 - Color values must match official branding — model colors follow Anthropic's UI (claude.ai), provider colors follow each cloud's branding. Confirm with user before changing.
 - Script must be **fast** — Claude Code blanks the statusline if it's slow. Avoid external commands in hot paths; use bash builtins. All I/O-heavy operations (git, curl) must run in background subshells.
+- Prefer `printf -v var` over `var=$(printf ...)` — avoids subshell fork. Both are bash builtins but `$(...)` forks.
 - macOS-only: Uses `stat -f %m` and `md5 -q` (not GNU equivalents).
 - The script is referenced directly from `~/.claude/settings.json` — no copy in `~/.claude/`. Single source of truth is this repo.
 - ANSI colors and OSC 8 hyperlinks are supported by the terminal.

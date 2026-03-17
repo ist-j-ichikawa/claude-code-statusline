@@ -52,8 +52,8 @@ git_cache_file() {
 
 format_tokens() {
   local tok=$1
-  if ((tok >= 1000000)); then printf '%dM' $((tok / 1000000))
-  elif ((tok >= 1000)); then printf '%dK' $((tok / 1000))
+  if ((tok >= 1000000)); then printf '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
+  elif ((tok >= 1000)); then printf '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
   else printf '%d' "$tok"
   fi
 }
@@ -176,7 +176,10 @@ eval "$(jq -r '
   @sh "session_id=\(.session_id // "")",
   @sh "session_name=\(.session_name // "")",
   @sh "agent_name=\(.agent.name // "")",
-  @sh "ctx_window_size=\(.context_window.context_window_size // 0)"
+  @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
+  @sh "cost_usd=\(.cost.total_cost_usd // "")",
+  @sh "total_in_tok=\(.context_window.total_input_tokens // "")",
+  @sh "total_out_tok=\(.context_window.total_output_tokens // "")"
 ' <<< "$input")" || true
 
 # --- Git info (5s cached) ---
@@ -427,30 +430,43 @@ else
 fi
 
 # ============================================================================
-# Line 4: Rate Limit (usage API)
+# Line 4: Rate Limit (Anthropic) / Cost & Tokens (Bedrock/Vertex/Foundry)
 # ============================================================================
 line4=()
-usage_json=$(fetch_usage)
-if [[ -n "$usage_json" ]]; then
-  five_pct="" five_reset_iso="" seven_pct="" seven_reset_iso=""
-  eval "$(jq -r '
-    @sh "five_pct=\((.five_hour.utilization // 0) | round)",
-    @sh "five_reset_iso=\(.five_hour.resets_at // "")",
-    @sh "seven_pct=\((.seven_day.utilization // 0) | round)",
-    @sh "seven_reset_iso=\(.seven_day.resets_at // "")"
-  ' <<< "$usage_json" 2>/dev/null)" || true
-
-  if has_val "$five_pct"; then
-    five_reset=$(format_reset_remaining "$five_reset_iso")
-    five_bar="${ANTH}$(progress_bar "$five_pct")${RST}"
-    line4+=("${five_bar} ${ANTH}${five_pct}%${RST}")
-    [[ -n "$five_reset" ]] && line4+=("${ANTH}${five_reset}${RST}")
+if [[ -n "$provider" ]]; then
+  # --- Pay-per-use providers: show session cost & token count ---
+  if has_val "$cost_usd"; then
+    printf -v cost_fmt '%.2f' "$cost_usd"
+    line4+=("${DIM}\$${cost_fmt}${RST}")
   fi
+  if has_val "$total_in_tok" || has_val "$total_out_tok"; then
+    total_tok=$(( ${total_in_tok:-0} + ${total_out_tok:-0} ))
+    line4+=("${DIM}$(format_tokens "$total_tok") tok${RST}")
+  fi
+else
+  # --- Anthropic: show rate limit from usage API ---
+  usage_json=$(fetch_usage)
+  if [[ -n "$usage_json" ]]; then
+    five_pct="" five_reset_iso="" seven_pct="" seven_reset_iso=""
+    eval "$(jq -r '
+      @sh "five_pct=\((.five_hour.utilization // 0) | round)",
+      @sh "five_reset_iso=\(.five_hour.resets_at // "")",
+      @sh "seven_pct=\((.seven_day.utilization // 0) | round)",
+      @sh "seven_reset_iso=\(.seven_day.resets_at // "")"
+    ' <<< "$usage_json" 2>/dev/null)" || true
 
-  if has_val "$seven_pct" && ((seven_pct > 0)); then
-    seven_reset=$(format_reset_absolute "$seven_reset_iso")
-    line4+=("${DIM}week:${seven_pct}%${RST}")
-    [[ -n "$seven_reset" ]] && line4+=("${DIM}${seven_reset}${RST}")
+    if has_val "$five_pct"; then
+      five_reset=$(format_reset_remaining "$five_reset_iso")
+      five_bar="${ANTH}$(progress_bar "$five_pct")${RST}"
+      line4+=("${five_bar} ${ANTH}${five_pct}%${RST}")
+      [[ -n "$five_reset" ]] && line4+=("${ANTH}${five_reset}${RST}")
+    fi
+
+    if has_val "$seven_pct" && ((seven_pct > 0)); then
+      seven_reset=$(format_reset_absolute "$seven_reset_iso")
+      line4+=("${DIM}week:${seven_pct}%${RST}")
+      [[ -n "$seven_reset" ]] && line4+=("${DIM}${seven_reset}${RST}")
+    fi
   fi
 fi
 
