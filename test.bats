@@ -36,27 +36,27 @@ setup() {
 # progress_bar — パーセンテージをバーに変換すること
 # ============================================================================
 @test "progress_bar: 0%で全て空のバーを返すこと" {
-  result=$(progress_bar 0)
+  progress_bar 0 result
   [[ "$result" == "○○○○○○○○○○" ]]
 }
 
 @test "progress_bar: 100%で全て埋まったバーを返すこと" {
-  result=$(progress_bar 100)
+  progress_bar 100 result
   [[ "$result" == "●●●●●●●●●●" ]]
 }
 
 @test "progress_bar: 50%で半分埋まったバーを返すこと" {
-  result=$(progress_bar 50)
+  progress_bar 50 result
   [[ "$result" == "●●●●●○○○○○" ]]
 }
 
 @test "progress_bar: 100%超でも10個で打ち止めになること" {
-  result=$(progress_bar 120)
+  progress_bar 120 result
   [[ "$result" == "●●●●●●●●●●" ]]
 }
 
 @test "progress_bar: 15%で1個だけ埋まること" {
-  result=$(progress_bar 15)
+  progress_bar 15 result
   [[ "$result" == "●○○○○○○○○○" ]]
 }
 
@@ -64,27 +64,27 @@ setup() {
 # color_by_threshold — 閾値に応じた色を返すこと
 # ============================================================================
 @test "color_by_threshold: 上限以上で赤を返すこと" {
-  result=$(color_by_threshold 95 90 80)
+  color_by_threshold 95 90 80 result
   [[ "$result" == "$RED" ]]
 }
 
 @test "color_by_threshold: 中間で黄を返すこと" {
-  result=$(color_by_threshold 85 90 80)
+  color_by_threshold 85 90 80 result
   [[ "$result" == "$YLW" ]]
 }
 
 @test "color_by_threshold: 下限以下で緑を返すこと" {
-  result=$(color_by_threshold 50 90 80)
+  color_by_threshold 50 90 80 result
   [[ "$result" == "$GRN" ]]
 }
 
 @test "color_by_threshold: 上限ちょうどで赤を返すこと" {
-  result=$(color_by_threshold 90 90 80)
+  color_by_threshold 90 90 80 result
   [[ "$result" == "$RED" ]]
 }
 
 @test "color_by_threshold: 中間ちょうどで黄を返すこと" {
-  result=$(color_by_threshold 80 90 80)
+  color_by_threshold 80 90 80 result
   [[ "$result" == "$YLW" ]]
 }
 
@@ -92,22 +92,22 @@ setup() {
 # format_tokens — トークン数を人間が読みやすい形式に変換すること
 # ============================================================================
 @test "format_tokens: 100万以上でM表記になること" {
-  result=$(format_tokens 1500000)
+  format_tokens 1500000 result
   [[ "$result" == "1.5M" ]]
 }
 
 @test "format_tokens: 1000以上でk表記になること" {
-  result=$(format_tokens 45000)
+  format_tokens 45000 result
   [[ "$result" == "45.0k" ]]
 }
 
 @test "format_tokens: 1000未満でそのまま表示されること" {
-  result=$(format_tokens 999)
+  format_tokens 999 result
   [[ "$result" == "999" ]]
 }
 
 @test "format_tokens: ちょうど1000でk表記になること" {
-  result=$(format_tokens 1000)
+  format_tokens 1000 result
   [[ "$result" == "1.0k" ]]
 }
 
@@ -136,6 +136,18 @@ setup() {
   result=$(echo '{"model":{"id":"claude-haiku-4-5","display_name":"Haiku 4.5"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" == *"38;5;183"*"Haiku 4.5"* ]]
+}
+
+@test "モデル色: 大文字混在のdisplay_nameでも正しい色になること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"OPUS 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"38;5;209"*"OPUS 4.6"* ]]
+}
+
+@test "モデル色: nocasematchがスクリプト外に漏れないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null; shopt -q nocasematch && echo "LEAKED" || echo "OK")
+  [[ "$result" == *"OK" ]]
 }
 
 # ============================================================================

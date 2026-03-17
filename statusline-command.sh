@@ -19,42 +19,47 @@ readonly _NOW=$(date +%s)
 # --- Helpers ---
 has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 
-osc8() { printf '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
+# osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
+osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 
+# progress_bar PCT VARNAME — sets VARNAME to bar string (no subshell)
 progress_bar() {
   local pct=$1 width=10
-  local filled=$((pct * width / 100)) bar=""
+  local filled=$((pct * width / 100)) _pb=""
   ((filled > width)) && filled=$width
   local empty=$((width - filled))
-  for ((i=0; i<filled; i++)); do bar+="●"; done
-  for ((i=0; i<empty; i++)); do bar+="○"; done
-  printf '%s' "$bar"
+  for ((i=0; i<filled; i++)); do _pb+="●"; done
+  for ((i=0; i<empty; i++)); do _pb+="○"; done
+  printf -v "$2" '%s' "$_pb"
 }
 
+# color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
 color_by_threshold() {
   local val=$1 hi=$2 mid=$3
-  if ((val >= hi)); then echo "$RED"
-  elif ((val >= mid)); then echo "$YLW"
-  else echo "$GRN"; fi
+  if ((val >= hi)); then printf -v "$4" '%s' "$RED"
+  elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
+  else printf -v "$4" '%s' "$GRN"; fi
 }
 
 cache_stale() {
   local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE}
   [[ ! -f "$cache" ]] && return 0
-  local age=$(( _NOW - $(stat -f %m "$cache" 2>/dev/null || echo 0) ))
+  local age=$(( _NOW - $(stat -f %m "$cache" 2>/dev/null) ))
   ((age > max_age))
 }
 
+# git_cache_file DIR — sets _gc (no subshell)
 git_cache_file() {
   [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$GIT_CACHE_DIR"
-  echo "${GIT_CACHE_DIR}/$(echo "$1" | md5 -q)"
+  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
 }
 
+# format_tokens TOK VARNAME — sets VARNAME (no subshell)
 format_tokens() {
   local tok=$1
-  if ((tok >= 1000000)); then printf '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
-  elif ((tok >= 1000)); then printf '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
-  else printf '%d' "$tok"
+  if ((tok >= 1000000)); then printf -v "$2" '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
+  elif ((tok >= 1000)); then printf -v "$2" '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
+  else printf -v "$2" '%d' "$tok"
   fi
 }
 
@@ -88,6 +93,7 @@ get_oauth_token() {
 readonly SUB_CACHE="${CACHE_BASE}/subscription"
 readonly SUB_CACHE_MAX_AGE=3600
 
+# fetch_subscription — sets _sub_type (no subshell)
 fetch_subscription() {
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
   if cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
@@ -104,10 +110,11 @@ fetch_subscription() {
       fi
     ) & disown
   fi
-  cat "$SUB_CACHE" 2>/dev/null
+  [[ -f "$SUB_CACHE" ]] && _sub_type=$(<"$SUB_CACHE") || _sub_type=""
 }
 
 # --- Usage API (cached, background refresh) ---
+# fetch_usage — sets _usage_json (no subshell)
 fetch_usage() {
   [[ -d "$USAGE_CACHE_DIR" ]] || mkdir -p -m 700 "$USAGE_CACHE_DIR"
   local cache_file="${USAGE_CACHE_DIR}/usage.json"
@@ -135,36 +142,39 @@ fetch_usage() {
     disown
   fi
 
-  [[ -f "$cache_file" ]] && cat "$cache_file"
+  [[ -f "$cache_file" ]] && _usage_json=$(<"$cache_file") || _usage_json=""
 }
 
+# iso_to_epoch ISO — sets _epoch (no subshell)
 iso_to_epoch() {
+  _epoch=""
   local iso=$1
   [[ -z "$iso" || "$iso" == "null" ]] && return 1
   local stripped="${iso%%.*}"
   stripped="${stripped%Z}"
-  env TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null
+  _epoch=$(env TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
+  [[ -n "$_epoch" ]]
 }
 
+# format_reset_remaining ISO — sets _reset (no subshell)
 format_reset_remaining() {
-  local epoch
-  epoch=$(iso_to_epoch "$1") || return
-  local diff=$((epoch - _NOW))
-  ((diff <= 0)) && { printf "now"; return; }
+  iso_to_epoch "$1" || { _reset=""; return; }
+  local diff=$((_epoch - _NOW))
+  if ((diff <= 0)); then _reset="now"; return; fi
   local d=$((diff / 86400)) h=$(( (diff % 86400) / 3600 )) m=$(( (diff % 3600) / 60 ))
-  if ((d > 0)); then printf '%dd%dh' "$d" "$h"
-  elif ((h > 0)); then printf '%d:%02d' "$h" "$m"
-  else printf '0:%02d' "$m"; fi
+  if ((d > 0)); then printf -v _reset '%dd%dh' "$d" "$h"
+  elif ((h > 0)); then printf -v _reset '%d:%02d' "$h" "$m"
+  else printf -v _reset '0:%02d' "$m"; fi
 }
 
+# format_reset_absolute ISO — sets _reset (no subshell)
 format_reset_absolute() {
-  local epoch
-  epoch=$(iso_to_epoch "$1") || return
-  date -j -r "$epoch" +"%a %H:%M" 2>/dev/null
+  iso_to_epoch "$1" || { _reset=""; return; }
+  _reset=$(date -j -r "$_epoch" +"%a %H:%M" 2>/dev/null)
 }
 
 # --- JSON extraction (single jq call) ---
-input=$(cat)
+IFS= read -r -d '' input || true
 eval "$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
   @sh "model_id=\(.model.id // "")",
@@ -273,21 +283,6 @@ build_git() {
   echo "$text"
 }
 
-# --- GitHub active account (from gh auth, cached 60s) ---
-readonly GH_ACCOUNT_CACHE="${CACHE_BASE}/gh-account"
-readonly GH_ACCOUNT_MAX_AGE=60
-
-gh_active_account() {
-  if ! cache_stale "$GH_ACCOUNT_CACHE" "$GH_ACCOUNT_MAX_AGE"; then
-    cat "$GH_ACCOUNT_CACHE"
-    return
-  fi
-  local acct
-  acct=$(gh auth status -h github.com 2>&1 | grep -o 'account [^ ]*' | head -1 | awk '{print $2}')
-  echo "$acct" > "$GH_ACCOUNT_CACHE"
-  echo "$acct"
-}
-
 
 # ============================================================================
 # Line 1: Provider + Model + Agent + [(Fork)] + Session name + Version
@@ -296,12 +291,11 @@ line1=()
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
-model_lower=$(printf '%s' "$model_show" | tr '[:upper:]' '[:lower:]')
 
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
-model_id_lower=$(printf '%s' "$model_id" | tr '[:upper:]' '[:lower:]')
-if [[ "$model_id_lower" =~ ^(global|jp|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]]; then
+shopt -s nocasematch
+if [[ "$model_id" =~ ^(global|jp|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]]; then
   provider="bedrock"
 elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]]; then
   provider="vertex"
@@ -315,26 +309,27 @@ case "$provider" in
   vertex)  line1+=("${VTEX}Vertex${RST}") ;;
   foundry) line1+=("${FNDY}Foundry${RST}") ;;
   *)
-    sub_type=$(fetch_subscription)
-    if has_val "$sub_type"; then
-      line1+=("${ANTH}Anthropic(${sub_type})${RST}")
+    fetch_subscription
+    if has_val "$_sub_type"; then
+      line1+=("${ANTH}Anthropic(${_sub_type})${RST}")
     else
       line1+=("${ANTH}Anthropic${RST}")
     fi
     ;;
 esac
 
-if [[ "$model_lower" == *opus* ]]; then
+if [[ "$model_show" == *opus* ]]; then
   line1+=("${CORAL}${model_show}${RST}")
-elif [[ "$model_lower" == *sonnet*4.5* || "$model_lower" == *sonnet*3.5* ]]; then
+elif [[ "$model_show" == *sonnet*4.5* || "$model_show" == *sonnet*3.5* ]]; then
   line1+=("${AMBER}${model_show}${RST}")
-elif [[ "$model_lower" == *sonnet* ]]; then
+elif [[ "$model_show" == *sonnet* ]]; then
   line1+=("${TEAL}${model_show}${RST}")
-elif [[ "$model_lower" == *haiku* ]]; then
+elif [[ "$model_show" == *haiku* ]]; then
   line1+=("${LAVENDER}${model_show}${RST}")
 else
   line1+=("${model_show}")
 fi
+shopt -u nocasematch
 
 # Agent name
 if has_val "$agent_name"; then
@@ -344,7 +339,13 @@ fi
 # Session name (strip XML tags + command noise from /branch, /fork etc.)
 is_branch=false
 [[ "$session_name" == *"(Branch)"* || "$session_name" == *"(Fork)"* ]] && is_branch=true
-session_name=$(printf '%s' "$session_name" | sed 's/<[^>]*>//g; s/(Branch)//g; s/(Fork)//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
+session_name="${session_name//(Branch)/}"
+session_name="${session_name//(Fork)/}"
+while [[ "$session_name" == *"<"*">"* ]]; do
+  session_name="${session_name%%<*}${session_name#*>}"
+done
+session_name="${session_name#"${session_name%%[![:space:]]*}"}"
+session_name="${session_name%"${session_name##*[![:space:]]}"}"
 # Drop if it looks like command/skill residue (contains colons like "plugin:skill" or starts with "/")
 if [[ "$session_name" == *:* || "$session_name" == /* ]]; then
   session_name=""
@@ -367,24 +368,27 @@ fi
 line2=()
 
 # Git info (background refresh)
-_gc=$(git_cache_file "$current_dir")
+git_cache_file "$current_dir"
 if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$GIT_CACHE_DIR"
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
-git_cached=$(cat "$_gc" 2>/dev/null)
+[[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
 
 # Directory path (project_dir → current_dir when different)
 if has_val "$project_dir"; then
   short_proj="${project_dir/#$HOME/~}"
-  line2+=("$(osc8 "vscode://file/${project_dir}" "$short_proj")")
+  osc8 "vscode://file/${project_dir}" "$short_proj" _osc_tmp
+  line2+=("$_osc_tmp")
   if [[ "$current_dir" != "$project_dir" ]]; then
     short_cwd="${current_dir/#$HOME/~}"
-    line2+=("${DIM}→${RST} $(osc8 "vscode://file/${current_dir}" "$short_cwd")")
+    osc8 "vscode://file/${current_dir}" "$short_cwd" _osc_tmp
+    line2+=("${DIM}→${RST} $_osc_tmp")
   fi
 else
   short_path="${current_dir/#$HOME/~}"
-  line2+=("$(osc8 "vscode://file/${current_dir}" "$short_path")")
+  osc8 "vscode://file/${current_dir}" "$short_path" _osc_tmp
+  line2+=("$_osc_tmp")
 fi
 
 # Git info (strip repo name if same as dir basename to avoid redundancy)
@@ -420,8 +424,9 @@ line3=()
 # Context bar
 if has_val "$used_pct"; then
   pct_int=${used_pct%.*}
-  ctx_color=$(color_by_threshold "$pct_int" 90 80)
-  ctx_text="${ctx_color}$(progress_bar "$pct_int") ${pct_int}%${RST}"
+  color_by_threshold "$pct_int" 90 80 ctx_color
+  progress_bar "$pct_int" _bar
+  ctx_text="${ctx_color}${_bar} ${pct_int}%${RST}"
   # Only warn on 200K models (not 1M)
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
@@ -440,34 +445,36 @@ if [[ -n "$provider" ]]; then
     line4+=("${AMBER}\$${cost_fmt}${RST}")
   fi
   if has_val "$total_in_tok"; then
-    line4+=("${TEAL}↑$(format_tokens "$total_in_tok")${RST}")
+    format_tokens "$total_in_tok" _ft
+    line4+=("${TEAL}↑${_ft}${RST}")
   fi
   if has_val "$total_out_tok"; then
-    line4+=("${CORAL}↓$(format_tokens "$total_out_tok")${RST}")
+    format_tokens "$total_out_tok" _ft
+    line4+=("${CORAL}↓${_ft}${RST}")
   fi
 else
   # --- Anthropic: show rate limit from usage API ---
-  usage_json=$(fetch_usage)
-  if [[ -n "$usage_json" ]]; then
+  fetch_usage
+  if [[ -n "$_usage_json" ]]; then
     five_pct="" five_reset_iso="" seven_pct="" seven_reset_iso=""
     eval "$(jq -r '
       @sh "five_pct=\((.five_hour.utilization // 0) | round)",
       @sh "five_reset_iso=\(.five_hour.resets_at // "")",
       @sh "seven_pct=\((.seven_day.utilization // 0) | round)",
       @sh "seven_reset_iso=\(.seven_day.resets_at // "")"
-    ' <<< "$usage_json" 2>/dev/null)" || true
+    ' <<< "$_usage_json" 2>/dev/null)" || true
 
     if has_val "$five_pct"; then
-      five_reset=$(format_reset_remaining "$five_reset_iso")
-      five_bar="${ANTH}$(progress_bar "$five_pct")${RST}"
-      line4+=("${five_bar} ${ANTH}${five_pct}%${RST}")
-      [[ -n "$five_reset" ]] && line4+=("${ANTH}${five_reset}${RST}")
+      format_reset_remaining "$five_reset_iso"
+      progress_bar "$five_pct" _bar
+      line4+=("${ANTH}${_bar}${RST} ${ANTH}${five_pct}%${RST}")
+      [[ -n "$_reset" ]] && line4+=("${ANTH}${_reset}${RST}")
     fi
 
     if has_val "$seven_pct" && ((seven_pct > 0)); then
-      seven_reset=$(format_reset_absolute "$seven_reset_iso")
+      format_reset_absolute "$seven_reset_iso"
       line4+=("${DIM}week:${seven_pct}%${RST}")
-      [[ -n "$seven_reset" ]] && line4+=("${DIM}${seven_reset}${RST}")
+      [[ -n "$_reset" ]] && line4+=("${DIM}${_reset}${RST}")
     fi
   fi
 fi

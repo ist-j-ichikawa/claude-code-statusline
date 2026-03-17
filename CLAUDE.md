@@ -38,8 +38,9 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 
 - Color values must match official branding — model colors follow Anthropic's UI (claude.ai), provider colors follow each cloud's branding. Confirm with user before changing.
 - Script must be **fast** — Claude Code blanks the statusline if it's slow. Avoid external commands in hot paths; use bash builtins. All I/O-heavy operations (git, curl) must run in background subshells.
-- Prefer `printf -v var` over `var=$(printf ...)` — avoids subshell fork. Both are bash builtins but `$(...)` forks.
-- macOS-only: Uses `stat -f %m` and `md5 -q` (not GNU equivalents).
+- **Fork最小化**: `$(func)` サブシェル呼び出しはフォーク(プロセス生成)が発生する。ヘルパー関数は `printf -v "$varname"` パターンで変数に直接セットし、呼び出し側の `$(...)` フォークを回避する。同様に `cat file` → `$(<file)`、`echo x | md5 -q` → `md5 -q -s x`、`sed` → bash文字列操作、`$(cat)` → `IFS= read -r -d ''`、`tr '[:upper:]' '[:lower:]'` → `shopt -s nocasematch` で外部コマンドforkを削減。
+- **bash 3.2互換**: shebangは `#!/bin/bash`（macOS標準）。`${var,,}` や `printf '%(%s)T'` 等のbash 4+機能は使用禁止 — Claude Codeの実行環境ではPATHにhomebrew bashがない場合があり、スクリプト全体が即死する。大文字小文字の比較には `shopt -s nocasematch`（bash 3.2互換）を使い、使用後は `shopt -u nocasematch` で必ずリセット。
+- macOS-only: Uses `stat -f %m` and `md5 -q -s` (not GNU equivalents).
 - The script is referenced directly from `~/.claude/settings.json` — no copy in `~/.claude/`. Single source of truth is this repo.
 - ANSI colors and OSC 8 hyperlinks are supported by the terminal.
 - Available stdin JSON fields: https://code.claude.com/docs/en/statusline#available-data
