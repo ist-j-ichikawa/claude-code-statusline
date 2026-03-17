@@ -179,10 +179,16 @@ setup() {
   [[ "$result" == *"(no name)"* ]]
 }
 
-@test "セッション: フォーク時に(fork)と表示すること" {
+@test "セッション: ブランチ時に(branch)と表示すること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Branch) my session","version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"(branch)"* ]]
+}
+
+@test "セッション: 旧フォーク形式でも(branch)と表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Fork) my session","version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"(fork)"* ]]
+  [[ "$result" == *"(branch)"* ]]
 }
 
 # ============================================================================
