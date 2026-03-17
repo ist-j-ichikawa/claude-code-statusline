@@ -155,18 +155,20 @@ setup() {
 # ============================================================================
 # 統合テスト: Line 4 — プロバイダー別の表示が正しいこと
 # ============================================================================
-@test "Line4: Bedrockでコストとトークン数が表示されること" {
+@test "Line4: Bedrockでコスト・入力・出力トークンが表示されること" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *'$0.42'* ]]
-  [[ "$result" == *"133.5k tok"* ]]
+  [[ "$result" == *"↑125.0k"* ]]
+  [[ "$result" == *"↓8.5k"* ]]
 }
 
-@test "Line4: Bedrockでコスト0のときトークンなしで\$0.00のみ表示すること" {
+@test "Line4: Bedrockでコスト0・トークンなしのとき\$0.00のみ表示すること" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":0},"cost":{"total_cost_usd":0}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *'$0.00'* ]]
-  [[ "$result" != *"tok"* ]]
+  [[ "$result" != *"↑"* ]]
+  [[ "$result" != *"↓"* ]]
 }
 
 @test "Line4: Anthropicではコストが表示されないこと" {

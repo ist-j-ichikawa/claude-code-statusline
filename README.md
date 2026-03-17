@@ -130,7 +130,7 @@ statusline-command.sh
 
 **Bedrock / Vertex AI / Foundry (セッションコスト)**
 - Claude Code の stdin JSON から `cost.total_cost_usd` と `total_input/output_tokens` を取得
-- 表示: `$0.42 133.5k tok` — セッション累計コストとトークン数
+- 表示: `$0.42 ↑125.0k ↓8.5k` — コスト(金)、入力トークン(ティール)、出力トークン(コーラル)
 
 ### クラウドプロバイダー検出
 
