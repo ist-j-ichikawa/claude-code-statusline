@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0] - 2026-03-17
+
+### Changed
+
+- Rename fork indicator to branch — detect both `(Branch)` (2.1.77+) and legacy `(Fork)`, display as `(branch)`
+
 ## [1.0.1] - 2026-03-16
 
 ### Fixed

@@ -338,10 +338,10 @@ if has_val "$agent_name"; then
   line1+=("${AGENT}⚡${agent_name}${RST}")
 fi
 
-# Session name (strip XML tags + command noise from /fork etc.)
-is_fork=false
-[[ "$session_name" == *"(Fork)"* ]] && is_fork=true
-session_name=$(printf '%s' "$session_name" | sed 's/<[^>]*>//g; s/(Fork)//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
+# Session name (strip XML tags + command noise from /branch, /fork etc.)
+is_branch=false
+[[ "$session_name" == *"(Branch)"* || "$session_name" == *"(Fork)"* ]] && is_branch=true
+session_name=$(printf '%s' "$session_name" | sed 's/<[^>]*>//g; s/(Branch)//g; s/(Fork)//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
 # Drop if it looks like command/skill residue (contains colons like "plugin:skill" or starts with "/")
 if [[ "$session_name" == *:* || "$session_name" == /* ]]; then
   session_name=""
@@ -351,8 +351,8 @@ if has_val "$cc_version"; then
   line1+=("${DIMVER}v${cc_version}${RST}")
 fi
 # Session indicator (after version)
-if $is_fork; then
-  line1+=("${YLW}(fork)${RST}")
+if $is_branch; then
+  line1+=("${YLW}(branch)${RST}")
 elif ! has_val "$session_name"; then
   line1+=("${DIM}(no name)${RST}")
 fi
