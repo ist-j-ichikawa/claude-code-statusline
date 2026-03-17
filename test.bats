@@ -93,12 +93,12 @@ setup() {
 # ============================================================================
 @test "format_tokens: 100万以上でM表記になること" {
   result=$(format_tokens 1500000)
-  [[ "$result" == "1M" ]]
+  [[ "$result" == "1.5M" ]]
 }
 
-@test "format_tokens: 1000以上でK表記になること" {
+@test "format_tokens: 1000以上でk表記になること" {
   result=$(format_tokens 45000)
-  [[ "$result" == "45K" ]]
+  [[ "$result" == "45.0k" ]]
 }
 
 @test "format_tokens: 1000未満でそのまま表示されること" {
@@ -106,9 +106,9 @@ setup() {
   [[ "$result" == "999" ]]
 }
 
-@test "format_tokens: ちょうど1000でK表記になること" {
+@test "format_tokens: ちょうど1000でk表記になること" {
   result=$(format_tokens 1000)
-  [[ "$result" == "1K" ]]
+  [[ "$result" == "1.0k" ]]
 }
 
 # ============================================================================
@@ -150,6 +150,30 @@ setup() {
 @test "プロバイダー: CLAUDE_CODE_USE_VERTEX環境変数でVertexと検出すること" {
   result=$(CLAUDE_CODE_USE_VERTEX=1 bash -c 'echo "{\"model\":{\"id\":\"claude-opus\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
   [[ "$result" == *"Vertex"* ]]
+}
+
+# ============================================================================
+# 統合テスト: Line 4 — プロバイダー別の表示が正しいこと
+# ============================================================================
+@test "Line4: Bedrockでコストとトークン数が表示されること" {
+  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" == *'$0.42'* ]]
+  [[ "$result" == *"133.5k tok"* ]]
+}
+
+@test "Line4: Bedrockでコスト0のときトークンなしで\$0.00のみ表示すること" {
+  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":0},"cost":{"total_cost_usd":0}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" == *'$0.00'* ]]
+  [[ "$result" != *"tok"* ]]
+}
+
+@test "Line4: Anthropicではコストが表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.15}}' \
+    | bash statusline-command.sh 2>/dev/null)
+  # Anthropic should not show cost on any line
+  [[ "$result" != *'$0.15'* ]]
 }
 
 # ============================================================================
