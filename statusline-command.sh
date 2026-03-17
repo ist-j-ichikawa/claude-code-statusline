@@ -434,14 +434,16 @@ fi
 # ============================================================================
 line4=()
 if [[ -n "$provider" ]]; then
-  # --- Pay-per-use providers: show session cost & token count ---
+  # --- Pay-per-use providers: show session cost & token counts ---
   if has_val "$cost_usd"; then
     printf -v cost_fmt '%.2f' "$cost_usd"
-    line4+=("${DIM}\$${cost_fmt}${RST}")
+    line4+=("${AMBER}\$${cost_fmt}${RST}")
   fi
-  if has_val "$total_in_tok" || has_val "$total_out_tok"; then
-    total_tok=$(( ${total_in_tok:-0} + ${total_out_tok:-0} ))
-    line4+=("${DIM}$(format_tokens "$total_tok") tok${RST}")
+  if has_val "$total_in_tok"; then
+    line4+=("${TEAL}↑$(format_tokens "$total_in_tok")${RST}")
+  fi
+  if has_val "$total_out_tok"; then
+    line4+=("${CORAL}↓$(format_tokens "$total_out_tok")${RST}")
   fi
 else
   # --- Anthropic: show rate limit from usage API ---

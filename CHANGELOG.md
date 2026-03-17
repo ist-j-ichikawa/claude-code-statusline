@@ -4,7 +4,7 @@
 
 ### Added
 
-- Show session cost and token count on Line 4 for Bedrock/Vertex/Foundry (pay-per-use providers)
+- Show session cost and token counts on Line 4 for Bedrock/Vertex/Foundry — `$0.42 ↑125.0k ↓8.5k` (amber/teal/coral)
 - Anthropic users continue to see rate limit bars as before
 
 ### Changed
