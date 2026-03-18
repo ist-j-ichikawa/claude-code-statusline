@@ -208,6 +208,14 @@ setup() {
   [[ "$result" != *"(no git)"* ]]
 }
 
+@test "Git: コールドスタートでブランチ名を即時表示すること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"(main)"* || "$result" == *"(master)"* || "$result" == *"(HEAD@"* ]]
+}
+
 # ============================================================================
 # 統合テスト: セッション表示 — 状態に応じた表示がされること
 # ============================================================================

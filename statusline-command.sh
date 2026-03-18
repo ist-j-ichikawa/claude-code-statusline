@@ -411,8 +411,30 @@ else
   # No cached git info — check if truly non-git using pure bash (no fork)
   if [[ ! -d "${_git_root}/.git" && ! -f "${_git_root}/.git" ]]; then
     line2+=("${DIM}(no git)${RST}")
+  else
+    # Cold start: read branch from .git/HEAD (pure bash, no fork)
+    _head_file="${_git_root}/.git"
+    if [[ -f "$_head_file" ]]; then
+      # Worktree: .git is a file → follow gitdir pointer
+      _gitdir_line=$(<"$_head_file")
+      _gitdir="${_gitdir_line#gitdir: }"
+      if [[ "$_gitdir" != /* ]]; then
+        _head_file="${_git_root}/${_gitdir}/HEAD"
+      else
+        _head_file="${_gitdir}/HEAD"
+      fi
+    else
+      _head_file="${_head_file}/HEAD"
+    fi
+    if [[ -f "$_head_file" ]]; then
+      _head=$(<"$_head_file")
+      if [[ "$_head" == ref:* ]]; then
+        line2+=("${GRN}(${_head#ref: refs/heads/})${RST}")
+      else
+        line2+=("${RED}(HEAD@${_head:0:7})${RST}")
+      fi
+    fi
   fi
-  # If .git exists, background build_git is in progress; next render will show info
 fi
 
 
