@@ -502,11 +502,10 @@ else
 fi
 
 # ============================================================================
-# Output
+# Output — single write() for atomic pipe delivery
 # ============================================================================
-printf '%s\n' "${line1[*]}"
-printf '%s\n' "${line2[*]}"
-printf '%s\n' "${line3[*]}"
-[[ ${#line4[@]} -gt 0 ]] && printf '%s\n' "${line4[*]}"
+_out="${line1[*]}"$'\n'"${line2[*]}"$'\n'"${line3[*]}"
+[[ ${#line4[@]} -gt 0 ]] && _out+=$'\n'"${line4[*]}"
+printf '%s\n' "$_out"
 
 exit 0
