@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0] - 2026-03-21
+
+### Changed
+
+- Replace `progress_bar` (10-char ●○) with `braille_bar` (5-char braille dots ⣀⣄⣤⣦⣶⣷⣿) — 40 steps of precision in half the width
+- Merge Line 3 (context) and Line 4 (rate limit / cost) into a single Line 3 — output reduced from 3-4 lines to always 3
+
 ## [1.3.1] - 2026-03-21
 
 ### Fixed
