@@ -7,6 +7,12 @@
 - Replace `progress_bar` (10-char ●○) with `braille_bar` (5-char braille dots ⣀⣄⣤⣦⣶⣷⣿) — 40 steps of precision in half the width
 - Merge Line 3 (context) and Line 4 (rate limit / cost) into a single Line 3 — output reduced from 3-4 lines to always 3
 
+### Fixed
+
+- Initialize all jq variables before `eval` — prevents `set -u` instant death on jq failure
+- Add numeric guards (`^[0-9]+$`) to all arithmetic functions — non-numeric input returns safe fallback instead of crashing
+- Show `jq error` (red) on Line 1 when stdin JSON is unparseable, with exit 0
+
 ## [1.3.1] - 2026-03-21
 
 ### Fixed

@@ -24,6 +24,7 @@ osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 # 8 braille levels per char × 5 chars = 40 steps of precision
 braille_bar() {
   local pct=$1 width=5
+  [[ "$pct" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '     '; return; }
   local b0=' ' b1='⣀' b2='⣄' b3='⣤' b4='⣦' b5='⣶' b6='⣷' b7='⣿'
   local _bb="" level=$((pct * width * 7 / 100)) i seg varname
   ((level > width * 7)) && level=$((width * 7))
@@ -41,6 +42,7 @@ braille_bar() {
 # color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
 color_by_threshold() {
   local val=$1 hi=$2 mid=$3
+  [[ "$val" =~ ^[0-9]+$ ]] || { printf -v "$4" '%s' "$DIM"; return; }
   if ((val >= hi)); then printf -v "$4" '%s' "$RED"
   elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
   else printf -v "$4" '%s' "$GRN"; fi
@@ -62,6 +64,7 @@ git_cache_file() {
 # format_tokens TOK VARNAME — sets VARNAME (no subshell)
 format_tokens() {
   local tok=$1
+  [[ "$tok" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '?'; return; }
   if ((tok >= 1000000)); then printf -v "$2" '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
   elif ((tok >= 1000)); then printf -v "$2" '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
   else printf -v "$2" '%d' "$tok"
@@ -108,6 +111,7 @@ format_reset_remaining() {
   _reset=""
   local epoch=$1
   [[ -z "$epoch" || "$epoch" == "null" ]] && return
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return
   local diff=$((epoch - _NOW))
   if ((diff <= 0)); then _reset="now"; return; fi
   local d=$((diff / 86400)) h=$(( (diff % 86400) / 3600 )) m=$(( (diff % 3600) / 60 ))
@@ -121,12 +125,20 @@ format_reset_absolute() {
   _reset=""
   local epoch=$1
   [[ -z "$epoch" || "$epoch" == "null" ]] && return
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return
   _reset=$(date -j -r "$epoch" +"%a %H:%M" 2>/dev/null)
 }
 
 # --- JSON extraction (single jq call) ---
 IFS= read -r -d '' input || true
-eval "$(jq -r '
+
+# Initialize all jq variables — prevents set -u instant death if eval fails
+model="" model_id="" current_dir="." project_dir="" used_pct=""
+exceeds_200k="false" cc_version="" session_id="" session_name=""
+agent_name="" ctx_window_size=0 cost_usd="" total_in_tok="" total_out_tok=""
+five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
+_jq_ok=1
+_jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
   @sh "model_id=\(.model.id // "")",
   @sh "current_dir=\(.workspace.current_dir // ".")",
@@ -145,7 +157,8 @@ eval "$(jq -r '
   @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
   @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
   @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)"
-' <<< "$input")" || true
+' <<< "$input" 2>/dev/null) || _jq_ok=0
+if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
 # --- Git info (5s cached) ---
 build_git() {
@@ -243,6 +256,14 @@ build_git() {
 # Line 1: Provider + Model + Agent + [(Fork)] + Session name + Version
 # ============================================================================
 line1=()
+
+if ((_jq_ok == 0)); then
+  line1+=("${RED}jq error${RST}")
+  line2=() line3=()
+  _out="${line1[*]}"$'\n'"${line2[*]}"$'\n'"${line3[*]}"
+  printf '%s\n' "$_out"
+  exit 0
+fi
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
