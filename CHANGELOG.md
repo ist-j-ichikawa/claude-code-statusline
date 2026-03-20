@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0] - 2026-03-20
+
+### Changed
+
+- Migrate Anthropic rate limit from undocumented OAuth API to CC 2.1.80+ stdin `rate_limits` field
+- Remove `get_oauth_token()`, `fetch_usage()`, and usage cache — ~50 lines deleted, 1 fewer jq fork
+- Pre-2.1.80 CC gracefully degrades (Line 4 empty for Anthropic)
+
 ## [1.2.0] - 2026-03-17
 
 ### Added
@@ -30,8 +38,8 @@
 - Provider detection (Anthropic/Bedrock/Vertex/Foundry) with brand colors
 - Model display with Anthropic brand colors (Opus=coral, Sonnet 4.6=teal, Sonnet 4.5/3.5=amber, Haiku=lavender)
 - Git info: dirty state (+staged/~modified/?untracked/!conflicts), ahead/behind, stash count, last commit age+message, detached HEAD, worktree indicator
-- Rate limit display via OAuth API with 300s background refresh
+- Rate limit display for Anthropic provider
 - Subscription type display from Keychain/credentials
 - Session info: fork indicator (yellow), no-name indicator (dim), context window usage bar
-- Background async refresh for all I/O operations (git 5s, usage API 300s, gh account 60s)
+- Background async refresh for I/O operations (git 5s, subscription 3600s)
 - bats test suite with t-wada style naming (Japanese)
