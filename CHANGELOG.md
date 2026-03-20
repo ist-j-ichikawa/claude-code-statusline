@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.1] - 2026-03-21
+
+### Fixed
+
+- Parse `resets_at` as Unix epoch seconds — CC 2.1.80 stdin uses epoch (not ISO 8601 like the old OAuth API), restoring reset time and weekly info on Line 4
+- Add `floor` guard on `resets_at` jq extraction to handle potential float epochs
+
+### Changed
+
+- Remove `iso_to_epoch()` — saves 2 forks per render by accepting epoch directly in `format_reset_remaining`/`format_reset_absolute`
+
 ## [1.3.0] - 2026-03-20
 
 ### Changed
