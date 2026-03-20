@@ -191,7 +191,7 @@ setup() {
 }
 
 @test "Line4: Anthropicでrate_limitsからレートリミットを表示すること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"used_percentage":12,"resets_at":"2099-01-07T00:00:00Z"}}}' \
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
@@ -205,7 +205,7 @@ setup() {
 }
 
 @test "Line4: rate_limitsのused_percentageがfloatでもroundされること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":"2099-01-01T00:00:00Z"}}}' \
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"36%"* ]]
 }
