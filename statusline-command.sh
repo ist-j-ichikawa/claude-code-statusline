@@ -20,15 +20,22 @@ has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 # osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
 osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 
-# progress_bar PCT VARNAME — sets VARNAME to bar string (no subshell)
-progress_bar() {
-  local pct=$1 width=10
-  local filled=$((pct * width / 100)) _pb=""
-  ((filled > width)) && filled=$width
-  local empty=$((width - filled))
-  for ((i=0; i<filled; i++)); do _pb+="●"; done
-  for ((i=0; i<empty; i++)); do _pb+="○"; done
-  printf -v "$2" '%s' "$_pb"
+# braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
+# 8 braille levels per char × 5 chars = 40 steps of precision
+braille_bar() {
+  local pct=$1 width=5
+  local b0=' ' b1='⣀' b2='⣄' b3='⣤' b4='⣦' b5='⣶' b6='⣷' b7='⣿'
+  local _bb="" level=$((pct * width * 7 / 100)) i seg varname
+  ((level > width * 7)) && level=$((width * 7))
+  ((level < 0)) && level=0
+  for ((i = 0; i < width; i++)); do
+    seg=$((level - i * 7))
+    ((seg < 0)) && seg=0
+    ((seg > 7)) && seg=7
+    varname="b${seg}"
+    _bb+="${!varname}"
+  done
+  printf -v "$2" '%s' "$_bb"
 }
 
 # color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
@@ -387,7 +394,7 @@ fi
 
 
 # ============================================================================
-# Line 3: Context bar
+# Line 3: Context + Rate Limit (Anthropic) / Cost & Tokens (Bedrock/Vertex/Foundry)
 # ============================================================================
 line3=()
 
@@ -395,46 +402,43 @@ line3=()
 if has_val "$used_pct"; then
   pct_int=${used_pct%.*}
   color_by_threshold "$pct_int" 90 80 ctx_color
-  progress_bar "$pct_int" _bar
-  ctx_text="${ctx_color}${_bar} ${pct_int}%${RST}"
+  braille_bar "$pct_int" _bbar
+  ctx_text="${ctx_color}${_bbar} ${pct_int}%${RST}"
   # Only warn on 200K models (not 1M)
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
 else
-  line3+=("${DIM}○○○○○○○○○○ -%${RST}")
+  line3+=("${DIM}      -%${RST}")
 fi
 
-# ============================================================================
-# Line 4: Rate Limit (Anthropic) / Cost & Tokens (Bedrock/Vertex/Foundry)
-# ============================================================================
-line4=()
+# Rate limit / Cost & Tokens (appended to Line 3)
 if [[ -n "$provider" ]]; then
   # --- Pay-per-use providers: show session cost & token counts ---
   if has_val "$cost_usd"; then
     printf -v cost_fmt '%.2f' "$cost_usd"
-    line4+=("${AMBER}\$${cost_fmt}${RST}")
+    line3+=("${AMBER}\$${cost_fmt}${RST}")
   fi
   if has_val "$total_in_tok"; then
     format_tokens "$total_in_tok" _ft
-    line4+=("${TEAL}↑${_ft}${RST}")
+    line3+=("${TEAL}↑${_ft}${RST}")
   fi
   if has_val "$total_out_tok"; then
     format_tokens "$total_out_tok" _ft
-    line4+=("${CORAL}↓${_ft}${RST}")
+    line3+=("${CORAL}↓${_ft}${RST}")
   fi
 else
   # --- Anthropic: show rate limit from stdin JSON (rate_limits field, CC 2.1.80+) ---
   if has_val "$five_pct"; then
     format_reset_remaining "$five_reset_epoch"
-    progress_bar "$five_pct" _bar
-    line4+=("${ANTH}${_bar}${RST} ${ANTH}${five_pct}%${RST}")
-    [[ -n "$_reset" ]] && line4+=("${ANTH}${_reset}${RST}")
+    braille_bar "$five_pct" _bbar
+    line3+=("${ANTH}${_bbar} ${five_pct}%${RST}")
+    [[ -n "$_reset" ]] && line3+=("${ANTH}${_reset}${RST}")
   fi
 
   if has_val "$seven_pct" && ((seven_pct > 0)); then
     format_reset_absolute "$seven_reset_epoch"
-    line4+=("${DIM}week:${seven_pct}%${RST}")
-    [[ -n "$_reset" ]] && line4+=("${DIM}${_reset}${RST}")
+    line3+=("${DIM}week:${seven_pct}%${RST}")
+    [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
   fi
 fi
 
@@ -442,7 +446,6 @@ fi
 # Output — single write() for atomic pipe delivery
 # ============================================================================
 _out="${line1[*]}"$'\n'"${line2[*]}"$'\n'"${line3[*]}"
-[[ ${#line4[@]} -gt 0 ]] && _out+=$'\n'"${line4[*]}"
 printf '%s\n' "$_out"
 
 exit 0

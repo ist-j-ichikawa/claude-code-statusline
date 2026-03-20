@@ -33,31 +33,31 @@ setup() {
 }
 
 # ============================================================================
-# progress_bar — パーセンテージをバーに変換すること
+# braille_bar — パーセンテージを点字バーに変換すること
 # ============================================================================
-@test "progress_bar: 0%で全て空のバーを返すこと" {
-  progress_bar 0 result
-  [[ "$result" == "○○○○○○○○○○" ]]
+@test "braille_bar: 0%で空バーを返すこと" {
+  braille_bar 0 result
+  [[ "$result" == "     " ]]
 }
 
-@test "progress_bar: 100%で全て埋まったバーを返すこと" {
-  progress_bar 100 result
-  [[ "$result" == "●●●●●●●●●●" ]]
+@test "braille_bar: 100%で全て埋まったバーを返すこと" {
+  braille_bar 100 result
+  [[ "$result" == "⣿⣿⣿⣿⣿" ]]
 }
 
-@test "progress_bar: 50%で半分埋まったバーを返すこと" {
-  progress_bar 50 result
-  [[ "$result" == "●●●●●○○○○○" ]]
+@test "braille_bar: 50%で半分埋まったバーを返すこと" {
+  braille_bar 50 result
+  [[ "$result" == "⣿⣿⣤  " ]]
 }
 
-@test "progress_bar: 100%超でも10個で打ち止めになること" {
-  progress_bar 120 result
-  [[ "$result" == "●●●●●●●●●●" ]]
+@test "braille_bar: 100%超でも全埋めで打ち止めになること" {
+  braille_bar 120 result
+  [[ "$result" == "⣿⣿⣿⣿⣿" ]]
 }
 
-@test "progress_bar: 15%で1個だけ埋まること" {
-  progress_bar 15 result
-  [[ "$result" == "●○○○○○○○○○" ]]
+@test "braille_bar: 5文字幅であること" {
+  braille_bar 30 result
+  [[ ${#result} -eq 5 ]]
 }
 
 # ============================================================================
@@ -165,48 +165,48 @@ setup() {
 }
 
 # ============================================================================
-# 統合テスト: Line 4 — プロバイダー別の表示が正しいこと
+# 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================
-@test "Line4: Bedrockでコスト・入力・出力トークンが表示されること" {
+@test "Line3: Bedrockでコスト・入力・出力トークンが表示されること" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *'$0.42'* ]]
   [[ "$result" == *"↑125.0k"* ]]
   [[ "$result" == *"↓8.5k"* ]]
 }
 
-@test "Line4: Bedrockでコスト0・トークンなしのとき\$0.00のみ表示すること" {
+@test "Line3: Bedrockでコスト0・トークンなしのとき\$0.00のみ表示すること" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":0},"cost":{"total_cost_usd":0}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *'$0.00'* ]]
   [[ "$result" != *"↑"* ]]
   [[ "$result" != *"↓"* ]]
 }
 
-@test "Line4: Anthropicではコストが表示されないこと" {
+@test "Line3: Anthropicではコストが表示されないこと" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.15}}' \
     | bash statusline-command.sh 2>/dev/null)
   # Anthropic should not show cost on any line
   [[ "$result" != *'$0.15'* ]]
 }
 
-@test "Line4: Anthropicでrate_limitsからレートリミットを表示すること" {
+@test "Line3: Anthropicでrate_limitsからレートリミットを表示すること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
 }
 
-@test "Line4: rate_limitsがない旧CCでLine4が空になること" {
+@test "Line3: rate_limitsがない旧CCでも3行出力されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.79","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null)
   line_count=$(echo "$result" | grep -c . || echo 0)
   [[ "$line_count" -eq 3 ]]
 }
 
-@test "Line4: rate_limitsのused_percentageがfloatでもroundされること" {
+@test "Line3: rate_limitsのused_percentageがfloatでもroundされること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *"36%"* ]]
 }
 
