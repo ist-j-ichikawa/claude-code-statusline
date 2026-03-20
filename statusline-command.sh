@@ -12,8 +12,6 @@ readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
-readonly USAGE_CACHE_DIR="${CACHE_BASE}/usage"
-readonly USAGE_CACHE_MAX_AGE=300
 readonly _NOW=$(date +%s)
 
 # --- Helpers ---
@@ -74,21 +72,6 @@ get_credentials_blob() {
   [[ -f "$creds" ]] && cat "$creds" 2>/dev/null
 }
 
-# --- OAuth token resolution ---
-get_oauth_token() {
-  if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-    echo "$CLAUDE_CODE_OAUTH_TOKEN"; return 0
-  fi
-  local blob
-  blob=$(get_credentials_blob)
-  if [[ -n "$blob" ]]; then
-    local token
-    token=$(jq -r '.claudeAiOauth.accessToken // empty' <<< "$blob" 2>/dev/null)
-    if has_val "$token"; then echo "$token"; return 0; fi
-  fi
-  echo ""
-}
-
 # --- Subscription type (cached, background refresh) ---
 readonly SUB_CACHE="${CACHE_BASE}/subscription"
 readonly SUB_CACHE_MAX_AGE=3600
@@ -111,38 +94,6 @@ fetch_subscription() {
     ) & disown
   fi
   [[ -f "$SUB_CACHE" ]] && _sub_type=$(<"$SUB_CACHE") || _sub_type=""
-}
-
-# --- Usage API (cached, background refresh) ---
-# fetch_usage — sets _usage_json (no subshell)
-fetch_usage() {
-  [[ -d "$USAGE_CACHE_DIR" ]] || mkdir -p -m 700 "$USAGE_CACHE_DIR"
-  local cache_file="${USAGE_CACHE_DIR}/usage.json"
-
-  if cache_stale "$cache_file" "$USAGE_CACHE_MAX_AGE"; then
-    # Refresh in background — serve stale cache, never block
-    (
-      token=$(get_oauth_token)
-      token="${token//$'\n'/}" token="${token//$'\r'/}"
-      if has_val "$token"; then
-        resp=$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
-          | curl -s --max-time 3 --config - \
-          -H "Accept: application/json" \
-          -H "Content-Type: application/json" \
-          -H "anthropic-beta: oauth-2025-04-20" \
-          "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-        if [[ -n "$resp" ]] && jq -e '.five_hour' <<< "$resp" &>/dev/null; then
-          echo "$resp" > "${cache_file}.tmp" && mv "${cache_file}.tmp" "$cache_file"
-        elif [[ -f "$cache_file" ]]; then
-          # Touch cache to avoid retry storm on API error
-          touch "$cache_file"
-        fi
-      fi
-    ) &
-    disown
-  fi
-
-  [[ -f "$cache_file" ]] && _usage_json=$(<"$cache_file") || _usage_json=""
 }
 
 # iso_to_epoch ISO — sets _epoch (no subshell)
@@ -189,7 +140,11 @@ eval "$(jq -r '
   @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
   @sh "cost_usd=\(.cost.total_cost_usd // "")",
   @sh "total_in_tok=\(.context_window.total_input_tokens // "")",
-  @sh "total_out_tok=\(.context_window.total_output_tokens // "")"
+  @sh "total_out_tok=\(.context_window.total_output_tokens // "")",
+  @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
+  @sh "five_reset_iso=\(.rate_limits.five_hour.resets_at // "")",
+  @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
+  @sh "seven_reset_iso=\(.rate_limits.seven_day.resets_at // "")"
 ' <<< "$input")" || true
 
 # --- Git info (5s cached) ---
@@ -475,29 +430,18 @@ if [[ -n "$provider" ]]; then
     line4+=("${CORAL}↓${_ft}${RST}")
   fi
 else
-  # --- Anthropic: show rate limit from usage API ---
-  fetch_usage
-  if [[ -n "$_usage_json" ]]; then
-    five_pct="" five_reset_iso="" seven_pct="" seven_reset_iso=""
-    eval "$(jq -r '
-      @sh "five_pct=\((.five_hour.utilization // 0) | round)",
-      @sh "five_reset_iso=\(.five_hour.resets_at // "")",
-      @sh "seven_pct=\((.seven_day.utilization // 0) | round)",
-      @sh "seven_reset_iso=\(.seven_day.resets_at // "")"
-    ' <<< "$_usage_json" 2>/dev/null)" || true
+  # --- Anthropic: show rate limit from stdin JSON (rate_limits field, CC 2.1.80+) ---
+  if has_val "$five_pct"; then
+    format_reset_remaining "$five_reset_iso"
+    progress_bar "$five_pct" _bar
+    line4+=("${ANTH}${_bar}${RST} ${ANTH}${five_pct}%${RST}")
+    [[ -n "$_reset" ]] && line4+=("${ANTH}${_reset}${RST}")
+  fi
 
-    if has_val "$five_pct"; then
-      format_reset_remaining "$five_reset_iso"
-      progress_bar "$five_pct" _bar
-      line4+=("${ANTH}${_bar}${RST} ${ANTH}${five_pct}%${RST}")
-      [[ -n "$_reset" ]] && line4+=("${ANTH}${_reset}${RST}")
-    fi
-
-    if has_val "$seven_pct" && ((seven_pct > 0)); then
-      format_reset_absolute "$seven_reset_iso"
-      line4+=("${DIM}week:${seven_pct}%${RST}")
-      [[ -n "$_reset" ]] && line4+=("${DIM}${_reset}${RST}")
-    fi
+  if has_val "$seven_pct" && ((seven_pct > 0)); then
+    format_reset_absolute "$seven_reset_iso"
+    line4+=("${DIM}week:${seven_pct}%${RST}")
+    [[ -n "$_reset" ]] && line4+=("${DIM}${_reset}${RST}")
   fi
 fi
 
