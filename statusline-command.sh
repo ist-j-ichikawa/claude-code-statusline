@@ -96,21 +96,12 @@ fetch_subscription() {
   [[ -f "$SUB_CACHE" ]] && _sub_type=$(<"$SUB_CACHE") || _sub_type=""
 }
 
-# iso_to_epoch ISO — sets _epoch (no subshell)
-iso_to_epoch() {
-  _epoch=""
-  local iso=$1
-  [[ -z "$iso" || "$iso" == "null" ]] && return 1
-  local stripped="${iso%%.*}"
-  stripped="${stripped%Z}"
-  _epoch=$(env TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
-  [[ -n "$_epoch" ]]
-}
-
-# format_reset_remaining ISO — sets _reset (no subshell)
+# format_reset_remaining EPOCH — sets _reset (no subshell)
 format_reset_remaining() {
-  iso_to_epoch "$1" || { _reset=""; return; }
-  local diff=$((_epoch - _NOW))
+  _reset=""
+  local epoch=$1
+  [[ -z "$epoch" || "$epoch" == "null" ]] && return
+  local diff=$((epoch - _NOW))
   if ((diff <= 0)); then _reset="now"; return; fi
   local d=$((diff / 86400)) h=$(( (diff % 86400) / 3600 )) m=$(( (diff % 3600) / 60 ))
   if ((d > 0)); then printf -v _reset '%dd%dh' "$d" "$h"
@@ -118,10 +109,12 @@ format_reset_remaining() {
   else printf -v _reset '0:%02d' "$m"; fi
 }
 
-# format_reset_absolute ISO — sets _reset (no subshell)
+# format_reset_absolute EPOCH — sets _reset (1 fork: date)
 format_reset_absolute() {
-  iso_to_epoch "$1" || { _reset=""; return; }
-  _reset=$(date -j -r "$_epoch" +"%a %H:%M" 2>/dev/null)
+  _reset=""
+  local epoch=$1
+  [[ -z "$epoch" || "$epoch" == "null" ]] && return
+  _reset=$(date -j -r "$epoch" +"%a %H:%M" 2>/dev/null)
 }
 
 # --- JSON extraction (single jq call) ---
@@ -142,9 +135,9 @@ eval "$(jq -r '
   @sh "total_in_tok=\(.context_window.total_input_tokens // "")",
   @sh "total_out_tok=\(.context_window.total_output_tokens // "")",
   @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
-  @sh "five_reset_iso=\(.rate_limits.five_hour.resets_at // "")",
+  @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
   @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
-  @sh "seven_reset_iso=\(.rate_limits.seven_day.resets_at // "")"
+  @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)"
 ' <<< "$input")" || true
 
 # --- Git info (5s cached) ---
@@ -432,14 +425,14 @@ if [[ -n "$provider" ]]; then
 else
   # --- Anthropic: show rate limit from stdin JSON (rate_limits field, CC 2.1.80+) ---
   if has_val "$five_pct"; then
-    format_reset_remaining "$five_reset_iso"
+    format_reset_remaining "$five_reset_epoch"
     progress_bar "$five_pct" _bar
     line4+=("${ANTH}${_bar}${RST} ${ANTH}${five_pct}%${RST}")
     [[ -n "$_reset" ]] && line4+=("${ANTH}${_reset}${RST}")
   fi
 
   if has_val "$seven_pct" && ((seven_pct > 0)); then
-    format_reset_absolute "$seven_reset_iso"
+    format_reset_absolute "$seven_reset_epoch"
     line4+=("${DIM}week:${seven_pct}%${RST}")
     [[ -n "$_reset" ]] && line4+=("${DIM}${_reset}${RST}")
   fi
