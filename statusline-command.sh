@@ -14,6 +14,10 @@ readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
 readonly _NOW=$(date +%s)
 
+# --- Terminal width (for adaptive content) ---
+_cols=${COLUMNS:-0}
+((_cols <= 0)) && { _cols=$(tput cols 2>/dev/null); [[ "${_cols:-}" =~ ^[0-9]+$ ]] || _cols=80; }
+
 # --- Helpers ---
 has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 
@@ -37,6 +41,27 @@ braille_bar() {
     _bb+="${!varname}"
   done
   printf -v "$2" '%s' "$_bb"
+}
+
+# truncate_path VARNAME MAX — truncates path in VARNAME to MAX chars with … prefix (no subshell)
+truncate_path() {
+  local _tp="${!1}" _tm=$2
+  if ((${#_tp} > _tm)); then
+    printf -v "$1" '…%s' "${_tp: -$((_tm - 1))}"
+  fi
+}
+
+# _truncate_bytes VARNAME MAX — byte-level safety-net truncation with ANSI cleanup (no subshell)
+_truncate_bytes() {
+  local _tb="${!1}" _tm=$2
+  if ((${#_tb} > _tm)); then
+    _tb="${_tb:0:_tm}"
+    local _et="${_tb##*$'\033'}"
+    if [[ "$_et" != "$_tb" && "$_et" != *m* ]]; then
+      _tb="${_tb%$'\033'*}"
+    fi
+    printf -v "$1" '%s%s' "$_tb" "$RST"
+  fi
 }
 
 # color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
@@ -326,15 +351,17 @@ session_name="${session_name%"${session_name##*[![:space:]]}"}"
 if [[ "$session_name" == *:* || "$session_name" == /* ]]; then
   session_name=""
 fi
-# Version
-if has_val "$cc_version"; then
+# Version (skip on narrow terminals)
+if has_val "$cc_version" && ((_cols >= 65)); then
   line1+=("${DIMVER}v${cc_version}${RST}")
 fi
-# Session indicator (after version)
-if $is_branch; then
-  line1+=("${YLW}(branch)${RST}")
-elif ! has_val "$session_name"; then
-  line1+=("${DIM}(no name)${RST}")
+# Session indicator (skip on narrow terminals)
+if ((_cols >= 55)); then
+  if $is_branch; then
+    line1+=("${YLW}(branch)${RST}")
+  elif ! has_val "$session_name"; then
+    line1+=("${DIM}(no name)${RST}")
+  fi
 fi
 
 
@@ -350,19 +377,32 @@ if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
 [[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
+_path_max=$((_cols * 2 / 5))
+((_path_max < 15)) && _path_max=15
+# Narrow terminals: skip git entirely or truncate (byte-level, append RST)
+if ((_cols < 45)); then
+  git_cached=""
+elif [[ -n "$git_cached" ]]; then
+  _git_max=$((_cols - _path_max - 3))
+  ((_git_max < 10)) && _git_max=10
+  _truncate_bytes git_cached $((_git_max * 2))
+fi
 
 # Directory path (project_dir → current_dir when different)
 if has_val "$project_dir"; then
   short_proj="${project_dir/#$HOME/~}"
+  truncate_path short_proj "$_path_max"
   osc8 "vscode://file/${project_dir}" "$short_proj" _osc_tmp
   line2+=("$_osc_tmp")
   if [[ "$current_dir" != "$project_dir" ]]; then
     short_cwd="${current_dir/#$HOME/~}"
+    truncate_path short_cwd "$_path_max"
     osc8 "vscode://file/${current_dir}" "$short_cwd" _osc_tmp
     line2+=("${DIM}→${RST} $_osc_tmp")
   fi
 else
   short_path="${current_dir/#$HOME/~}"
+  truncate_path short_path "$_path_max"
   osc8 "vscode://file/${current_dir}" "$short_path" _osc_tmp
   line2+=("$_osc_tmp")
 fi
@@ -456,7 +496,7 @@ else
     [[ -n "$_reset" ]] && line3+=("${ANTH}${_reset}${RST}")
   fi
 
-  if has_val "$seven_pct" && ((seven_pct > 0)); then
+  if has_val "$seven_pct" && ((seven_pct > 0)) && ((_cols >= 70)); then
     format_reset_absolute "$seven_reset_epoch"
     line3+=("${DIM}week:${seven_pct}%${RST}")
     [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
@@ -466,7 +506,12 @@ fi
 # ============================================================================
 # Output — single write() for atomic pipe delivery
 # ============================================================================
-_out="${line1[*]}"$'\n'"${line2[*]}"$'\n'"${line3[*]}"
+_l1="${line1[*]}" _l2="${line2[*]}" _l3="${line3[*]}"
+_max_bytes=$((_cols * 3 + 60))
+_truncate_bytes _l1 "$_max_bytes"
+_truncate_bytes _l2 "$_max_bytes"
+_truncate_bytes _l3 "$_max_bytes"
+_out="${_l1}"$'\n'"${_l2}"$'\n'"${_l3}"
 printf '%s\n' "$_out"
 
 exit 0

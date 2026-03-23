@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0] - 2026-03-23
+
+### Added
+
+- Terminal width adaptation — narrow terminals progressively drop low-priority elements (version, session indicator, weekly rate limit, git info) to prevent line wrapping that hides Line 2/3
+- Path truncation (`truncate_path`) — keeps the informative tail with `…` prefix when path exceeds 40% of terminal width
+- Byte-level safety-net truncation (`_truncate_bytes`) on all output lines with ANSI escape cleanup
+
 ## [1.4.0] - 2026-03-21
 
 ### Changed

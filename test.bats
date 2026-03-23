@@ -4,6 +4,7 @@
 
 # --- セットアップ: ヘルパー関数のみを読み込む ---
 setup() {
+  export COLUMNS=120
   export RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
   export DIM=$'\033[2m'
   export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
@@ -281,6 +282,53 @@ setup() {
 }
 
 # ============================================================================
+# truncate_path — パスを省略すること
+# ============================================================================
+@test "truncate_path: 長いパスを…付きで省略すること" {
+  mypath="/Users/user/very/long/path/to/project"
+  truncate_path mypath 20
+  [[ "$mypath" == "…"* ]]
+  [[ ${#mypath} -le 20 ]]
+}
+
+@test "truncate_path: 短いパスをそのまま返すこと" {
+  mypath="/tmp"
+  truncate_path mypath 20
+  [[ "$mypath" == "/tmp" ]]
+}
+
+@test "truncate_path: ちょうど上限と同じ長さなら省略しないこと" {
+  mypath="12345678901234567890"
+  truncate_path mypath 20
+  [[ "$mypath" == "12345678901234567890" ]]
+}
+
+# ============================================================================
+# _truncate_bytes — バイトレベル切り詰めでANSI壊れを防ぐこと
+# ============================================================================
+@test "_truncate_bytes: 短い文字列を変更しないこと" {
+  mystr="hello"
+  _truncate_bytes mystr 100
+  [[ "$mystr" == "hello" ]]
+}
+
+@test "_truncate_bytes: 長い文字列を切り詰めてRSTを付加すること" {
+  mystr="aaaaaaaaaaaaaaaaaaaaa"
+  _truncate_bytes mystr 10
+  [[ ${#mystr} -le 14 ]]  # 10 + RST(4 bytes)
+  [[ "$mystr" == *"${RST}" ]]
+}
+
+@test "_truncate_bytes: 不完全なANSIエスケープを除去すること" {
+  # Simulate: text + incomplete ANSI escape at byte boundary
+  mystr="hello${GRN}world${RST}"
+  # Cut at a point that splits the GRN escape
+  _truncate_bytes mystr 8
+  # Should not contain broken escape remnants like "[32" without ESC
+  [[ "$mystr" == *"${RST}" ]]
+}
+
+# ============================================================================
 # 統合テスト: 全体 — 正常に動作すること
 # ============================================================================
 @test "全体: exit code 0で終了すること" {
@@ -292,4 +340,40 @@ setup() {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *"48%"* ]]
+}
+
+# ============================================================================
+# 端末幅適応 — 狭い端末でも3行出力されること
+# ============================================================================
+@test "端末幅: COLUMNS=50でバージョンが非表示になること" {
+  result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" != *"v2.1.80"* ]]
+}
+
+@test "端末幅: COLUMNS=50でセッション表示が非表示になること" {
+  result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" != *"(no name)"* ]]
+}
+
+@test "端末幅: COLUMNS=120でバージョンが表示されること" {
+  result=$(COLUMNS=120 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" == *"v2.1.80"* ]]
+}
+
+@test "端末幅: COLUMNS=40でもexit 0かつ3行出力されること" {
+  result=$(COLUMNS=40 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null')
+  status=$?
+  [[ "$status" -eq 0 ]]
+  line_count=$(echo "$result" | grep -c . || echo 0)
+  [[ "$line_count" -eq 3 ]]
+}
+
+@test "端末幅: COLUMNS=60でweeklyレートリミットが非表示になること" {
+  result=$(COLUMNS=60 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":35,\"resets_at\":4070908800},\"seven_day\":{\"used_percentage\":12,\"resets_at\":4071427200}}}" | bash statusline-command.sh 2>/dev/null | sed -n "3p"')
+  [[ "$result" != *"week:"* ]]
+}
+
+@test "端末幅: 長いパスがCOLUMNS=50で省略されること" {
+  result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/Users/user/very/long/path/to/some/deep/project\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
+  [[ "$result" == *"…"* ]]
 }
