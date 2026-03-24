@@ -373,6 +373,26 @@ setup() {
   [[ "$result" != *"week:"* ]]
 }
 
+@test "端末幅: COLUMNS=40でsubscription typeが非表示になること" {
+  result=$(COLUMNS=40 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" != *"enterprise"* ]]
+  [[ "$result" == *"Anthropic"* ]]
+}
+
+@test "端末幅: COLUMNS=30でモデルバージョンが省略されること" {
+  result=$(COLUMNS=30 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" == *"Opus"* ]]
+  [[ "$result" != *"4.6"* ]]
+}
+
+@test "端末幅: COLUMNS=25でもexit 0かつ3行出力されること" {
+  result=$(COLUMNS=25 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null')
+  status=$?
+  [[ "$status" -eq 0 ]]
+  line_count=$(echo "$result" | grep -c . || echo 0)
+  [[ "$line_count" -eq 3 ]]
+}
+
 @test "端末幅: 長いパスがCOLUMNS=50で省略されること" {
   result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/Users/user/very/long/path/to/some/deep/project\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
   [[ "$result" == *"…"* ]]

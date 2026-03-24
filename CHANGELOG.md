@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2] - 2026-03-24
+
+### Fixed
+
+- Line 1 width adaptation — narrow terminals progressively drop subscription type (<45), agent name (<45), and model version suffix (<35) to prevent line wrapping that blanks all statusline rows
+- Skip `fetch_subscription` on narrow terminals (<45 cols) to avoid unnecessary `stat` fork
+
 ## [1.5.1] - 2026-03-24
 
 ### Changed
