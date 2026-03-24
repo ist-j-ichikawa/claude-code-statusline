@@ -292,6 +292,8 @@ fi
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
+# Narrow terminals: strip version suffix (e.g. "Opus 4.6" → "Opus")
+if ((_cols < 35)); then model_show="${model_show%% [0-9]*}"; fi
 
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
@@ -310,9 +312,13 @@ case "$provider" in
   vertex)  line1+=("${VTEX}Vertex${RST}") ;;
   foundry) line1+=("${FNDY}Foundry${RST}") ;;
   *)
-    fetch_subscription
-    if has_val "$_sub_type"; then
-      line1+=("${ANTH}Anthropic(${_sub_type})${RST}")
+    if ((_cols >= 45)); then
+      fetch_subscription
+      if has_val "$_sub_type"; then
+        line1+=("${ANTH}Anthropic(${_sub_type})${RST}")
+      else
+        line1+=("${ANTH}Anthropic${RST}")
+      fi
     else
       line1+=("${ANTH}Anthropic${RST}")
     fi
@@ -332,8 +338,8 @@ else
 fi
 shopt -u nocasematch
 
-# Agent name
-if has_val "$agent_name"; then
+# Agent name (skip on narrow terminals)
+if has_val "$agent_name" && ((_cols >= 45)); then
   line1+=("${AGENT}⚡${agent_name}${RST}")
 fi
 
