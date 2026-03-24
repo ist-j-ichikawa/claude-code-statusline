@@ -392,18 +392,18 @@ fi
 if has_val "$project_dir"; then
   short_proj="${project_dir/#$HOME/~}"
   truncate_path short_proj "$_path_max"
-  osc8 "vscode://file/${project_dir}" "$short_proj" _osc_tmp
+  osc8 "file://${project_dir}" "$short_proj" _osc_tmp
   line2+=("$_osc_tmp")
   if [[ "$current_dir" != "$project_dir" ]]; then
     short_cwd="${current_dir/#$HOME/~}"
     truncate_path short_cwd "$_path_max"
-    osc8 "vscode://file/${current_dir}" "$short_cwd" _osc_tmp
+    osc8 "file://${current_dir}" "$short_cwd" _osc_tmp
     line2+=("${DIM}→${RST} $_osc_tmp")
   fi
 else
   short_path="${current_dir/#$HOME/~}"
   truncate_path short_path "$_path_max"
-  osc8 "vscode://file/${current_dir}" "$short_path" _osc_tmp
+  osc8 "file://${current_dir}" "$short_path" _osc_tmp
   line2+=("$_osc_tmp")
 fi
 

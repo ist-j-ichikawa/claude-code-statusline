@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.1] - 2026-03-24
+
+### Changed
+
+- Replace `vscode://file/` URI scheme with `file://` in OSC 8 path links — clicks now open Finder (editor-agnostic) instead of requiring VSCode
+
 ## [1.5.0] - 2026-03-23
 
 ### Added
