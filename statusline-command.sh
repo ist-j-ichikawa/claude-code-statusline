@@ -162,6 +162,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_id="" session_name=""
 agent_name="" ctx_window_size=0 cost_usd="" total_in_tok="" total_out_tok=""
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
+vim_mode="" wt_name="" wt_orig_branch=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -181,7 +182,10 @@ _jq_out=$(jq -r '
   @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
   @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
   @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
-  @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)"
+  @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)",
+  @sh "vim_mode=\(.vim.mode // "")",
+  @sh "wt_name=\(.worktree.name // "")",
+  @sh "wt_orig_branch=\(.worktree.original_branch // "")"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -269,9 +273,6 @@ build_git() {
       text+=" ${DIM}${age_str}${RST}"
     fi
   fi
-
-  # Worktree indicator
-  [[ -n "$git_dir" && -n "$git_common_dir" && "$git_dir" != "$git_common_dir" ]] && text+=" 🌲"
 
   echo "$text"
 }
@@ -369,6 +370,14 @@ if ((_cols >= 55)); then
     line1+=("${DIM}(no name)${RST}")
   fi
 fi
+# Vim mode indicator (NORMAL=dim, INSERT=green)
+if has_val "$vim_mode" && ((_cols >= 55)); then
+  if [[ "$vim_mode" == "INSERT" ]]; then
+    line1+=("${GRN}[I]${RST}")
+  else
+    line1+=("${DIM}[N]${RST}")
+  fi
+fi
 
 
 # ============================================================================
@@ -421,7 +430,7 @@ if [[ -n "$git_cached" ]]; then
   repo_name="${git_cached%% *}"
   if [[ "$dir_basename" == "$repo_name" ]]; then
     if [[ "$git_cached" == *" "* ]]; then
-      # Remove repo name prefix (keep branch + state + trailing 🌲)
+      # Remove repo name prefix (keep branch + state)
       git_cached="${git_cached#*" "}"
     else
       # No branch info — repo name only, skip to avoid redundancy
@@ -459,9 +468,17 @@ else
   fi
 fi
 
+# Worktree indicator from stdin JSON (no git fork needed)
+if has_val "$wt_name" && ((_cols >= 45)); then
+  line2+=("🌲")
+  if has_val "$wt_orig_branch"; then
+    line2+=("${DIM}←${wt_orig_branch}${RST}")
+  fi
+fi
+
 
 # ============================================================================
-# Line 3: Context + Rate Limit (Anthropic) / Cost & Tokens (Bedrock/Vertex/Foundry)
+# Line 3: Context + Cost & Tokens (all providers) + Rate Limit (Anthropic)
 # ============================================================================
 line3=()
 
@@ -478,23 +495,22 @@ else
   line3+=("${DIM}      -%${RST}")
 fi
 
-# Rate limit / Cost & Tokens (appended to Line 3)
-if [[ -n "$provider" ]]; then
-  # --- Pay-per-use providers: show session cost & token counts ---
-  if has_val "$cost_usd"; then
-    printf -v cost_fmt '%.2f' "$cost_usd"
-    line3+=("${AMBER}\$${cost_fmt}${RST}")
-  fi
-  if has_val "$total_in_tok"; then
-    format_tokens "$total_in_tok" _ft
-    line3+=("${TEAL}↑${_ft}${RST}")
-  fi
-  if has_val "$total_out_tok"; then
-    format_tokens "$total_out_tok" _ft
-    line3+=("${CORAL}↓${_ft}${RST}")
-  fi
-else
-  # --- Anthropic: show rate limit from stdin JSON (rate_limits field, CC 2.1.80+) ---
+# Session cost & token counts (all providers)
+if has_val "$cost_usd"; then
+  printf -v cost_fmt '%.2f' "$cost_usd"
+  line3+=("${AMBER}\$${cost_fmt}${RST}")
+fi
+if has_val "$total_in_tok"; then
+  format_tokens "$total_in_tok" _ft
+  line3+=("${TEAL}↑${_ft}${RST}")
+fi
+if has_val "$total_out_tok"; then
+  format_tokens "$total_out_tok" _ft
+  line3+=("${CORAL}↓${_ft}${RST}")
+fi
+
+# Rate limit (Anthropic only, CC 2.1.80+)
+if [[ -z "$provider" ]]; then
   if has_val "$five_pct"; then
     format_reset_remaining "$five_reset_epoch"
     braille_bar "$five_pct" _bbar
