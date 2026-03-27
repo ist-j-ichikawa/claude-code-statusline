@@ -184,11 +184,20 @@ setup() {
   [[ "$result" != *"↓"* ]]
 }
 
-@test "Line3: Anthropicではコストが表示されないこと" {
+@test "Line3: Anthropicでもコストが表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.15}}' \
-    | bash statusline-command.sh 2>/dev/null)
-  # Anthropic should not show cost on any line
-  [[ "$result" != *'$0.15'* ]]
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *'$0.15'* ]]
+}
+
+@test "Line3: Anthropicでコスト・トークン・レートリミットが共存すること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":15234,"total_output_tokens":4521},"cost":{"total_cost_usd":0.42},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *'$0.42'* ]]
+  [[ "$result" == *"↑15.2k"* ]]
+  [[ "$result" == *"↓4.5k"* ]]
+  [[ "$result" == *"35%"* ]]
+  [[ "$result" == *"week:12%"* ]]
 }
 
 @test "Line3: Anthropicでrate_limitsからレートリミットを表示すること" {
@@ -256,6 +265,51 @@ setup() {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Fork) my session","version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" == *"(branch)"* ]]
+}
+
+# ============================================================================
+# Vim mode — vim有効時のモード表示
+# ============================================================================
+@test "Vim: INSERTモードで緑の[I]が表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"vim":{"mode":"INSERT"}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"[I]"* ]]
+}
+
+@test "Vim: NORMALモードでdimの[N]が表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"vim":{"mode":"NORMAL"}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"[N]"* ]]
+}
+
+@test "Vim: vim無効時はモード表示がないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"[N]"* ]]
+  [[ "$result" != *"[I]"* ]]
+}
+
+# ============================================================================
+# Worktree — stdin JSONからworktree情報を表示
+# ============================================================================
+@test "Worktree: worktreeセッションで🌲と←元ブランチが表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"my-feature","branch":"worktree-my-feature","original_branch":"main"}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"🌲"* ]]
+  [[ "$result" == *"←main"* ]]
+}
+
+@test "Worktree: worktree未使用時は🌲が表示されないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" != *"🌲"* ]]
+}
+
+@test "Worktree: original_branchがないhookベースworktreeでも🌲だけ表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"hook-wt","path":"/tmp/wt"}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"🌲"* ]]
+  [[ "$result" != *"←"* ]]
 }
 
 # ============================================================================

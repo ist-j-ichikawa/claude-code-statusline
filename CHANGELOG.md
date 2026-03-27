@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0] - 2026-03-27
+
+### Added
+
+- Vim mode indicator on Line 1 — `[I]` (green) for INSERT, `[N]` (dim) for NORMAL; hidden when vim is disabled (CC 2.1.84+ `vim.mode` field)
+- Worktree indicator on Line 2 via stdin JSON `worktree.name` / `worktree.original_branch` — replaces git-command-based detection (zero fork, instant on cold start)
+- Session cost and token counts now displayed for all providers (was Bedrock/Vertex/Foundry only) — Anthropic sessions show cost + tokens + rate limit together on Line 3
+
+### Changed
+
+- Worktree 🌲 detection moved from `build_git()` git commands to stdin JSON API (no git fork needed)
+
 ## [1.5.2] - 2026-03-24
 
 ### Fixed
