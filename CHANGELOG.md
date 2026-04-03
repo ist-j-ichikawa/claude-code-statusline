@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.1] - 2026-04-03
+
+### Fixed
+
+- Worktree sessions now show the correct path and git branch — `worktree.path` from stdin JSON overrides `workspace.current_dir` which points to the original repo
+
 ## [1.6.0] - 2026-03-27
 
 ### Added

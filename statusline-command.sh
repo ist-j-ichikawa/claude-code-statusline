@@ -162,7 +162,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_id="" session_name=""
 agent_name="" ctx_window_size=0 cost_usd="" total_in_tok="" total_out_tok=""
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-vim_mode="" wt_name="" wt_orig_branch=""
+vim_mode="" wt_name="" wt_path="" wt_orig_branch=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -185,9 +185,15 @@ _jq_out=$(jq -r '
   @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)",
   @sh "vim_mode=\(.vim.mode // "")",
   @sh "wt_name=\(.worktree.name // "")",
+  @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
+
+# worktree sessions: workspace.current_dir points to original repo
+if [[ -n "$wt_path" ]]; then
+  current_dir="$wt_path"
+fi
 
 # --- Git info (5s cached) ---
 build_git() {

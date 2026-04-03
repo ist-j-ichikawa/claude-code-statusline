@@ -312,6 +312,14 @@ setup() {
   [[ "$result" != *"←"* ]]
 }
 
+@test "Worktree: worktree.pathがある場合はcurrent_dirの代わりにworktreeパスが表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/home/user/original-repo","project_dir":""},"context_window":{"used_percentage":10},"worktree":{"name":"my-feature","path":"/home/user/worktree-dir","original_branch":"main"}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  # worktree path should appear, not original repo path
+  [[ "$result" == *"worktree-dir"* ]]
+  [[ "$result" != *"original-repo"* ]]
+}
+
 # ============================================================================
 # エラー耐性 — 不正入力でもクラッシュしないこと
 # ============================================================================
