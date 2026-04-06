@@ -5,7 +5,7 @@
 ### Added
 
 - `/add-dir` indicator on Line 2 — shows `(+N dirs)` when directories are added via `/add-dir` (CC 2.1.78+ `workspace.added_dirs`)
-- Editor-aware OSC 8 links — directory path links now use `zed://` → `vscode://` → `file://` fallback based on available editor
+- OSC 8 clickable path links via `file://` on Line 2
 
 ### Changed
 

@@ -24,17 +24,8 @@ has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 # osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
 osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 
-# editor_url PATH VARNAME — sets VARNAME to editor-appropriate URL (zed > vscode > file)
-editor_url() {
-  local path=$1
-  if command -v zed &>/dev/null; then
-    printf -v "$2" 'zed://file/%s' "$path"
-  elif command -v code &>/dev/null; then
-    printf -v "$2" 'vscode://file%s' "$path"
-  else
-    printf -v "$2" 'file://%s' "$path"
-  fi
-}
+# editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
+editor_url() { printf -v "$2" 'file://%s' "$1"; }
 
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
 # 8 braille levels per char × 5 chars = 40 steps of precision
