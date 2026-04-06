@@ -485,25 +485,12 @@ setup() {
 }
 
 # ============================================================================
-# OSC 8リンク — エディタフォールバック
+# OSC 8リンク — file://でクリック可能であること
 # ============================================================================
-@test "OSC8: zedが存在するときzed://リンクが生成されること" {
-  # zed available in PATH
-  result=$(PATH="/usr/local/bin:$PATH" bash -c '
-    # Create a fake zed command
-    tmpdir=$(mktemp -d)
-    echo "#!/bin/bash" > "$tmpdir/zed"
-    chmod +x "$tmpdir/zed"
-    echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" \
-      | PATH="$tmpdir:$PATH" bash statusline-command.sh 2>/dev/null | sed -n "2p"
-    rm -rf "$tmpdir"
-  ')
-  [[ "$result" == *"zed://file/"* ]]
-}
-
-@test "OSC8: zedもvscodeもないときfile://リンクが生成されること" {
-  result=$(PATH="/usr/bin:/bin" bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
-  [[ "$result" == *"file://"* ]]
+@test "OSC8: パスがfile://リンクとして生成されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"file:///tmp"* ]]
 }
 
 @test "端末幅: 長いパスがCOLUMNS=50でも省略されないこと" {
