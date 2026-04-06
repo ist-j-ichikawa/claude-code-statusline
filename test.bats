@@ -168,34 +168,17 @@ setup() {
 # ============================================================================
 # 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================
-@test "Line3: Bedrockでコスト・入力・出力トークンが表示されること" {
+@test "Line3: コストとトークンが表示されないこと" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *'$0.42'* ]]
-  [[ "$result" == *"↑125.0k"* ]]
-  [[ "$result" == *"↓8.5k"* ]]
-}
-
-@test "Line3: Bedrockでコスト0・トークンなしのとき\$0.00のみ表示すること" {
-  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":0},"cost":{"total_cost_usd":0}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *'$0.00'* ]]
+  [[ "$result" != *'$'* ]]
   [[ "$result" != *"↑"* ]]
   [[ "$result" != *"↓"* ]]
 }
 
-@test "Line3: Anthropicでもコストが表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.15}}' \
+@test "Line3: Anthropicでレートリミットが表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *'$0.15'* ]]
-}
-
-@test "Line3: Anthropicでコスト・トークン・レートリミットが共存すること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":15234,"total_output_tokens":4521},"cost":{"total_cost_usd":0.42},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *'$0.42'* ]]
-  [[ "$result" == *"↑15.2k"* ]]
-  [[ "$result" == *"↓4.5k"* ]]
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
 }
@@ -475,13 +458,12 @@ setup() {
   [[ ${#five_pos} -lt ${#ctx_pos} ]]
 }
 
-@test "Line3順番: コストがトークンより右に表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":15000,"total_output_tokens":5000},"cost":{"total_cost_usd":0.42}}' \
+@test "Line3順番: weeklyがcontextより右に表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  # ↑ should appear before $
-  tok_pos="${result%%↑*}"
-  cost_pos="${result%%\$*}"
-  [[ ${#tok_pos} -lt ${#cost_pos} ]]
+  ctx_pos="${result%%48%*}"
+  week_pos="${result%%week:*}"
+  [[ ${#ctx_pos} -lt ${#week_pos} ]]
 }
 
 # ============================================================================

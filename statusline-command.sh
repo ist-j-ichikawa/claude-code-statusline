@@ -155,7 +155,7 @@ IFS= read -r -d '' input || true
 # Initialize all jq variables — prevents set -u instant death if eval fails
 model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
-agent_name="" ctx_window_size=0 cost_usd="" total_in_tok="" total_out_tok=""
+agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 vim_mode="" wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0
 _jq_ok=1
@@ -170,9 +170,6 @@ _jq_out=$(jq -r '
   @sh "session_name=\(.session_name // "")",
   @sh "agent_name=\(.agent.name // "")",
   @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
-  @sh "cost_usd=\(.cost.total_cost_usd // "")",
-  @sh "total_in_tok=\(.context_window.total_input_tokens // "")",
-  @sh "total_out_tok=\(.context_window.total_output_tokens // "")",
   @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
   @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
   @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
@@ -487,22 +484,6 @@ if has_val "$used_pct"; then
   line3+=("$ctx_text")
 else
   line3+=("${DIM}      -%${RST}")
-fi
-
-# Token counts (all providers)
-if has_val "$total_in_tok"; then
-  format_tokens "$total_in_tok" _ft
-  line3+=("${TEAL}↑${_ft}${RST}")
-fi
-if has_val "$total_out_tok"; then
-  format_tokens "$total_out_tok" _ft
-  line3+=("${CORAL}↓${_ft}${RST}")
-fi
-
-# Session cost (all providers)
-if has_val "$cost_usd"; then
-  printf -v cost_fmt '%.2f' "$cost_usd"
-  line3+=("${AMBER}\$${cost_fmt}${RST}")
 fi
 
 # Weekly rate limit (Anthropic only, rightmost — low priority)
