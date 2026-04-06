@@ -9,6 +9,8 @@
 
 ### Changed
 
+- Line 3 now shows only rate limits and context — removed token counts and session cost (CC's `total_input_tokens` excludes cache tokens, making the display misleading)
+
 - Dirty state symbols now use git standard: `A` (staged), `M` (modified), `?` (untracked), `U` (conflicts) — was `+`, `~`, `?`, `!`
 - Worktree origin indicator changed from `←branch` to `from:branch` for clarity
 - Line 3 reordered: 5h rate limit → context → ↑tokens → ↓tokens → $ → weekly (rate limit moved to leftmost for quick glance)

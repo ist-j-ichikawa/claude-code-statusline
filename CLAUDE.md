@@ -37,7 +37,7 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 - **Added dirs (Line 2)**: `workspace.added_dirs` (CC 2.1.78+) の配列長を `(+N dirs)` で表示。`/add-dir` でディレクトリを追加した場合のみ出現。
 - **OSC 8 links (Line 2)**: `editor_url` で `file://` URL を生成し、パスをクリック可能にする。カスタムURLスキーム（`zed://` 等）はターミナルが対応しないため `file://` 固定。
 - **Upstream tracking**: `~/ghq/github.com/anthropics/claude-code/CHANGELOG.md` で Claude Code の変更を確認。公開リポにソースコードはなく、CHANGELOG + plugins + scripts のみ。
-- **Line 3 (rate limit + context + tokens + cost)**: 左から順に: 5h rate limit (`braille_bar` + %) → context window (`braille_bar` 5-char, `⣀⣄⣤⣦⣶⣷⣿`, 40 steps + %) → ↑input tokens → ↓output tokens → session cost ($) → weekly rate limit。5h rate limitを最左に配置（最も頻繁に確認する情報）。Anthropic rate limit は stdin JSON `rate_limits` field (CC 2.1.80+)。`resets_at` is Unix epoch seconds (not ISO 8601). 5-hour in Anthropic sand (`ANTH`, `38;5;180`) with remaining time (`format_reset_remaining`), weekly in dim with absolute day/time reset (`format_reset_absolute`). Pre-2.1.80 CC では rate limit 部分が空（graceful degradation）。
+- **Line 3 (rate limit + context)**: 左から順に: 5h rate limit (`braille_bar` + %) → context window (`braille_bar` 5-char, `⣀⣄⣤⣦⣶⣷⣿`, 40 steps + %) → weekly rate limit。5h rate limitを最左に配置（最も頻繁に確認する情報）。Anthropic rate limit は stdin JSON `rate_limits` field (CC 2.1.80+)。`resets_at` is Unix epoch seconds (not ISO 8601). 5-hour in Anthropic sand (`ANTH`, `38;5;180`) with remaining time (`format_reset_remaining`), weekly in dim with absolute day/time reset (`format_reset_absolute`). Pre-2.1.80 CC では rate limit 部分が空（graceful degradation）。トークン数とコストは非表示（CCの `total_input_tokens` がキャッシュトークンを含まず誤解を招くため）。
 
 ## Key Constraints
 
