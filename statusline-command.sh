@@ -24,6 +24,18 @@ has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 # osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
 osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 
+# editor_url PATH VARNAME — sets VARNAME to editor-appropriate URL (zed > vscode > file)
+editor_url() {
+  local path=$1
+  if command -v zed &>/dev/null; then
+    printf -v "$2" 'zed://file/%s' "$path"
+  elif command -v code &>/dev/null; then
+    printf -v "$2" 'vscode://file%s' "$path"
+  else
+    printf -v "$2" 'file://%s' "$path"
+  fi
+}
+
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
 # 8 braille levels per char × 5 chars = 40 steps of precision
 braille_bar() {
@@ -41,14 +53,6 @@ braille_bar() {
     _bb+="${!varname}"
   done
   printf -v "$2" '%s' "$_bb"
-}
-
-# truncate_path VARNAME MAX — truncates path in VARNAME to MAX chars with … prefix (no subshell)
-truncate_path() {
-  local _tp="${!1}" _tm=$2
-  if ((${#_tp} > _tm)); then
-    printf -v "$1" '…%s' "${_tp: -$((_tm - 1))}"
-  fi
 }
 
 # _truncate_bytes VARNAME MAX — byte-level safety-net truncation with ANSI cleanup (no subshell)
@@ -159,10 +163,10 @@ IFS= read -r -d '' input || true
 
 # Initialize all jq variables — prevents set -u instant death if eval fails
 model="" model_id="" current_dir="." project_dir="" used_pct=""
-exceeds_200k="false" cc_version="" session_id="" session_name=""
+exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0 cost_usd="" total_in_tok="" total_out_tok=""
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-vim_mode="" wt_name="" wt_path="" wt_orig_branch=""
+vim_mode="" wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -172,7 +176,6 @@ _jq_out=$(jq -r '
   @sh "used_pct=\(.context_window.used_percentage // "")",
   @sh "exceeds_200k=\(.exceeds_200k_tokens // false)",
   @sh "cc_version=\(.version // "")",
-  @sh "session_id=\(.session_id // "")",
   @sh "session_name=\(.session_name // "")",
   @sh "agent_name=\(.agent.name // "")",
   @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
@@ -186,7 +189,8 @@ _jq_out=$(jq -r '
   @sh "vim_mode=\(.vim.mode // "")",
   @sh "wt_name=\(.worktree.name // "")",
   @sh "wt_path=\(.worktree.path // "")",
-  @sh "wt_orig_branch=\(.worktree.original_branch // "")"
+  @sh "wt_orig_branch=\(.worktree.original_branch // "")",
+  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -237,9 +241,9 @@ build_git() {
   modified=$(git -C "$dir" diff --name-only 2>/dev/null | grep -c . || echo 0)
   untracked=$(git -C "$dir" ls-files --others --exclude-standard 2>/dev/null | grep -c . || echo 0)
   conflicts=$(git -C "$dir" diff --name-only --diff-filter=U 2>/dev/null | grep -c . || echo 0)
-  ((conflicts > 0)) && text+=" ${RED}!${conflicts}${RST}"
-  ((staged > 0))    && text+=" ${GRN}+${staged}${RST}"
-  ((modified > 0))  && text+=" ${YLW}~${modified}${RST}"
+  ((conflicts > 0)) && text+=" ${RED}U${conflicts}${RST}"
+  ((staged > 0))    && text+=" ${GRN}A${staged}${RST}"
+  ((modified > 0))  && text+=" ${YLW}M${modified}${RST}"
   ((untracked > 0)) && text+=" ${DIM}?${untracked}${RST}"
 
   # Ahead/behind
@@ -250,11 +254,6 @@ build_git() {
     ((ahead > 0)) && text+=" ${GRN}↑${ahead}${RST}"
     ((behind > 0)) && text+=" ${RED}↓${behind}${RST}"
   fi
-
-  # Stash count
-  local stash_count
-  stash_count=$(git -C "$dir" stash list 2>/dev/null | grep -c . || echo 0)
-  ((stash_count > 0)) && text+=" ${DIM}stash:${stash_count}${RST}"
 
   # Last commit age + message (single git log call)
   local last_epoch last_msg log_output
@@ -285,7 +284,7 @@ build_git() {
 
 
 # ============================================================================
-# Line 1: Provider + Model + Agent + [(Fork)] + Session name + Version
+# Line 1: Provider + Model + Agent + [(Branch)] + Version + Vim mode
 # ============================================================================
 line1=()
 
@@ -372,8 +371,6 @@ fi
 if ((_cols >= 55)); then
   if $is_branch; then
     line1+=("${YLW}(branch)${RST}")
-  elif ! has_val "$session_name"; then
-    line1+=("${DIM}(no name)${RST}")
   fi
 fi
 # Vim mode indicator (NORMAL=dim, INSERT=green)
@@ -398,40 +395,33 @@ if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
 [[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
-_path_max=$((_cols * 2 / 5))
-((_path_max < 15)) && _path_max=15
+
+# Directory path (full display — no truncation; git info is truncated instead)
+_display_dir="${project_dir:-$current_dir}"
+_short_dir="${_display_dir/#$HOME/~}"
+editor_url "$_display_dir" _editor_url
+osc8 "$_editor_url" "$_short_dir" _osc_tmp
+line2+=("$_osc_tmp")
+
+# added_dirs indicator
+if ((added_dirs_count > 0)); then
+  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
+fi
+
 # Narrow terminals: skip git entirely or truncate (byte-level, append RST)
+# Path gets full space; git info is truncated based on remaining width
+_path_len=${#_short_dir}
 if ((_cols < 45)); then
   git_cached=""
 elif [[ -n "$git_cached" ]]; then
-  _git_max=$((_cols - _path_max - 3))
+  _git_max=$((_cols - _path_len - 3))
   ((_git_max < 10)) && _git_max=10
   _truncate_bytes git_cached $((_git_max * 2))
 fi
 
-# Directory path (project_dir → current_dir when different)
-if has_val "$project_dir"; then
-  short_proj="${project_dir/#$HOME/~}"
-  truncate_path short_proj "$_path_max"
-  osc8 "file://${project_dir}" "$short_proj" _osc_tmp
-  line2+=("$_osc_tmp")
-  if [[ "$current_dir" != "$project_dir" ]]; then
-    short_cwd="${current_dir/#$HOME/~}"
-    truncate_path short_cwd "$_path_max"
-    osc8 "file://${current_dir}" "$short_cwd" _osc_tmp
-    line2+=("${DIM}→${RST} $_osc_tmp")
-  fi
-else
-  short_path="${current_dir/#$HOME/~}"
-  truncate_path short_path "$_path_max"
-  osc8 "file://${current_dir}" "$short_path" _osc_tmp
-  line2+=("$_osc_tmp")
-fi
-
 # Git info (strip repo name if same as dir basename to avoid redundancy)
-_git_root="${project_dir:-$current_dir}"
 if [[ -n "$git_cached" ]]; then
-  dir_basename="${_git_root##*/}"
+  dir_basename="${_display_dir##*/}"
   # repo_name is always plain text at start of git_cached (no ANSI prefix)
   repo_name="${git_cached%% *}"
   if [[ "$dir_basename" == "$repo_name" ]]; then
@@ -446,17 +436,17 @@ if [[ -n "$git_cached" ]]; then
   [[ -n "$git_cached" ]] && line2+=("$git_cached")
 else
   # No cached git info — check if truly non-git using pure bash (no fork)
-  if [[ ! -d "${_git_root}/.git" && ! -f "${_git_root}/.git" ]]; then
+  if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
     line2+=("${DIM}(no git)${RST}")
   else
     # Cold start: read branch from .git/HEAD (pure bash, no fork)
-    _head_file="${_git_root}/.git"
+    _head_file="${_display_dir}/.git"
     if [[ -f "$_head_file" ]]; then
       # Worktree: .git is a file → follow gitdir pointer
       _gitdir_line=$(<"$_head_file")
       _gitdir="${_gitdir_line#gitdir: }"
       if [[ "$_gitdir" != /* ]]; then
-        _head_file="${_git_root}/${_gitdir}/HEAD"
+        _head_file="${_display_dir}/${_gitdir}/HEAD"
       else
         _head_file="${_gitdir}/HEAD"
       fi
@@ -478,7 +468,7 @@ fi
 if has_val "$wt_name" && ((_cols >= 45)); then
   line2+=("🌲")
   if has_val "$wt_orig_branch"; then
-    line2+=("${DIM}←${wt_orig_branch}${RST}")
+    line2+=("${DIM}from:${wt_orig_branch}${RST}")
   fi
 fi
 
@@ -488,24 +478,27 @@ fi
 # ============================================================================
 line3=()
 
+# 5-hour rate limit (Anthropic only, CC 2.1.80+) — leftmost for quick glance
+if [[ -z "$provider" ]] && has_val "$five_pct"; then
+  format_reset_remaining "$five_reset_epoch"
+  braille_bar "$five_pct" _bbar
+  line3+=("${ANTH}${_bbar} ${five_pct}%${RST}")
+  [[ -n "$_reset" ]] && line3+=("${ANTH}${_reset}${RST}")
+fi
+
 # Context bar
 if has_val "$used_pct"; then
   pct_int=${used_pct%.*}
   color_by_threshold "$pct_int" 90 80 ctx_color
   braille_bar "$pct_int" _bbar
   ctx_text="${ctx_color}${_bbar} ${pct_int}%${RST}"
-  # Only warn on 200K models (not 1M)
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
 else
   line3+=("${DIM}      -%${RST}")
 fi
 
-# Session cost & token counts (all providers)
-if has_val "$cost_usd"; then
-  printf -v cost_fmt '%.2f' "$cost_usd"
-  line3+=("${AMBER}\$${cost_fmt}${RST}")
-fi
+# Token counts (all providers)
 if has_val "$total_in_tok"; then
   format_tokens "$total_in_tok" _ft
   line3+=("${TEAL}↑${_ft}${RST}")
@@ -515,20 +508,17 @@ if has_val "$total_out_tok"; then
   line3+=("${CORAL}↓${_ft}${RST}")
 fi
 
-# Rate limit (Anthropic only, CC 2.1.80+)
-if [[ -z "$provider" ]]; then
-  if has_val "$five_pct"; then
-    format_reset_remaining "$five_reset_epoch"
-    braille_bar "$five_pct" _bbar
-    line3+=("${ANTH}${_bbar} ${five_pct}%${RST}")
-    [[ -n "$_reset" ]] && line3+=("${ANTH}${_reset}${RST}")
-  fi
+# Session cost (all providers)
+if has_val "$cost_usd"; then
+  printf -v cost_fmt '%.2f' "$cost_usd"
+  line3+=("${AMBER}\$${cost_fmt}${RST}")
+fi
 
-  if has_val "$seven_pct" && ((seven_pct > 0)) && ((_cols >= 70)); then
-    format_reset_absolute "$seven_reset_epoch"
-    line3+=("${DIM}week:${seven_pct}%${RST}")
-    [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
-  fi
+# Weekly rate limit (Anthropic only, rightmost — low priority)
+if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)) && ((_cols >= 70)); then
+  format_reset_absolute "$seven_reset_epoch"
+  line3+=("${DIM}week:${seven_pct}%${RST}")
+  [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
 fi
 
 # ============================================================================

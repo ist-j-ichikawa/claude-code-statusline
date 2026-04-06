@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.7.0] - 2026-04-06
+
+### Added
+
+- `/add-dir` indicator on Line 2 — shows `(+N dirs)` when directories are added via `/add-dir` (CC 2.1.78+ `workspace.added_dirs`)
+- Editor-aware OSC 8 links — directory path links now use `zed://` → `vscode://` → `file://` fallback based on available editor
+
+### Changed
+
+- Dirty state symbols now use git standard: `A` (staged), `M` (modified), `?` (untracked), `U` (conflicts) — was `+`, `~`, `?`, `!`
+- Worktree origin indicator changed from `←branch` to `from:branch` for clarity
+- Line 3 reordered: 5h rate limit → context → ↑tokens → ↓tokens → $ → weekly (rate limit moved to leftmost for quick glance)
+- Directory path is now displayed in full (no truncation); git info is truncated from the right when terminal width is limited
+
+### Removed
+
+- `(no name)` indicator for unnamed sessions — CC shows session name natively
+- Subdirectory display (`→ current_dir`) — project root is sufficient
+- Stash count display — not relevant to Claude Code sessions
+- Unused `session_id` jq extraction
+- Dead `truncate_path` function
+
 ## [1.6.1] - 2026-04-03
 
 ### Fixed

@@ -249,10 +249,10 @@ setup() {
 # ============================================================================
 # 統合テスト: セッション表示 — 状態に応じた表示がされること
 # ============================================================================
-@test "セッション: 名前未設定で(no name)と表示すること" {
+@test "セッション: 名前未設定で(no name)が表示されないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"(no name)"* ]]
+  [[ "$result" != *"(no name)"* ]]
 }
 
 @test "セッション: ブランチ時に(branch)と表示すること" {
@@ -292,11 +292,11 @@ setup() {
 # ============================================================================
 # Worktree — stdin JSONからworktree情報を表示
 # ============================================================================
-@test "Worktree: worktreeセッションで🌲と←元ブランチが表示されること" {
+@test "Worktree: worktreeセッションで🌲とfrom:元ブランチが表示されること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"my-feature","branch":"worktree-my-feature","original_branch":"main"}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
   [[ "$result" == *"🌲"* ]]
-  [[ "$result" == *"←main"* ]]
+  [[ "$result" == *"from:main"* ]]
 }
 
 @test "Worktree: worktree未使用時は🌲が表示されないこと" {
@@ -309,7 +309,7 @@ setup() {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"hook-wt","path":"/tmp/wt"}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
   [[ "$result" == *"🌲"* ]]
-  [[ "$result" != *"←"* ]]
+  [[ "$result" != *"from:"* ]]
 }
 
 @test "Worktree: worktree.pathがある場合はcurrent_dirの代わりにworktreeパスが表示されること" {
@@ -341,28 +341,6 @@ setup() {
 @test "エラー耐性: color_by_thresholdが非数値でDIMを返すこと" {
   color_by_threshold "xyz" 90 80 result
   [[ "$result" == "$DIM" ]]
-}
-
-# ============================================================================
-# truncate_path — パスを省略すること
-# ============================================================================
-@test "truncate_path: 長いパスを…付きで省略すること" {
-  mypath="/Users/user/very/long/path/to/project"
-  truncate_path mypath 20
-  [[ "$mypath" == "…"* ]]
-  [[ ${#mypath} -le 20 ]]
-}
-
-@test "truncate_path: 短いパスをそのまま返すこと" {
-  mypath="/tmp"
-  truncate_path mypath 20
-  [[ "$mypath" == "/tmp" ]]
-}
-
-@test "truncate_path: ちょうど上限と同じ長さなら省略しないこと" {
-  mypath="12345678901234567890"
-  truncate_path mypath 20
-  [[ "$mypath" == "12345678901234567890" ]]
 }
 
 # ============================================================================
@@ -414,7 +392,7 @@ setup() {
 
 @test "端末幅: COLUMNS=50でセッション表示が非表示になること" {
   result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
-  [[ "$result" != *"(no name)"* ]]
+  [[ "$result" != *"(branch)"* ]]
 }
 
 @test "端末幅: COLUMNS=120でバージョンが表示されること" {
@@ -455,7 +433,80 @@ setup() {
   [[ "$line_count" -eq 3 ]]
 }
 
-@test "端末幅: 長いパスがCOLUMNS=50で省略されること" {
+# ============================================================================
+# added_dirs — /add-dirで追加されたディレクトリの表示
+# ============================================================================
+@test "added_dirs: 追加ディレクトリがあるとき(+N dirs)と表示すること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":["/tmp/a","/tmp/b"]},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"(+2 dirs)"* ]]
+}
+
+@test "added_dirs: 追加ディレクトリがないとき(+N dirs)が表示されないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" != *"dirs)"* ]]
+}
+
+@test "added_dirs: 空配列のとき(+N dirs)が表示されないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":[]},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" != *"dirs)"* ]]
+}
+
+# ============================================================================
+# サブディレクトリ削除 — →current_dirが表示されないこと
+# ============================================================================
+@test "サブディレクトリ: project_dirとcurrent_dirが異なっても→が表示されないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp/sub","project_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" != *"→"* ]]
+}
+
+# ============================================================================
+# Line 3順番 — 5h limit, context, tokens, cost, weekly の順であること
+# ============================================================================
+@test "Line3順番: 5hリミットがcontextより左に表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800}}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  # 35% (5h) should appear before 48% (context)
+  five_pos="${result%%35%*}"
+  ctx_pos="${result%%48%*}"
+  [[ ${#five_pos} -lt ${#ctx_pos} ]]
+}
+
+@test "Line3順番: コストがトークンより右に表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":15000,"total_output_tokens":5000},"cost":{"total_cost_usd":0.42}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  # ↑ should appear before $
+  tok_pos="${result%%↑*}"
+  cost_pos="${result%%\$*}"
+  [[ ${#tok_pos} -lt ${#cost_pos} ]]
+}
+
+# ============================================================================
+# OSC 8リンク — エディタフォールバック
+# ============================================================================
+@test "OSC8: zedが存在するときzed://リンクが生成されること" {
+  # zed available in PATH
+  result=$(PATH="/usr/local/bin:$PATH" bash -c '
+    # Create a fake zed command
+    tmpdir=$(mktemp -d)
+    echo "#!/bin/bash" > "$tmpdir/zed"
+    chmod +x "$tmpdir/zed"
+    echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" \
+      | PATH="$tmpdir:$PATH" bash statusline-command.sh 2>/dev/null | sed -n "2p"
+    rm -rf "$tmpdir"
+  ')
+  [[ "$result" == *"zed://file/"* ]]
+}
+
+@test "OSC8: zedもvscodeもないときfile://リンクが生成されること" {
+  result=$(PATH="/usr/bin:/bin" bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
+  [[ "$result" == *"file://"* ]]
+}
+
+@test "端末幅: 長いパスがCOLUMNS=50でも省略されないこと" {
   result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/Users/user/very/long/path/to/some/deep/project\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
-  [[ "$result" == *"…"* ]]
+  [[ "$result" != *"…"* ]]
 }
