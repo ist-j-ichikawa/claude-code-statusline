@@ -157,7 +157,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-vim_mode="" wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0
+vim_mode="" wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -178,7 +178,8 @@ _jq_out=$(jq -r '
   @sh "wt_name=\(.worktree.name // "")",
   @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
-  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)"
+  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
+  @sh "ws_git_worktree=\(.workspace.git_worktree // "")"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -292,7 +293,7 @@ if ((_cols < 35)); then model_show="${model_show%% [0-9]*}"; fi
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
 shopt -s nocasematch
-if [[ "$model_id" =~ ^(global|jp|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]]; then
+if [[ "$model_id" =~ ^(global|jp|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]] || [[ "${CLAUDE_CODE_USE_MANTLE:-}" == "1" ]]; then
   provider="bedrock"
 elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]]; then
   provider="vertex"
@@ -452,8 +453,8 @@ else
   fi
 fi
 
-# Worktree indicator from stdin JSON (no git fork needed)
-if has_val "$wt_name" && ((_cols >= 45)); then
+# Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
+if (has_val "$wt_name" || has_val "$ws_git_worktree") && ((_cols >= 45)); then
   line2+=("🌲")
   if has_val "$wt_orig_branch"; then
     line2+=("${DIM}from:${wt_orig_branch}${RST}")

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0] - 2026-04-09
+
+### Added
+
+- Mantle provider detection — `CLAUDE_CODE_USE_MANTLE=1` is now detected as Bedrock (CC 2.1.94+, "Amazon Bedrock powered by Mantle")
+- Git linked worktree indicator — `workspace.git_worktree` (CC 2.1.97+) shows 🌲 for manual `git worktree add` worktrees, not only CC `--worktree` sessions
+- `refreshInterval: 30` recommended in README settings example (CC 2.1.97+ auto-reruns statusline every N seconds)
+
+### Changed
+
+- Built against badge updated from CC 2.1.76 to 2.1.97
+
 ## [1.7.0] - 2026-04-06
 
 ### Added

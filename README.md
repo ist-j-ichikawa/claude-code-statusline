@@ -3,7 +3,7 @@
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.76-purple)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.97-purple)
 
 ## Overview
 
@@ -52,12 +52,15 @@ chmod +x ~/.claude/statusline-command.sh
 {
   "statusLine": {
     "type": "command",
-    "command": "/bin/bash /Users/<username>/.claude/statusline-command.sh"
+    "command": "/bin/bash /Users/<username>/.claude/statusline-command.sh",
+    "refreshInterval": 30
   }
 }
 ```
 
 > **Note:** `<username>` は自分のユーザー名に置き換えてください。
+
+`refreshInterval` (CC 2.1.97+) はステータスラインを N 秒ごとに自動再実行する設定です。レート制限の残り時間やGit状態がアイドル中も更新されます。30秒推奨。
 
 ## Shell Script Details
 
@@ -131,7 +134,7 @@ statusline-command.sh
 
 | プロバイダー | 検出条件 |
 |---|---|
-| Bedrock | `model.id` プレフィックス (`global.`/`jp.`/`us.`/`eu.`/`au.`/`apac.`) or `CLAUDE_CODE_USE_BEDROCK=1` |
+| Bedrock | `model.id` プレフィックス (`global.`/`jp.`/`us.`/`eu.`/`au.`/`apac.`) or `CLAUDE_CODE_USE_BEDROCK=1` or `CLAUDE_CODE_USE_MANTLE=1` |
 | Vertex AI | `CLAUDE_CODE_USE_VERTEX=1` |
 | Foundry | `CLAUDE_CODE_USE_FOUNDRY=1` |
 | Anthropic | 上記以外 |

@@ -160,6 +160,11 @@ setup() {
   [[ "$result" == *"Bedrock"* ]]
 }
 
+@test "プロバイダー: CLAUDE_CODE_USE_MANTLE環境変数でBedrockと検出すること" {
+  result=$(CLAUDE_CODE_USE_MANTLE=1 bash -c 'echo "{\"model\":{\"id\":\"claude-opus\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.94\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+  [[ "$result" == *"Bedrock"* ]]
+}
+
 @test "プロバイダー: CLAUDE_CODE_USE_VERTEX環境変数でVertexと検出すること" {
   result=$(CLAUDE_CODE_USE_VERTEX=1 bash -c 'echo "{\"model\":{\"id\":\"claude-opus\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
   [[ "$result" == *"Vertex"* ]]
@@ -280,6 +285,12 @@ setup() {
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
   [[ "$result" == *"🌲"* ]]
   [[ "$result" == *"from:main"* ]]
+}
+
+@test "Worktree: workspace.git_worktreeがtrueのとき🌲が表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.97","workspace":{"current_dir":"/tmp","git_worktree":true},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"🌲"* ]]
 }
 
 @test "Worktree: worktree未使用時は🌲が表示されないこと" {
