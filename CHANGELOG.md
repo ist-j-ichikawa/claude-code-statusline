@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.0] - 2026-04-10
+
+### Changed
+
+- Branch name color on Line 2 changed from green to Git brand orange (`38;5;202`, Pantone 1788C `#F03C2E`) — distinguishes branch from staged count (`A`, green) which previously blended together
+
 ## [1.8.0] - 2026-04-09
 
 ### Added

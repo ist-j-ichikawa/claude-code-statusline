@@ -7,6 +7,7 @@ set -uo pipefail
 readonly RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
+readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
@@ -218,7 +219,7 @@ build_git() {
     if [[ "$branch" == HEAD@* ]]; then
       text+="${repo_name} ${RED}(${branch})${RST}"
     else
-      text+="${repo_name} ${GRN}(${branch})${RST}"
+      text+="${repo_name} ${GIT}(${branch})${RST}"
     fi
   elif [[ -n "$repo_name" ]]; then
     text+="${repo_name}"
@@ -445,7 +446,7 @@ else
     if [[ -f "$_head_file" ]]; then
       _head=$(<"$_head_file")
       if [[ "$_head" == ref:* ]]; then
-        line2+=("${GRN}(${_head#ref: refs/heads/})${RST}")
+        line2+=("${GIT}(${_head#ref: refs/heads/})${RST}")
       else
         line2+=("${RED}(HEAD@${_head:0:7})${RST}")
       fi
