@@ -158,7 +158,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-vim_mode="" wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
+wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -175,7 +175,6 @@ _jq_out=$(jq -r '
   @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
   @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
   @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)",
-  @sh "vim_mode=\(.vim.mode // "")",
   @sh "wt_name=\(.worktree.name // "")",
   @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
@@ -363,15 +362,6 @@ if ((_cols >= 55)); then
     line1+=("${YLW}(branch)${RST}")
   fi
 fi
-# Vim mode indicator (NORMAL=dim, INSERT=green)
-if has_val "$vim_mode" && ((_cols >= 55)); then
-  if [[ "$vim_mode" == "INSERT" ]]; then
-    line1+=("${GRN}[I]${RST}")
-  else
-    line1+=("${DIM}[N]${RST}")
-  fi
-fi
-
 
 # ============================================================================
 # Line 2: Dir + Git
