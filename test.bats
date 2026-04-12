@@ -266,28 +266,6 @@ setup() {
 }
 
 # ============================================================================
-# Vim mode — vim有効時のモード表示
-# ============================================================================
-@test "Vim: INSERTモードで緑の[I]が表示されること" {
-  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"vim":{"mode":"INSERT"}}' \
-    | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"[I]"* ]]
-}
-
-@test "Vim: NORMALモードでdimの[N]が表示されること" {
-  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"vim":{"mode":"NORMAL"}}' \
-    | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"[N]"* ]]
-}
-
-@test "Vim: vim無効時はモード表示がないこと" {
-  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
-    | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" != *"[N]"* ]]
-  [[ "$result" != *"[I]"* ]]
-}
-
-# ============================================================================
 # Worktree — stdin JSONからworktree情報を表示
 # ============================================================================
 @test "Worktree: worktreeセッションで🌲とfrom:元ブランチが表示されること" {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.10.0] - 2026-04-13
+
+### Removed
+
+- Vim mode indicator (`[I]`/`[N]`) from Line 1 — Claude Code displays `-- INSERT --` / `-- NORMAL --` natively at the bottom of the screen, making the statusline indicator redundant
+
 ## [1.9.0] - 2026-04-10
 
 ### Changed
