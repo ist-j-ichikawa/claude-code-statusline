@@ -351,6 +351,21 @@ setup() {
 }
 
 # ============================================================================
+# Opus 4.7 — モデル検出
+# ============================================================================
+@test "モデル色: Opus 4.7がコーラルで表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.112","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"38;5;209"*"Opus 4.7"* ]]
+}
+
+@test "モデル色: Opus 4.7 (1M context) でもコーラルで表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7[1m]","display_name":"Opus 4.7 (1M context)"},"version":"2.1.112","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"38;5;209"*"Opus 4.7 (1M context)"* ]]
+}
+
+# ============================================================================
 # 統合テスト: 全体 — 正常に動作すること
 # ============================================================================
 @test "全体: exit code 0で終了すること" {
