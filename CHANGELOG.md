@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.11.0] - 2026-04-21
+
+### Changed
+
+- Statusline layout expanded from 3 lines to 4 — path and git info are now on separate lines (Line 2: path/worktree, Line 3: git info). Previously, long paths + long git output combined on Line 2 often overflowed and got hidden
+- `added_dirs` indicator changed from count (`(+2 dirs)`) to explicit basename enumeration (`+foo +bar`) — know at a glance which directories were added
+- Parentheses removed from standalone indicators: `(branch)` → `branch`, `(+N dirs)` → `+N ...`, `(no git)` → `no git`. Parens reserved for within-element separation (e.g. `Anthropic(enterprise)`)
+- Branch names in git info dropped parentheses: `(main)` → `main`, `(HEAD@abc1234)` → `HEAD@abc1234`. Git orange color already distinguishes the branch visually
+
+### Removed
+
+- Terminal width adaptation — `COLUMNS`/`tput cols` detection, all `((_cols >= N))` conditionals, and width-based element hiding removed. Every element is now always shown at full length regardless of terminal width
+- `_truncate_bytes` byte-level safety-net helper and its calls — no longer needed without width control
+- Unreachable day branch in `format_reset_remaining` — 5h rate limit window never exceeds 5 hours, so the `%dd%dh` format was dead code
+
 ## [1.10.0] - 2026-04-13
 
 ### Removed
