@@ -15,10 +15,6 @@ readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
 readonly _NOW=$(date +%s)
 
-# --- Terminal width (for adaptive content) ---
-_cols=${COLUMNS:-0}
-((_cols <= 0)) && { _cols=$(tput cols 2>/dev/null); [[ "${_cols:-}" =~ ^[0-9]+$ ]] || _cols=80; }
-
 # --- Helpers ---
 has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 
@@ -45,19 +41,6 @@ braille_bar() {
     _bb+="${!varname}"
   done
   printf -v "$2" '%s' "$_bb"
-}
-
-# _truncate_bytes VARNAME MAX — byte-level safety-net truncation with ANSI cleanup (no subshell)
-_truncate_bytes() {
-  local _tb="${!1}" _tm=$2
-  if ((${#_tb} > _tm)); then
-    _tb="${_tb:0:_tm}"
-    local _et="${_tb##*$'\033'}"
-    if [[ "$_et" != "$_tb" && "$_et" != *m* ]]; then
-      _tb="${_tb%$'\033'*}"
-    fi
-    printf -v "$1" '%s%s' "$_tb" "$RST"
-  fi
 }
 
 # color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
@@ -128,6 +111,7 @@ fetch_subscription() {
 }
 
 # format_reset_remaining EPOCH — sets _reset (no subshell)
+# 5h rate limit 専用: diff は最大5時間なので H:MM 固定
 format_reset_remaining() {
   _reset=""
   local epoch=$1
@@ -135,10 +119,8 @@ format_reset_remaining() {
   [[ "$epoch" =~ ^[0-9]+$ ]] || return
   local diff=$((epoch - _NOW))
   if ((diff <= 0)); then _reset="now"; return; fi
-  local d=$((diff / 86400)) h=$(( (diff % 86400) / 3600 )) m=$(( (diff % 3600) / 60 ))
-  if ((d > 0)); then printf -v _reset '%dd%dh' "$d" "$h"
-  elif ((h > 0)); then printf -v _reset '%d:%02d' "$h" "$m"
-  else printf -v _reset '0:%02d' "$m"; fi
+  local h=$((diff / 3600)) m=$(( (diff % 3600) / 60 ))
+  printf -v _reset '%d:%02d' "$h" "$m"
 }
 
 # format_reset_absolute EPOCH — sets _reset (1 fork: date)
@@ -158,7 +140,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
+wt_name="" wt_path="" wt_orig_branch="" added_dirs_basenames="" ws_git_worktree=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -178,7 +160,7 @@ _jq_out=$(jq -r '
   @sh "wt_name=\(.worktree.name // "")",
   @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
-  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
+  @sh "added_dirs_basenames=\(.workspace.added_dirs // [] | map(split("/") | last) | join("\t"))",
   @sh "ws_git_worktree=\(.workspace.git_worktree // "")"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
@@ -213,12 +195,12 @@ build_git() {
     [[ -n "$short_sha" ]] && branch="HEAD@${short_sha}"
   fi
 
-  # Branch display (detached=red, normal=green)
+  # Branch display (detached=red, normal=Git orange)
   if [[ -n "$repo_name" && -n "$branch" ]]; then
     if [[ "$branch" == HEAD@* ]]; then
-      text+="${repo_name} ${RED}(${branch})${RST}"
+      text+="${repo_name} ${RED}${branch}${RST}"
     else
-      text+="${repo_name} ${GIT}(${branch})${RST}"
+      text+="${repo_name} ${GIT}${branch}${RST}"
     fi
   elif [[ -n "$repo_name" ]]; then
     text+="${repo_name}"
@@ -287,8 +269,6 @@ fi
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
-# Narrow terminals: strip version suffix (e.g. "Opus 4.6" → "Opus")
-if ((_cols < 35)); then model_show="${model_show%% [0-9]*}"; fi
 
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
@@ -307,13 +287,9 @@ case "$provider" in
   vertex)  line1+=("${VTEX}Vertex${RST}") ;;
   foundry) line1+=("${FNDY}Foundry${RST}") ;;
   *)
-    if ((_cols >= 45)); then
-      fetch_subscription
-      if has_val "$_sub_type"; then
-        line1+=("${ANTH}Anthropic(${_sub_type})${RST}")
-      else
-        line1+=("${ANTH}Anthropic${RST}")
-      fi
+    fetch_subscription
+    if has_val "$_sub_type"; then
+      line1+=("${ANTH}Anthropic(${_sub_type})${RST}")
     else
       line1+=("${ANTH}Anthropic${RST}")
     fi
@@ -333,8 +309,8 @@ else
 fi
 shopt -u nocasematch
 
-# Agent name (skip on narrow terminals)
-if has_val "$agent_name" && ((_cols >= 45)); then
+# Agent name
+if has_val "$agent_name"; then
   line1+=("${AGENT}⚡${agent_name}${RST}")
 fi
 
@@ -352,21 +328,47 @@ session_name="${session_name%"${session_name##*[![:space:]]}"}"
 if [[ "$session_name" == *:* || "$session_name" == /* ]]; then
   session_name=""
 fi
-# Version (skip on narrow terminals)
-if has_val "$cc_version" && ((_cols >= 65)); then
+# Version
+if has_val "$cc_version"; then
   line1+=("${DIMVER}v${cc_version}${RST}")
 fi
-# Session indicator (skip on narrow terminals)
-if ((_cols >= 55)); then
-  if $is_branch; then
-    line1+=("${YLW}(branch)${RST}")
+# Session indicator
+if $is_branch; then
+  line1+=("${YLW}branch${RST}")
+fi
+
+# ============================================================================
+# Line 2: Dir + Worktree
+# ============================================================================
+line2=()
+
+# Directory path (full display — no truncation)
+_display_dir="${project_dir:-$current_dir}"
+_short_dir="${_display_dir/#$HOME/~}"
+editor_url "$_display_dir" _editor_url
+osc8 "$_editor_url" "$_short_dir" _osc_tmp
+line2+=("$_osc_tmp")
+
+# added_dirs: show each as +basename (from /add-dir)
+if [[ -n "$added_dirs_basenames" ]]; then
+  IFS=$'\t' read -ra _add_names <<< "$added_dirs_basenames"
+  for _name in "${_add_names[@]}"; do
+    line2+=("${DIM}+${_name}${RST}")
+  done
+fi
+
+# Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
+if has_val "$wt_name" || has_val "$ws_git_worktree"; then
+  line2+=("🌲")
+  if has_val "$wt_orig_branch"; then
+    line2+=("${DIM}from:${wt_orig_branch}${RST}")
   fi
 fi
 
 # ============================================================================
-# Line 2: Dir + Git
+# Line 3: Git info (separated from Line 2 to avoid overflow)
 # ============================================================================
-line2=()
+line_git=()
 
 # Git info (background refresh)
 git_cache_file "$current_dir"
@@ -375,29 +377,6 @@ if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
 [[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
-
-# Directory path (full display — no truncation; git info is truncated instead)
-_display_dir="${project_dir:-$current_dir}"
-_short_dir="${_display_dir/#$HOME/~}"
-editor_url "$_display_dir" _editor_url
-osc8 "$_editor_url" "$_short_dir" _osc_tmp
-line2+=("$_osc_tmp")
-
-# added_dirs indicator
-if ((added_dirs_count > 0)); then
-  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
-fi
-
-# Narrow terminals: skip git entirely or truncate (byte-level, append RST)
-# Path gets full space; git info is truncated based on remaining width
-_path_len=${#_short_dir}
-if ((_cols < 45)); then
-  git_cached=""
-elif [[ -n "$git_cached" ]]; then
-  _git_max=$((_cols - _path_len - 3))
-  ((_git_max < 10)) && _git_max=10
-  _truncate_bytes git_cached $((_git_max * 2))
-fi
 
 # Git info (strip repo name if same as dir basename to avoid redundancy)
 if [[ -n "$git_cached" ]]; then
@@ -413,11 +392,11 @@ if [[ -n "$git_cached" ]]; then
       git_cached=""
     fi
   fi
-  [[ -n "$git_cached" ]] && line2+=("$git_cached")
+  [[ -n "$git_cached" ]] && line_git+=("$git_cached")
 else
   # No cached git info — check if truly non-git using pure bash (no fork)
   if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
-    line2+=("${DIM}(no git)${RST}")
+    line_git+=("${DIM}no git${RST}")
   else
     # Cold start: read branch from .git/HEAD (pure bash, no fork)
     _head_file="${_display_dir}/.git"
@@ -436,25 +415,17 @@ else
     if [[ -f "$_head_file" ]]; then
       _head=$(<"$_head_file")
       if [[ "$_head" == ref:* ]]; then
-        line2+=("${GIT}(${_head#ref: refs/heads/})${RST}")
+        line_git+=("${GIT}${_head#ref: refs/heads/}${RST}")
       else
-        line2+=("${RED}(HEAD@${_head:0:7})${RST}")
+        line_git+=("${RED}HEAD@${_head:0:7}${RST}")
       fi
     fi
   fi
 fi
 
-# Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
-if (has_val "$wt_name" || has_val "$ws_git_worktree") && ((_cols >= 45)); then
-  line2+=("🌲")
-  if has_val "$wt_orig_branch"; then
-    line2+=("${DIM}from:${wt_orig_branch}${RST}")
-  fi
-fi
-
 
 # ============================================================================
-# Line 3: Context + Cost & Tokens (all providers) + Rate Limit (Anthropic)
+# Line 4: Context + Rate Limit (Anthropic)
 # ============================================================================
 line3=()
 
@@ -479,7 +450,7 @@ else
 fi
 
 # Weekly rate limit (Anthropic only, rightmost — low priority)
-if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)) && ((_cols >= 70)); then
+if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)); then
   format_reset_absolute "$seven_reset_epoch"
   line3+=("${DIM}week:${seven_pct}%${RST}")
   [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
@@ -488,12 +459,12 @@ fi
 # ============================================================================
 # Output — single write() for atomic pipe delivery
 # ============================================================================
-_l1="${line1[*]}" _l2="${line2[*]}" _l3="${line3[*]}"
-_max_bytes=$((_cols * 3 + 60))
-_truncate_bytes _l1 "$_max_bytes"
-_truncate_bytes _l2 "$_max_bytes"
-_truncate_bytes _l3 "$_max_bytes"
-_out="${_l1}"$'\n'"${_l2}"$'\n'"${_l3}"
+_l1="${line1[*]}" _l2="${line2[*]}" _lg="${line_git[*]}" _l3="${line3[*]}"
+if [[ -n "$_lg" ]]; then
+  _out="${_l1}"$'\n'"${_l2}"$'\n'"${_lg}"$'\n'"${_l3}"
+else
+  _out="${_l1}"$'\n'"${_l2}"$'\n'"${_l3}"
+fi
 printf '%s\n' "$_out"
 
 exit 0

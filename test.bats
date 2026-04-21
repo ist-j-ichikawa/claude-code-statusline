@@ -173,75 +173,74 @@ setup() {
 # ============================================================================
 # 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================
-@test "Line3: コストとトークンが表示されないこと" {
+@test "Line4: コストとトークンが表示されないこと" {
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" != *'$'* ]]
   [[ "$result" != *"↑"* ]]
   [[ "$result" != *"↓"* ]]
 }
 
-@test "Line3: Anthropicでレートリミットが表示されること" {
+@test "Line4: Anthropicでレートリミットが表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
 }
 
-@test "Line3: Anthropicでrate_limitsからレートリミットを表示すること" {
+@test "Line4: Anthropicでrate_limitsからレートリミットを表示すること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
 }
 
-@test "Line3: rate_limitsがない旧CCでも3行出力されること" {
+@test "Line4: rate_limitsがない旧CCでも4行出力されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.79","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null)
   line_count=$(echo "$result" | grep -c . || echo 0)
-  [[ "$line_count" -eq 3 ]]
+  [[ "$line_count" -eq 4 ]]
 }
 
-@test "Line3: rate_limitsのused_percentageがfloatでもroundされること" {
+@test "Line4: rate_limitsのused_percentageがfloatでもroundされること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"36%"* ]]
 }
 
 # ============================================================================
-# 統合テスト: Line 2 — ディレクトリとGit情報が表示されること
+# 統合テスト: Line 3 — Git情報が専用行に表示されること
 # ============================================================================
-@test "Git: git管理外ディレクトリで(no git)と表示すること" {
+@test "Git: git管理外ディレクトリでno gitと表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" == *"(no git)"* ]]
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *"no git"* ]]
 }
 
-@test "Git: gitリポジトリのコールドスタートで(no git)を表示しないこと" {
+@test "Git: gitリポジトリのコールドスタートでno gitを表示しないこと" {
   # Clear cache to simulate cold start
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *"(no git)"* ]]
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" != *"no git"* ]]
 }
 
 @test "Git: コールドスタートでブランチ名を即時表示すること" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" == *"(main)"* || "$result" == *"(master)"* || "$result" == *"(HEAD@"* ]]
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *"main"* || "$result" == *"master"* || "$result" == *"HEAD@"* ]]
 }
 
 @test "Git: ブランチ名がGitオレンジ(38;5;202)で表示されること" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  # ブランチ名が緑(32m)ではなくGitオレンジ(38;5;202m)で着色されていること
-  [[ "$result" != *$'\033[32m('* ]]
-  [[ "$result" == *$'\033[38;5;202m('* ]]
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  # ブランチ名が Git オレンジ(38;5;202m)で着色されていること
+  [[ "$result" == *$'\033[38;5;202m'* ]]
 }
 
 # ============================================================================
@@ -253,16 +252,17 @@ setup() {
   [[ "$result" != *"(no name)"* ]]
 }
 
-@test "セッション: ブランチ時に(branch)と表示すること" {
+@test "セッション: ブランチ時にbranchと表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Branch) my session","version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"(branch)"* ]]
+  # 黄色のbranch表記があること (セッション名のresidueではなくインジケータ)
+  [[ "$result" == *$'\033[33mbranch'* ]]
 }
 
-@test "セッション: 旧フォーク形式でも(branch)と表示すること" {
+@test "セッション: 旧フォーク形式でもbranchと表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Fork) my session","version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"(branch)"* ]]
+  [[ "$result" == *$'\033[33mbranch'* ]]
 }
 
 # ============================================================================
@@ -326,31 +326,6 @@ setup() {
 }
 
 # ============================================================================
-# _truncate_bytes — バイトレベル切り詰めでANSI壊れを防ぐこと
-# ============================================================================
-@test "_truncate_bytes: 短い文字列を変更しないこと" {
-  mystr="hello"
-  _truncate_bytes mystr 100
-  [[ "$mystr" == "hello" ]]
-}
-
-@test "_truncate_bytes: 長い文字列を切り詰めてRSTを付加すること" {
-  mystr="aaaaaaaaaaaaaaaaaaaaa"
-  _truncate_bytes mystr 10
-  [[ ${#mystr} -le 14 ]]  # 10 + RST(4 bytes)
-  [[ "$mystr" == *"${RST}" ]]
-}
-
-@test "_truncate_bytes: 不完全なANSIエスケープを除去すること" {
-  # Simulate: text + incomplete ANSI escape at byte boundary
-  mystr="hello${GRN}world${RST}"
-  # Cut at a point that splits the GRN escape
-  _truncate_bytes mystr 8
-  # Should not contain broken escape remnants like "[32" without ESC
-  [[ "$mystr" == *"${RST}" ]]
-}
-
-# ============================================================================
 # Opus 4.7 — モデル検出
 # ============================================================================
 @test "モデル色: Opus 4.7がコーラルで表示されること" {
@@ -375,80 +350,51 @@ setup() {
 
 @test "全体: コンテキストバーにパーセンテージが表示されること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"48%"* ]]
 }
 
 # ============================================================================
-# 端末幅適応 — 狭い端末でも3行出力されること
+# 端末幅非依存 — 幅に関係なく4行かつexit 0で完走すること
 # ============================================================================
-@test "端末幅: COLUMNS=50でバージョンが非表示になること" {
-  result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
-  [[ "$result" != *"v2.1.80"* ]]
-}
-
-@test "端末幅: COLUMNS=50でセッション表示が非表示になること" {
-  result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
-  [[ "$result" != *"(branch)"* ]]
-}
-
-@test "端末幅: COLUMNS=120でバージョンが表示されること" {
-  result=$(COLUMNS=120 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
+@test "全体: COLUMNS=40でもバージョンは常時表示されること" {
+  result=$(COLUMNS=40 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
   [[ "$result" == *"v2.1.80"* ]]
 }
 
-@test "端末幅: COLUMNS=40でもexit 0かつ3行出力されること" {
+@test "全体: COLUMNS=40でも4行出力されること" {
   result=$(COLUMNS=40 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null')
   status=$?
   [[ "$status" -eq 0 ]]
   line_count=$(echo "$result" | grep -c . || echo 0)
-  [[ "$line_count" -eq 3 ]]
+  [[ "$line_count" -eq 4 ]]
 }
 
-@test "端末幅: COLUMNS=60でweeklyレートリミットが非表示になること" {
-  result=$(COLUMNS=60 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":35,\"resets_at\":4070908800},\"seven_day\":{\"used_percentage\":12,\"resets_at\":4071427200}}}" | bash statusline-command.sh 2>/dev/null | sed -n "3p"')
-  [[ "$result" != *"week:"* ]]
-}
-
-@test "端末幅: COLUMNS=40でsubscription typeが非表示になること" {
-  result=$(COLUMNS=40 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
-  [[ "$result" != *"enterprise"* ]]
-  [[ "$result" == *"Anthropic"* ]]
-}
-
-@test "端末幅: COLUMNS=30でモデルバージョンが省略されること" {
+@test "全体: COLUMNS=30でもモデル名がフルで表示されること" {
   result=$(COLUMNS=30 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
-  [[ "$result" == *"Opus"* ]]
-  [[ "$result" != *"4.6"* ]]
-}
-
-@test "端末幅: COLUMNS=25でもexit 0かつ3行出力されること" {
-  result=$(COLUMNS=25 bash -c 'echo "{\"model\":{\"id\":\"claude-opus-4-6\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.80\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null')
-  status=$?
-  [[ "$status" -eq 0 ]]
-  line_count=$(echo "$result" | grep -c . || echo 0)
-  [[ "$line_count" -eq 3 ]]
+  [[ "$result" == *"Opus 4.6"* ]]
 }
 
 # ============================================================================
 # added_dirs — /add-dirで追加されたディレクトリの表示
 # ============================================================================
-@test "added_dirs: 追加ディレクトリがあるとき(+N dirs)と表示すること" {
-  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":["/tmp/a","/tmp/b"]},"context_window":{"used_percentage":10}}' \
+@test "added_dirs: 追加ディレクトリをbasenameごとに+表示すること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":["/tmp/foo","/Users/me/bar"]},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" == *"(+2 dirs)"* ]]
+  [[ "$result" == *"+foo"* ]]
+  [[ "$result" == *"+bar"* ]]
 }
 
-@test "added_dirs: 追加ディレクトリがないとき(+N dirs)が表示されないこと" {
+@test "added_dirs: 追加ディレクトリがないとき+は表示されないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *"dirs)"* ]]
+  [[ "$result" != *" +"* ]]
 }
 
-@test "added_dirs: 空配列のとき(+N dirs)が表示されないこと" {
+@test "added_dirs: 空配列のとき+は表示されないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":[]},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *"dirs)"* ]]
+  [[ "$result" != *" +"* ]]
 }
 
 # ============================================================================
@@ -461,20 +407,20 @@ setup() {
 }
 
 # ============================================================================
-# Line 3順番 — 5h limit, context, tokens, cost, weekly の順であること
+# Line 4順番 — 5h limit, context, weekly の順であること
 # ============================================================================
-@test "Line3順番: 5hリミットがcontextより左に表示されること" {
+@test "Line4順番: 5hリミットがcontextより左に表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   # 35% (5h) should appear before 48% (context)
   five_pos="${result%%35%*}"
   ctx_pos="${result%%48%*}"
   [[ ${#five_pos} -lt ${#ctx_pos} ]]
 }
 
-@test "Line3順番: weeklyがcontextより右に表示されること" {
+@test "Line4順番: weeklyがcontextより右に表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   ctx_pos="${result%%48%*}"
   week_pos="${result%%week:*}"
   [[ ${#ctx_pos} -lt ${#week_pos} ]]
