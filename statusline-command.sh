@@ -206,7 +206,7 @@ build_git() {
     text+="${repo_name}"
   fi
 
-  # Dirty state: staged(green) / modified(yellow) / untracked(dim) / conflicts(red)
+  # Dirty state: staged(green) / modified(yellow) / untracked(gray) / conflicts(red)
   local staged modified untracked conflicts
   staged=$(git -C "$dir" diff --cached --name-only 2>/dev/null | grep -c . || echo 0)
   modified=$(git -C "$dir" diff --name-only 2>/dev/null | grep -c . || echo 0)
@@ -215,7 +215,7 @@ build_git() {
   ((conflicts > 0)) && text+=" ${RED}U${conflicts}${RST}"
   ((staged > 0))    && text+=" ${GRN}A${staged}${RST}"
   ((modified > 0))  && text+=" ${YLW}M${modified}${RST}"
-  ((untracked > 0)) && text+=" ${DIM}?${untracked}${RST}"
+  ((untracked > 0)) && text+=" ${DIMVER}?${untracked}${RST}"
 
   # Ahead/behind
   if git -C "$dir" rev-parse --abbrev-ref '@{upstream}' &>/dev/null; then

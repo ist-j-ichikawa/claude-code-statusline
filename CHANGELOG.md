@@ -8,6 +8,7 @@
 - `added_dirs` indicator changed from count (`(+2 dirs)`) to explicit basename enumeration (`+foo +bar`) — know at a glance which directories were added
 - Parentheses removed from standalone indicators: `(branch)` → `branch`, `(+N dirs)` → `+N ...`, `(no git)` → `no git`. Parens reserved for within-element separation (e.g. `Anthropic(enterprise)`)
 - Branch names in git info dropped parentheses: `(main)` → `main`, `(HEAD@abc1234)` → `HEAD@abc1234`. Git orange color already distinguishes the branch visually
+- Untracked count `?N` color changed from DIM attribute to gray 248 — DIM rendering is terminal-dependent and blended visually with the adjacent DIM commit message; gray 248 is a fixed 256-color value that reliably distinguishes them
 
 ### Removed
 
