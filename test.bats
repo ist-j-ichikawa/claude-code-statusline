@@ -378,23 +378,22 @@ setup() {
 # ============================================================================
 # added_dirs — /add-dirで追加されたディレクトリの表示
 # ============================================================================
-@test "added_dirs: 追加ディレクトリをbasenameごとに+表示すること" {
+@test "added_dirs: 追加ディレクトリ数を(+N dirs)で集約表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":["/tmp/foo","/Users/me/bar"]},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" == *"+foo"* ]]
-  [[ "$result" == *"+bar"* ]]
+  [[ "$result" == *"(+2 dirs)"* ]]
 }
 
-@test "added_dirs: 追加ディレクトリがないとき+は表示されないこと" {
+@test "added_dirs: 追加ディレクトリがないとき(+N dirs)は表示されないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *" +"* ]]
+  [[ "$result" != *"dirs"* ]]
 }
 
-@test "added_dirs: 空配列のとき+は表示されないこと" {
+@test "added_dirs: 空配列のとき(+N dirs)は表示されないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.78","workspace":{"current_dir":"/tmp","added_dirs":[]},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *" +"* ]]
+  [[ "$result" != *"dirs"* ]]
 }
 
 # ============================================================================

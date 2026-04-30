@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.12.0] - 2026-04-30
+
+### Changed
+
+- `added_dirs` indicator reverted from per-basename enumeration (`+foo +bar`) back to aggregate count (`(+N dirs)`) — with 3+ added directories, Line 2 overflowed the terminal width, wrapping the line and pushing Line 3 (git) and Line 4 (rate limit + context) below the visible statusline viewport. Aggregate count keeps Line 2 in one physical row regardless of how many directories were added; basename details remain recoverable from settings/`/add-dir` history
+
 ## [1.11.0] - 2026-04-21
 
 ### Changed

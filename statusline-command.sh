@@ -140,7 +140,7 @@ model="" model_id="" current_dir="." project_dir="" used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-wt_name="" wt_path="" wt_orig_branch="" added_dirs_basenames="" ws_git_worktree=""
+wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -160,7 +160,7 @@ _jq_out=$(jq -r '
   @sh "wt_name=\(.worktree.name // "")",
   @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
-  @sh "added_dirs_basenames=\(.workspace.added_dirs // [] | map(split("/") | last) | join("\t"))",
+  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
   @sh "ws_git_worktree=\(.workspace.git_worktree // "")"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
@@ -349,12 +349,9 @@ editor_url "$_display_dir" _editor_url
 osc8 "$_editor_url" "$_short_dir" _osc_tmp
 line2+=("$_osc_tmp")
 
-# added_dirs: show each as +basename (from /add-dir)
-if [[ -n "$added_dirs_basenames" ]]; then
-  IFS=$'\t' read -ra _add_names <<< "$added_dirs_basenames"
-  for _name in "${_add_names[@]}"; do
-    line2+=("${DIM}+${_name}${RST}")
-  done
+# Aggregate, not per-basename: per-basename can overflow Line 2 and hide Lines 3-4
+if ((added_dirs_count > 0)); then
+  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
 fi
 
 # Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
