@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.13.0] - 2026-05-07
+
+### Added
+
+- Effort and thinking indicator on Line 1 — `effort:high·think` between model and version. Reads `.effort.level` and `.thinking.enabled` from stdin JSON (CC 2.1.119+). CC stopped showing effort natively in recent versions, so the statusline surfaces it again. Colors chosen to avoid collision with model tier colors (CORAL/TEAL/AMBER/LAVENDER): `EFFORT=38;5;105` (light purple), `THINK=38;5;117` (light cyan). Level severity (`low`/`medium`/`high`/`xhigh`/`max`) is conveyed by the text — color is single-hue per indicator. Older CC versions without these fields render unchanged
+
 ## [1.12.0] - 2026-04-30
 
 ### Changed

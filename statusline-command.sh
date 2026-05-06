@@ -10,6 +10,7 @@ readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY
 readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
+readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
@@ -141,6 +142,7 @@ exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
+effort_level="" thinking_enabled="false"
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -161,7 +163,9 @@ _jq_out=$(jq -r '
   @sh "wt_path=\(.worktree.path // "")",
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
   @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
-  @sh "ws_git_worktree=\(.workspace.git_worktree // "")"
+  @sh "ws_git_worktree=\(.workspace.git_worktree // "")",
+  @sh "effort_level=\(.effort.level // "")",
+  @sh "thinking_enabled=\(.thinking.enabled // false)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -308,6 +312,11 @@ else
   line1+=("${model_show}")
 fi
 shopt -u nocasematch
+
+_et=""
+has_val "$effort_level" && _et="${EFFORT}effort:${effort_level}${RST}"
+[[ "$thinking_enabled" == "true" ]] && _et+="${_et:+·}${THINK}think${RST}"
+[[ -n "$_et" ]] && line1+=("$_et")
 
 # Agent name
 if has_val "$agent_name"; then

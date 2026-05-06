@@ -171,6 +171,49 @@ setup() {
 }
 
 # ============================================================================
+# 統合テスト: Effort & Thinking — 推論努力と拡張思考が正しく表示されること
+# ============================================================================
+@test "Effort: effortがlight purple(38;5;105)で表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[38;5;105m'*"effort:high"* ]]
+}
+
+@test "Effort: 全レベルで同色(level severityは文字で読み分け)になること" {
+  low=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"low"}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  max=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"max"}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$low" == *$'\033[38;5;105m'*"effort:low"* ]]
+  [[ "$max" == *$'\033[38;5;105m'*"effort:max"* ]]
+}
+
+@test "Thinking: thinking.enabled=trueでlight cyan(38;5;117)のthinkが表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"thinking":{"enabled":true}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[38;5;117m'*"think"* ]]
+}
+
+@test "Effort/Thinking: 両方ありで中黒区切りで結合されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"},"thinking":{"enabled":true}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"effort:high"*"·"*"think"* ]]
+}
+
+@test "Effort/Thinking: 旧CC(両キーなし)でeffort/thinkが表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.118","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"effort:"* ]]
+  [[ "$result" != *"think"* ]]
+}
+
+@test "Thinking: thinking.enabled=falseでthinkが表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"thinking":{"enabled":false}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"think"* ]]
+}
+
+# ============================================================================
 # 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================
 @test "Line4: コストとトークンが表示されないこと" {
