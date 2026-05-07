@@ -66,3 +66,4 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 - **jq抽出とコードの同期**: 表示コードを削除/無効化したら、jqの`@sh`抽出行も必ず削除する。未使用のjq抽出はパフォーマンス劣化の原因になる。
 - **行数カウントは `grep -c .`**: `wc -l | tr -d ' '` ではなく `grep -c . || echo 0` を使う。forkが少なく、macOS/Linux両方で安定。
 - **キャッシュは atomic mv で書き込み**: `build_git()` の background 書き出しは `> "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc"` で必ず atomic 化する (`statusline-command.sh:383`)。CC は `refreshInterval` で定期再実行するため、同時に走る別呼び出しが書き込み中の cache を read すると半端な内容を表示する。直接 `>` で書く"シンプル化"は破壊的。
+- **README の Line 説明は 2 箇所重複**: `README.md` 「表示レイアウト」(~L14-19) と「スクリプト構造」(~L88-93) で Line 1-4 の役割を別々に記述している。表示変更時は**両方**更新しないと食い違う。CHANGELOG.md は 1 コミット = 1 マイナー版（同日でも独立機能は別バージョン）が既存パターン。

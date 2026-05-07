@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.14.0] - 2026-05-07
+
+### Changed
+
+- Line 3 (git info) now always shows branch only — previously, when the current directory's basename differed from the repo name (e.g. browsing a subdirectory), Line 3 prefixed the output with the repo name (`claude-code main` instead of `main`). The location-dependent format was hard to remember and surprised the user every time they hit a subdirectory. Repo identification lives entirely on Line 2 (path), which already shows the full path; Line 3 is now a consistent branch-info-only row
+
+### Removed
+
+- `repo_name` derivation in `build_git()` and the caller-side basename comparison + string-stripping logic — eliminates 2-3 `git rev-parse` forks (`--git-dir`, `--git-common-dir`, `--show-toplevel`) per cache refresh. The new `[[ -z "$branch" ]] && return` early-return additionally short-circuits 4 git forks (diff/ls-files/rev-list/log) for non-git directories that previously executed before silently producing nothing
+
 ## [1.13.0] - 2026-05-07
 
 ### Added
