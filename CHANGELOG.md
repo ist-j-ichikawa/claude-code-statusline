@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.15.0] - 2026-05-07
+
+### Added
+
+- Branch name on Line 3 is now an OSC 8 hyperlink to the GitHub `tree/<branch>` page — クリックでブランチをブラウザで開ける。CC 組み込みのフッター PR badge は PR への遷移を担うので、ここでは tree URL のみ提供して役割分担。`git remote get-url origin` を SSH (`git@github.com:owner/repo`)、SSH URL (`ssh://git@github.com/owner/repo`)、HTTPS いずれの形式からも正規化、non-GitHub remote (GitLab 等) と detached HEAD はリンク化スキップ。`gh` への依存はなくネットワーク呼び出しゼロを維持
+
+### Fixed
+
+- `build_git()` の dirty state カウント (`grep -c .`) に付いていた `|| echo 0` を削除 — `grep -c .` は no-match でも "0" を出力してから exit 1 するため、`|| echo 0` を付けると pipefail 環境下で stdout が "0\n0" になり、`((staged > 0))` 等が syntax error を吐いて空のバックグラウンドキャッシュが書かれる事故が起きていた。`grep -c` 単体で意図通り動く
+
 ## [1.14.0] - 2026-05-07
 
 ### Changed

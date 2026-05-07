@@ -190,19 +190,39 @@ build_git() {
   # Not a git repo (or fresh repo with no commits): nothing to show
   [[ -z "$branch" ]] && return
 
-  # Branch display (detached=red, normal=Git orange)
+  # GitHub branch tree URL — PR への遷移は CC 組み込みフッターの PR badge が担う
+  # ここでは「PRがないブランチでも GitHub に飛べる」補完機能として tree URL のみ提供
+  local link_url=""
+  if [[ "$branch" != HEAD@* ]]; then
+    local remote
+    remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
+    case "$remote" in
+      git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
+      ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
+      https://github.com/*)    ;;
+      *)                       remote="" ;;
+    esac
+    remote="${remote%.git}"
+    [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
+  fi
+
+  # Branch display (detached=red, normal=Git orange, OSC 8 wrap when link available)
+  local branch_show="$branch"
+  [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
   if [[ "$branch" == HEAD@* ]]; then
-    text+="${RED}${branch}${RST}"
+    text+="${RED}${branch_show}${RST}"
   else
-    text+="${GIT}${branch}${RST}"
+    text+="${GIT}${branch_show}${RST}"
   fi
 
   # Dirty state: staged(green) / modified(yellow) / untracked(gray) / conflicts(red)
+  # NOTE: `grep -c .` は no-match でも "0" を出力してから exit 1 する。`|| echo 0` を付けると
+  # pipefail 環境下で stdout が "0\n0" になり ((var > 0)) が syntax error を吐く。grep -c 単体で十分。
   local staged modified untracked conflicts
-  staged=$(git -C "$dir" diff --cached --name-only 2>/dev/null | grep -c . || echo 0)
-  modified=$(git -C "$dir" diff --name-only 2>/dev/null | grep -c . || echo 0)
-  untracked=$(git -C "$dir" ls-files --others --exclude-standard 2>/dev/null | grep -c . || echo 0)
-  conflicts=$(git -C "$dir" diff --name-only --diff-filter=U 2>/dev/null | grep -c . || echo 0)
+  staged=$(git -C "$dir" diff --cached --name-only 2>/dev/null | grep -c .)
+  modified=$(git -C "$dir" diff --name-only 2>/dev/null | grep -c .)
+  untracked=$(git -C "$dir" ls-files --others --exclude-standard 2>/dev/null | grep -c .)
+  conflicts=$(git -C "$dir" diff --name-only --diff-filter=U 2>/dev/null | grep -c .)
   ((conflicts > 0)) && text+=" ${RED}U${conflicts}${RST}"
   ((staged > 0))    && text+=" ${GRN}A${staged}${RST}"
   ((modified > 0))  && text+=" ${YLW}M${modified}${RST}"
