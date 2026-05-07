@@ -176,21 +176,9 @@ fi
 
 # --- Git info (5s cached) ---
 build_git() {
-  local dir=$1 text="" branch git_dir
+  local dir=$1 text="" branch
 
   branch=$(git -C "$dir" branch --show-current 2>/dev/null)
-
-  git_dir=$(git -C "$dir" rev-parse --git-dir 2>/dev/null)
-  local git_common_dir repo_name=""
-  git_common_dir=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null)
-  if [[ -n "$git_dir" && -n "$git_common_dir" && "$git_dir" != "$git_common_dir" ]]; then
-    local tmp="${git_common_dir%/.git}"
-    repo_name="${tmp##*/}"
-  elif [[ -n "$git_dir" ]]; then
-    local toplevel
-    toplevel=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
-    repo_name="${toplevel##*/}"
-  fi
 
   # Detached HEAD
   if [[ -z "$branch" ]]; then
@@ -199,15 +187,14 @@ build_git() {
     [[ -n "$short_sha" ]] && branch="HEAD@${short_sha}"
   fi
 
+  # Not a git repo (or fresh repo with no commits): nothing to show
+  [[ -z "$branch" ]] && return
+
   # Branch display (detached=red, normal=Git orange)
-  if [[ -n "$repo_name" && -n "$branch" ]]; then
-    if [[ "$branch" == HEAD@* ]]; then
-      text+="${repo_name} ${RED}${branch}${RST}"
-    else
-      text+="${repo_name} ${GIT}${branch}${RST}"
-    fi
-  elif [[ -n "$repo_name" ]]; then
-    text+="${repo_name}"
+  if [[ "$branch" == HEAD@* ]]; then
+    text+="${RED}${branch}${RST}"
+  else
+    text+="${GIT}${branch}${RST}"
   fi
 
   # Dirty state: staged(green) / modified(yellow) / untracked(gray) / conflicts(red)
@@ -384,21 +371,8 @@ if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
 fi
 [[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
 
-# Git info (strip repo name if same as dir basename to avoid redundancy)
 if [[ -n "$git_cached" ]]; then
-  dir_basename="${_display_dir##*/}"
-  # repo_name is always plain text at start of git_cached (no ANSI prefix)
-  repo_name="${git_cached%% *}"
-  if [[ "$dir_basename" == "$repo_name" ]]; then
-    if [[ "$git_cached" == *" "* ]]; then
-      # Remove repo name prefix (keep branch + state)
-      git_cached="${git_cached#*" "}"
-    else
-      # No branch info — repo name only, skip to avoid redundancy
-      git_cached=""
-    fi
-  fi
-  [[ -n "$git_cached" ]] && line_git+=("$git_cached")
+  line_git+=("$git_cached")
 else
   # No cached git info — check if truly non-git using pure bash (no fork)
   if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
