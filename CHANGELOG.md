@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.17.0] - 2026-05-11
+
+### Changed
+
+- README をスクリプト実装と一致させる全面メンテナンス。カラーテーマ表の Git 記号を実装通り (`A`/`M`/`U`/`?` の git standard symbols) に修正し、欠けていた色エントリ (Agent pink `38;5;213`、version gray `38;5;248`、Git brand orange `38;5;202`、branch セッション黄、untracked gray `38;5;248`) を追加。パフォーマンスセクションのバックグラウンドキャッシュを「Usage API (300秒)」→「Subscription 種別取得 (3600秒)」に訂正、worktree 検出は `git-dir`/`git-common-dir` 比較ではなく stdin JSON の `worktree.name` / `workspace.git_worktree` (CC 2.1.97+) であることを明記。Requirements を `Bash 4+` → `Bash 3.2+` (macOS 標準) に訂正し、`curl` の用途を `fetch_subscription()` 専用と明確化、macOS 専用 (`stat -f %m` / `md5 -q -s`) であることも追記。`build_git()` の説明から未実装の `stash` を削除し、Claude Code badge と表示例のバージョンを `2.1.139` に追従
+
 ## [1.16.0] - 2026-05-11
 
 ### Changed
