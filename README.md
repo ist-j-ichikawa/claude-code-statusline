@@ -32,10 +32,10 @@ main A3 M2 ?1 ↑2 1h fix: update logic..
 
 プロバイダー別の表示:
 ```
-Anthropic(enterprise)  Opus 4.6 (1M context)  ...  ← Anthropic直接 (サンドベージュ + サブスク種別)
-Bedrock  global.anthropic.claude-opus-4-6-v1  ...  ← AWS Bedrock (ティールグリーン)
-Vertex  Opus 4.6  ...                    ← Google Vertex AI (ブルー)
-Foundry  Opus 4.6  ...                   ← Microsoft Foundry (Azureブルー)
+Anthropic(enterprise)  Opus 4.7 (1M context)  ...  ← Anthropic直接 (サンドベージュ + サブスク種別)
+Bedrock  global.anthropic.claude-opus-4-7-v1  ...  ← AWS Bedrock (ティールグリーン)
+Vertex  Opus 4.7  ...                    ← Google Vertex AI (ブルー)
+Foundry  Opus 4.7  ...                   ← Microsoft Foundry (Azureブルー)
 ```
 
 ## Installation
@@ -84,7 +84,7 @@ statusline-command.sh
 ├── Helpers          has_val(), cache_stale(), braille_bar(pct), etc.
 ├── Subscription     fetch_subscription() — Keychain からサブスクリプション種別を取得（バックグラウンドキャッシュ）
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
-├── Git info         build_git() — ブランチ、dirty state、ahead/behind、stash、last commit（5秒バックグラウンドキャッシュ）
+├── Git info         build_git() — ブランチ、dirty state、ahead/behind、last commit (age + msg)（5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Line 1           プロバイダー + モデル名（Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + added_dirs (+N dirs) + 🌲worktree + from:branch
 ├── Line 3           Git (ブランチ [OSC 8 リンク → GitHub tree] + dirty state + ahead/behind + last commit)、非git時は "no git"
@@ -99,31 +99,31 @@ statusline-command.sh
 | コンテキスト使用率 | < 80% lime green / 80-89% 黄 / >= 90% 赤 | 38;5;82 / 33 / 31 |
 | Opus | コーラル | 38;5;209 |
 | Sonnet 4.6 | ティール | 38;5;79 |
-| Sonnet 4.5 | アンバー | 38;5;214 |
+| Sonnet 4.5 / 3.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
-| Anthropic | サンドベージュ | 38;5;180 |
-| effort (`low`/`high`/`max`) | light purple | 38;5;105 |
-| think | light cyan | 38;5;117 |
+| Anthropic / 5hレート制限 | サンドベージュ | 38;5;180 |
 | Bedrock | ティールグリーン | 38;5;72 |
 | Vertex | Google ブルー | 38;5;33 |
 | Foundry | Azure ブルー | 38;5;39 |
-| レート制限 | サンドベージュ | 38;5;180 |
-| Git staged `+N` | 緑 | — |
-| Git modified `~N` | 黄 | — |
-| Git untracked `?N` | dim | — |
-| Git conflicts `!N` | 赤 | — |
-| Git ahead `↑N` | 緑 | — |
-| Git behind `↓N` | 赤 | — |
-| Detached HEAD | 赤 | — |
-| stash / last commit | dim | — |
+| effort (`low`/`high`/`max`) | light purple | 38;5;105 |
+| think | light cyan | 38;5;117 |
+| Agent 名 | ピンク | 38;5;213 |
+| version (`v2.1.x`) | グレー | 38;5;248 |
+| branch セッション (`branch`) | 黄 | 33 |
+| Git ブランチ名 | Git brand オレンジ | 38;5;202 |
+| Git staged `A` / ahead `↑` | 緑 | 32 |
+| Git modified `M` | 黄 | 33 |
+| Git untracked `?` | グレー | 38;5;248 |
+| Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
+| last commit (age + msg)、worktree from / weekly rate limit | dim | 2 |
 
 ### パフォーマンス
 
-- **バックグラウンド更新**: Git (5秒) と Usage API (300秒) はサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない
-- **単一 jq 呼び出し**: stdin JSON と usage JSON それぞれ `eval` + `@sh` で一括抽出
+- **バックグラウンド更新**: Git (5秒) と Subscription 種別取得 (3600秒) はサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない
+- **単一 jq 呼び出し**: stdin JSON を `eval` + `@sh` で一括抽出（フィールドごとの再パースなし）
 - **共有タイムスタンプ**: `_NOW=$(date +%s)` を1回だけ呼び、全キャッシュ判定で再利用
-- **キャッシュ**: `/tmp/ist-j-ichikawa-claude-statusline/{git,subscription}` に保存
-- **Git worktree 対応**: `git-dir` と `git-common-dir` を比較し、worktree 使用時は 🌲 アイコン表示
+- **キャッシュ**: `/tmp/ist-j-ichikawa-claude-statusline/{git,subscription}` (mkdir 700) に保存
+- **Git worktree 対応**: stdin JSON の `worktree.name` または `workspace.git_worktree` (CC 2.1.97+) を検出して 🌲 を表示
 
 ### Line 4: レート制限 + コンテキストバー
 
@@ -149,9 +149,10 @@ statusline-command.sh
 
 - [Claude Code](https://code.claude.com/) CLI
 - `jq` (JSON parser)
-- `curl` (レート制限API取得用)
+- `curl` (`fetch_subscription()` のみ — Keychain の OAuth トークンを stdin 経由で渡してサブスクリプション種別を取得)
 - `git` (Git 情報表示用)
-- Bash 4+
+- Bash 3.2+ (macOS 標準の `/bin/bash` で動作 — bash 4+ 機能は使わない)
+- macOS 専用: `stat -f %m` / `md5 -q -s` を使用
 
 ## License
 
