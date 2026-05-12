@@ -6,6 +6,7 @@
 setup() {
   export COLUMNS=120
   export RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
+  export CTX_OK=$'\033[38;5;82m'
   export DIM=$'\033[2m'
   export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
   export CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
@@ -74,9 +75,9 @@ setup() {
   [[ "$result" == "$YLW" ]]
 }
 
-@test "color_by_threshold: 下限以下で緑を返すこと" {
+@test "color_by_threshold: 下限以下でlime green(CTX_OK)を返すこと" {
   color_by_threshold 50 90 80 result
-  [[ "$result" == "$GRN" ]]
+  [[ "$result" == "$CTX_OK" ]]
 }
 
 @test "color_by_threshold: 上限ちょうどで赤を返すこと" {
@@ -173,10 +174,11 @@ setup() {
 # ============================================================================
 # 統合テスト: Effort & Thinking — 推論努力と拡張思考が正しく表示されること
 # ============================================================================
-@test "Effort: effortがlight purple(38;5;105)で表示されること" {
+@test "Effort: effortレベル名がlight purple(38;5;105)で表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *$'\033[38;5;105m'*"effort:high"* ]]
+  [[ "$result" == *$'\033[38;5;105m'"high"* ]]
+  [[ "$result" != *"effort:"* ]]
 }
 
 @test "Effort: 全レベルで同色(level severityは文字で読み分け)になること" {
@@ -184,8 +186,8 @@ setup() {
     | bash statusline-command.sh 2>/dev/null | head -1)
   max=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"max"}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$low" == *$'\033[38;5;105m'*"effort:low"* ]]
-  [[ "$max" == *$'\033[38;5;105m'*"effort:max"* ]]
+  [[ "$low" == *$'\033[38;5;105m'"low"* ]]
+  [[ "$max" == *$'\033[38;5;105m'"max"* ]]
 }
 
 @test "Thinking: thinking.enabled=trueでlight cyan(38;5;117)のthinkが表示されること" {
@@ -194,10 +196,12 @@ setup() {
   [[ "$result" == *$'\033[38;5;117m'*"think"* ]]
 }
 
-@test "Effort/Thinking: 両方ありで中黒区切りで結合されること" {
+@test "Effort/Thinking: 両方ありで半角スペース区切りで結合されること(中黒なし)" {
   result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"},"thinking":{"enabled":true}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"effort:high"*"·"*"think"* ]]
+  [[ "$result" == *"high"*"think"* ]]
+  [[ "$result" != *"·"*"think"* ]]
+  [[ "$result" != *"effort:"* ]]
 }
 
 @test "Effort/Thinking: 旧CC(両キーなし)でeffort/thinkが表示されないこと" {
