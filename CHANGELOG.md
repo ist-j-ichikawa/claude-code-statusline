@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.16.0] - 2026-05-11
+
+### Changed
+
+- Effort/thinking indicator format simplified — `effort:high·think` → `high think`. プレフィックス `effort:` と中黒区切り `·` を削除し、レベル名そのまま (`low`/`high`/`max`) と `think` を半角スペース区切りで並べる。識別は色分け (`EFFORT=38;5;105` light purple、`THINK=38;5;117` light cyan) に委ねる方針。表示が短くなり Line 1 の他要素 (`Anthropic(enterprise)` 等) と視覚密度が揃う。中間変数 `_et` と `${_et:+ }` 条件区切りトリックも撤去し、`line1+=()` 2行に簡略化
+- Agent indicator on Line 1 — `⚡<name>` から記号を取って `<name>` のみのピンク (`AGENT=38;5;213`) 表示に。CC 2.1.139 で `claude agents` (Research Preview, agent view) が追加され、そこから起動したセッションには stdin JSON の `.agent.name="claude"` が流れてくるため、`⚡claude` が常時出るのが冗長だった。色だけで識別できるので記号は不要と判断。サブエージェント名 (`security-reviewer` 等) の表示も同形式に統一
+- Context バーの低水準カラーを標準 ANSI 緑 (`GRN=\033[32m`) から bright lime green (`CTX_OK=\033[38;5;82m`) に変更 — Bedrock teal (`BDCK=38;5;72`) や暗いターミナルテーマ下での標準緑と区別がつきにくく、13% 程度の低使用率時に視認性が悪かった。`color_by_threshold` を Context バー専用関数化（`<80%`=lime / `>=80%`=黄 / `>=90%`=赤）。Git staged (`A3`) と ahead (`↑2`) は引き続き標準 ANSI 緑のまま（小さい記号なので視認性問題は出ない）
+
 ## [1.15.0] - 2026-05-07
 
 ### Added

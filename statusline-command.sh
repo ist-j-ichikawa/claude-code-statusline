@@ -5,6 +5,7 @@ set -uo pipefail
 
 # --- Constants ---
 readonly RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
+readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
@@ -44,13 +45,14 @@ braille_bar() {
   printf -v "$2" '%s' "$_bb"
 }
 
-# color_by_threshold VAL HI MID VARNAME — sets VARNAME to color code (no subshell)
+# color_by_threshold VAL HI MID VARNAME — sets VARNAME to context-bar color (no subshell)
+# OK = lime green (CTX_OK), distinct from Bedrock teal and standard ANSI green
 color_by_threshold() {
   local val=$1 hi=$2 mid=$3
   [[ "$val" =~ ^[0-9]+$ ]] || { printf -v "$4" '%s' "$DIM"; return; }
   if ((val >= hi)); then printf -v "$4" '%s' "$RED"
   elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
-  else printf -v "$4" '%s' "$GRN"; fi
+  else printf -v "$4" '%s' "$CTX_OK"; fi
 }
 
 cache_stale() {
@@ -320,14 +322,12 @@ else
 fi
 shopt -u nocasematch
 
-_et=""
-has_val "$effort_level" && _et="${EFFORT}effort:${effort_level}${RST}"
-[[ "$thinking_enabled" == "true" ]] && _et+="${_et:+·}${THINK}think${RST}"
-[[ -n "$_et" ]] && line1+=("$_et")
+has_val "$effort_level" && line1+=("${EFFORT}${effort_level}${RST}")
+[[ "$thinking_enabled" == "true" ]] && line1+=("${THINK}think${RST}")
 
 # Agent name
 if has_val "$agent_name"; then
-  line1+=("${AGENT}⚡${agent_name}${RST}")
+  line1+=("${AGENT}${agent_name}${RST}")
 fi
 
 # Session name (strip XML tags + command noise from /branch, /fork etc.)
