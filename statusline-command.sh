@@ -192,11 +192,11 @@ build_git() {
   # Not a git repo (or fresh repo with no commits): nothing to show
   [[ -z "$branch" ]] && return
 
-  # GitHub branch tree URL — PR への遷移は CC 組み込みフッターの PR badge が担う
-  # ここでは「PRがないブランチでも GitHub に飛べる」補完機能として tree URL のみ提供
-  local link_url=""
-  if [[ "$branch" != HEAD@* ]]; then
-    local remote
+  if [[ "$branch" == HEAD@* ]]; then
+    text+="${RED}${branch}${RST}"
+  else
+    # GitHub tree URL — PR は CC 組み込みフッターの PR badge に任せ、ここは tree URL のみ
+    local link_url="" branch_show="$branch" remote
     remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
     case "$remote" in
       git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
@@ -206,15 +206,18 @@ build_git() {
     esac
     remote="${remote%.git}"
     [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
-  fi
-
-  # Branch display (detached=red, normal=Git orange, OSC 8 wrap when link available)
-  local branch_show="$branch"
-  [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
-  if [[ "$branch" == HEAD@* ]]; then
-    text+="${RED}${branch_show}${RST}"
-  else
+    [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
     text+="${GIT}${branch_show}${RST}"
+
+    # Branch parent — reflog は ~90 日で GC; 古いブランチや clone 直後は出ない (graceful degradation)
+    local last_reflog from_ref=""
+    last_reflog=$(git -C "$dir" reflog show "$branch" 2>/dev/null | tail -1)
+    if [[ "$last_reflog" == *": branch: Created from "* ]]; then
+      from_ref="${last_reflog##*: branch: Created from }"
+    fi
+    if [[ -n "$from_ref" && "$from_ref" != "HEAD" ]]; then
+      text+=" ${DIM}from:${from_ref}${RST}"
+    fi
   fi
 
   # Dirty state: staged(green) / modified(yellow) / untracked(gray) / conflicts(red)
@@ -365,7 +368,8 @@ editor_url "$_display_dir" _editor_url
 osc8 "$_editor_url" "$_short_dir" _osc_tmp
 line2+=("$_osc_tmp")
 
-# Aggregate, not per-basename: per-basename can overflow Line 2 and hide Lines 3-4
+# Aggregate, not per-basename: per-basename can be truncated at terminal edge,
+# hiding which dirs are added. CC 2.1.141 fixed row-drop on overflow but still truncates.
 if ((added_dirs_count > 0)); then
   line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
 fi
