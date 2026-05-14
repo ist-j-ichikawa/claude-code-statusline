@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.18.0] - 2026-05-14
+
+### Added
+
+- Line 3 (git info) に「切った元ブランチ」を `from:<parent>` (dim) で追加表示。`git reflog show <branch>` の最古エントリ (`branch: Created from <ref>`) をパースして取得し、worktree インジケータの `from:original_branch` と同じスタイルで揃える。reflog の GC 期間 (~90日) を超えた古いブランチや clone 直後のローカルチェックアウトされていないブランチでは表示されない (graceful degradation)。`Created from HEAD` (匿名 HEAD から作成) と detached HEAD では非表示。`build_git()` 内で従来 3 箇所に散らばっていた `[[ "$branch" != HEAD@* ]]` ガードを 1 つの if-else に集約するリファクタを同時実施。CC 2.1.141 の "multi-line statusline overflow" 修正に伴い `added_dirs` の挙動を再検証したが、修正は「行落ち」を「右端切り詰め」に変えただけで狭い端末では情報が見えないままなので、`(+N dirs)` 集約表示は維持
+
 ## [1.17.0] - 2026-05-11
 
 ### Changed
