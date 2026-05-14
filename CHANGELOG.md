@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.19.0] - 2026-05-14
+
+### Added
+
+- README に「Recommended Terminal: Ghostty」セクションを追加。Claude Code 公式の [terminal-config](https://code.claude.com/docs/en/terminal-config) でも紹介されている [Ghostty](https://ghostty.org/) は、本ステータスラインの全要件 (ANSI 256 色 + truecolor、OSC 8 ハイパーリンク、低レイテンシ描画) を満たすため、推奨ターミナルとして明記。Claude Code 運用で特に効果のある機能 (OSC 8 でブランチ名/パスのクリック遷移、shell integration による cwd 自動継承と `jump-to-prompt`、`⌘D`/`⌘⇧D` の splits + `⌘T` の新規タブ、`toggle_quick_terminal` ユーザー割当の Quick Terminal、`⌘⇧,` の config hot-reload、Metal GPU レンダリング) を bullet で列挙。設定ファイルパス (`~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`) と、他ターミナル使用時に OSC 8 リンクが平文表示になり得る注意書きも併記
+
 ## [1.18.0] - 2026-05-14
 
 ### Added

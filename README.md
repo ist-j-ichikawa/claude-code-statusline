@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.18.0-blue)
+![Version](https://img.shields.io/badge/version-1.19.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.141-purple)
 
 ## Overview
@@ -37,6 +37,23 @@ Bedrock  global.anthropic.claude-opus-4-7-v1  ...  ← AWS Bedrock (ティール
 Vertex  Opus 4.7  ...                    ← Google Vertex AI (ブルー)
 Foundry  Opus 4.7  ...                   ← Microsoft Foundry (Azureブルー)
 ```
+
+## Recommended Terminal: Ghostty
+
+[Ghostty](https://ghostty.org/) を推奨します。Claude Code 公式の [terminal-config](https://code.claude.com/docs/en/terminal-config) でも紹介されており、本ステータスラインの全要件 (ANSI 256 色 + truecolor、OSC 8 ハイパーリンク、低レイテンシ描画) を満たします。
+
+Claude Code 運用で特に便利な機能:
+
+- **OSC 8 ハイパーリンク** — Line 2 のパス (`file://` で Finder/IDE へ) と Line 3 のブランチ名 (GitHub `tree/<branch>` へ) がクリック可能になる
+- **[Shell Integration](https://ghostty.org/docs/features/shell-integration)** — bash/zsh/fish/elvish/nushell で自動セットアップ、新規ウィンドウが前の cwd を継承、`jump-to-prompt` で過去のプロンプト間をスキップ
+- **Splits & Tabs** — `⌘D` / `⌘⇧D` で分割 (右 / 下)、`⌘T` で新規タブ。タブ名は最終実行コマンドで自動更新（複数 Claude Code を並走させる用途に最適）
+- **Quick Terminal** — `toggle_quick_terminal` を任意のキーバインドに割り当てるとドロップダウン式の即時セッションが使える (デフォルトキーは未設定。macOS / Linux GTK 対応)
+- **Config Hot-reload** — `⌘⇧,` (macOS) で設定即時反映、ステータスラインのテーマ調整が高速
+- **Metal GPU レンダリング** — `refreshInterval` (30s) ごとの再描画でもフリッカーなし
+
+設定ファイル (macOS): `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`
+
+> 他ターミナル (iTerm2, WezTerm, kitty, Alacritty 等) でも動作しますが、OSC 8 対応の差でクリック可能リンクが平文表示になる場合があります。
 
 ## Installation
 
