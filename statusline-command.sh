@@ -375,18 +375,19 @@ editor_url "$_display_dir" _editor_url
 osc8 "$_editor_url" "$_short_dir" _osc_tmp
 line2+=("$_osc_tmp")
 
-# Aggregate, not per-basename: per-basename can be truncated at terminal edge,
-# hiding which dirs are added. CC 2.1.141 fixed row-drop on overflow but still truncates.
-if ((added_dirs_count > 0)); then
-  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
-fi
-
 # Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
+# Placed adjacent to the path since it qualifies what the path *is*.
 if has_val "$wt_name" || has_val "$ws_git_worktree"; then
   line2+=("🌲")
   if has_val "$wt_orig_branch"; then
     line2+=("${DIM}from:${wt_orig_branch}${RST}")
   fi
+fi
+
+# Aggregate, not per-basename: per-basename can be truncated at terminal edge,
+# hiding which dirs are added. CC 2.1.141 fixed row-drop on overflow but still truncates.
+if ((added_dirs_count > 0)); then
+  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
 fi
 
 # ============================================================================

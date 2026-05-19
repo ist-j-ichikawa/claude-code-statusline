@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.21.0] - 2026-05-19
+
+### Changed
+
+- Line 2 の要素並び順を `path → (+N dirs) → 🌲 from:branch` から `path → 🌲 from:branch → (+N dirs)` に変更。🌲 は「このパスが worktree であること」を示す情報なので path 直後に置くのが自然で、`(+N dirs)` は worktree とは独立した補助情報なので末尾に回した。CLAUDE.md と README (表示レイアウト / 表示例 / スクリプト構造の 3 箇所) も併せて更新
+
 ## [1.20.0] - 2026-05-19
 
 ### Added
