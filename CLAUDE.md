@@ -18,6 +18,10 @@ echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1
 ```
 Verify: exit code must be 0, all lines render with correct colors, no raw `\033` in output.
 
+## Commits
+
+Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。
+
 ## Architecture
 
 - **ドキュメントの置き場**: スクリプト内のヘッダーコメントは最小限（1行）。詳細はREADMEと公式ドキュメントへのリンクで管理。
