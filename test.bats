@@ -8,11 +8,23 @@ setup() {
   export RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
   export CTX_OK=$'\033[38;5;82m'
   export DIM=$'\033[2m'
+  export GIT=$'\033[38;5;202m'
   export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
   export CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
   export AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
   export _NOW=$(date +%s)
   eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
+}
+
+# build_git の background cache 書き込み完了まで polling (最大 ~1秒)
+# 4 テストで `sleep 1` 固定にすると合計 +4秒のオーバーヘッドになるため
+_wait_for_cache() {
+  local cache_dir=$1 i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -n "$(ls -A "$cache_dir" 2>/dev/null)" ]] && return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 # ============================================================================
@@ -288,6 +300,74 @@ setup() {
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   # ブランチ名が Git オレンジ(38;5;202m)で着色されていること
   [[ "$result" == *$'\033[38;5;202m'* ]]
+}
+
+@test "Git: GitHub originでgh:owner/repoがdimでブランチ前に表示されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  # cold start: build_git の background が cache を書く
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *"gh:ist-j-ichikawa/claude-code-statusline"* ]]
+  [[ "$result" == *"${DIM}gh:"* ]]
+  # gh: 部分が GIT オレンジのブランチ名より左にあること
+  gh_pos="${result%%gh:*}"
+  branch_pos="${result%%${GIT}*}"
+  [[ ${#gh_pos} -lt ${#branch_pos} ]]
+}
+
+@test "Git: origin未設定リポではgh:が表示されないこと" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  ( cd "$tmp_repo" && git init -q && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init )
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" != *"gh:"* ]]
+}
+
+@test "Git: SSH形式originがgh:owner/repoに正規化されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  ( cd "$tmp_repo" && git init -q \
+    && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init \
+    && git remote add origin "git@github.com:acme/widgets.git" )
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" == *"gh:acme/widgets"* ]]
+  # .git サフィックスが取れていること
+  [[ "$result" != *"gh:acme/widgets.git"* ]]
+}
+
+@test "Git: 非GitHub origin(GitLab等)ではgh:が表示されないこと" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  ( cd "$tmp_repo" && git init -q \
+    && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init \
+    && git remote add origin "git@gitlab.com:acme/widgets.git" )
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" != *"gh:"* ]]
 }
 
 # ============================================================================

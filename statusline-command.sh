@@ -195,8 +195,9 @@ build_git() {
   if [[ "$branch" == HEAD@* ]]; then
     text+="${RED}${branch}${RST}"
   else
-    # GitHub tree URL — PR は CC 組み込みフッターの PR badge に任せ、ここは tree URL のみ
-    local link_url="" branch_show="$branch" remote
+    # Normalize origin URL (SSH/HTTPS → canonical https://github.com/owner/repo)
+    # Shared by both origin identifier display and branch tree URL.
+    local remote repo_id="" link_url="" branch_show="$branch"
     remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
     case "$remote" in
       git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
@@ -205,6 +206,12 @@ build_git() {
       *)                       remote="" ;;
     esac
     remote="${remote%.git}"
+    [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
+
+    # Origin identifier (dim, before branch) — "GitHub に上げたっけ" の即答用
+    [[ -n "$repo_id" ]] && text+="${DIM}gh:${repo_id}${RST} "
+
+    # GitHub tree URL — PR は CC 組み込みフッターの PR badge に任せ、ここは tree URL のみ
     [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
     [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
     text+="${GIT}${branch_show}${RST}"

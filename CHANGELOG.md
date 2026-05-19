@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.20.0] - 2026-05-19
+
+### Added
+
+- Line 3 (git info) の先頭に `gh:owner/repo` (dim) を追加表示 — origin が `https://github.com/...` または `git@github.com:...` の GitHub リポジトリの場合のみ、`git remote get-url origin` を SSH/HTTPS 両形式から正規化して `owner/repo` を抽出し、ブランチ名の直前に dim で出す。`.git` サフィックスは除去。非 GitHub remote (GitLab 等) や origin 未設定では表示しない。「GitHub に上げたっけ」を即答するためのインジケータ。public/private (visibility) は GitHub API / `gh repo view` 依存で完全ローカルでは判定不能なため軽い版に留め、表示しない方針 (`gh` の active account が `gh auth switch` で切り替わると複数 org にまたがる環境では false negative を出すリスクが大きく、トレードオフが見合わないと判断)。既存の tree URL リンク生成と remote 正規化ロジックを共有してフォーク数を増やさない。detached HEAD でも origin 情報自体は有用なので統一的に表示するよう、`HEAD@*` 判定の前に remote 正規化を移動するリファクタを同時実施。Built against を CC 2.1.144 に追従
+
 ## [1.19.0] - 2026-05-14
 
 ### Added
