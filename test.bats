@@ -353,6 +353,64 @@ _wait_for_cache() {
   [[ "$result" != *"gh:acme/widgets.git"* ]]
 }
 
+@test "Git: workspace.repo(CC 2.1.145+)がコールドスタートでもgh:を表示すること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  # cache を消して即座に sed -n '3p' する = cold start。git remote get-url を介さず stdin から gh: が出る
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *"gh:acme/widgets"* ]]
+}
+
+@test "PR: pr.review_state=approvedで緑色のテキストが表示されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"review_state":"approved"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *$'\033[32m'"approved"* ]]
+}
+
+@test "PR: pr.review_state=changes_requestedで赤色のテキストが表示されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"review_state":"changes_requested"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *$'\033[31m'"changes_requested"* ]]
+}
+
+@test "PR: pr.review_state=pendingで黄色のテキストが表示されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"review_state":"pending"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *$'\033[33m'"pending"* ]]
+}
+
+@test "PR: pr.review_stateが空の場合は何も表示しないこと" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" != *"approved"* ]]
+  [[ "$result" != *"pending"* ]]
+}
+
+@test "PR: PR番号(#)は表示しないこと — CC組み込みフッターと住み分け" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"url":"https://github.com/acme/widgets/pull/1234","review_state":"approved"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" != *"#1234"* ]]
+}
+
+@test "Git: workspace.repoの非GitHubホスト(gitlab.com等)ではgh:が表示されないこと" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"gitlab.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" != *"gh:"* ]]
+}
+
 @test "Git: 非GitHub origin(GitLab等)ではgh:が表示されないこと" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   local tmp_repo

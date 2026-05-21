@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.23.0] - 2026-05-21
+
+### Added
+
+- Line 3 (git info) に PR review_state テキスト表示を新規追加。CC 2.1.145+ の stdin `pr.review_state` を branch 直後に **色付きテキスト** で表示する: `approved`=緑/`changes_requested`=赤/`pending`=黄/`commented` 他=dim。**PR 番号と URL は表示しない方針** — CC 組み込みフッターの PR badge (`PR #1234` リンク) が既に提供しているため重複させず、こちらはフッターが出さない review_state のみを提供して住み分ける。PR が無いブランチでは何も出さない (graceful degradation)。bats に approved / changes_requested / pending / state 空 / PR 番号非表示 の 5 ケース追加
+
+## [1.22.0] - 2026-05-21
+
+### Changed
+
+- Line 3 の `gh:owner/repo` 取得を **CC 2.1.145+ の stdin `workspace.repo.{host,owner,name}` 優先**に変更。Anthropic が 2.1.145 で statusline JSON に GitHub repo 情報を含めるようになったので、これを使えば ① cold start でも `gh:` を即表示できる (従来は 5s background cache populate 後)、② `git remote get-url origin` の fork が 1 回減る、③ SSH/HTTPS 正規化のロジックを bypass、というメリットがある。2.1.144 以前と origin が GitHub 以外 (GitLab 等) のケースでは従来通り `git remote` 正規化に fallback して graceful degradation。bats に新規 2 ケース追加 (`workspace.repo` あり cold-start で gh: 表示 / `workspace.repo.host=gitlab.com` で gh: 非表示)。Built against を CC 2.1.146 に追従
+
 ## [1.21.0] - 2026-05-19
 
 ### Changed

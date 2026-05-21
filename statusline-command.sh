@@ -26,6 +26,16 @@ osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 # editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
 editor_url() { printf -v "$2" 'file://%s' "$1"; }
 
+# pr_state_color STATE VARNAME — sets VARNAME to ANSI color for PR review state (no subshell)
+pr_state_color() {
+  case "$1" in
+    approved)          printf -v "$2" '%s' "$GRN" ;;
+    changes_requested) printf -v "$2" '%s' "$RED" ;;
+    pending)           printf -v "$2" '%s' "$YLW" ;;
+    *)                 printf -v "$2" '%s' "$DIM" ;;
+  esac
+}
+
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
 # 8 braille levels per char × 5 chars = 40 steps of precision
 braille_bar() {
@@ -144,6 +154,8 @@ exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
+ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
+pr_review_state=""
 effort_level="" thinking_enabled="false"
 _jq_ok=1
 _jq_out=$(jq -r '
@@ -166,10 +178,20 @@ _jq_out=$(jq -r '
   @sh "wt_orig_branch=\(.worktree.original_branch // "")",
   @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
   @sh "ws_git_worktree=\(.workspace.git_worktree // "")",
+  @sh "ws_repo_host=\(.workspace.repo.host // "")",
+  @sh "ws_repo_owner=\(.workspace.repo.owner // "")",
+  @sh "ws_repo_name=\(.workspace.repo.name // "")",
+  @sh "pr_review_state=\(.pr.review_state // "")",
   @sh "effort_level=\(.effort.level // "")",
   @sh "thinking_enabled=\(.thinking.enabled // false)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
+
+# CC 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
+# Empty unless stdin actually provided a GitHub repo identity — both call sites use this as the gate.
+if [[ "$ws_repo_host" == "github.com" ]] && has_val "$ws_repo_owner" && has_val "$ws_repo_name"; then
+  ws_repo_id="${ws_repo_owner}/${ws_repo_name}"
+fi
 
 # worktree sessions: workspace.current_dir points to original repo
 if [[ -n "$wt_path" ]]; then
@@ -195,18 +217,22 @@ build_git() {
   if [[ "$branch" == HEAD@* ]]; then
     text+="${RED}${branch}${RST}"
   else
-    # Normalize origin URL (SSH/HTTPS → canonical https://github.com/owner/repo)
-    # Shared by both origin identifier display and branch tree URL.
-    local remote repo_id="" link_url="" branch_show="$branch"
-    remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
-    case "$remote" in
-      git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
-      ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
-      https://github.com/*)    ;;
-      *)                       remote="" ;;
-    esac
-    remote="${remote%.git}"
-    [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
+    # Repo identity: prefer precomputed $ws_repo_id (CC 2.1.145+) — zero fork, available at cold start.
+    # Fallback: parse origin URL (SSH/HTTPS → canonical https://github.com/owner/repo) for older CC.
+    local remote repo_id="$ws_repo_id" link_url="" branch_show="$branch"
+    if [[ -n "$repo_id" ]]; then
+      remote="https://github.com/${repo_id}"
+    else
+      remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
+      case "$remote" in
+        git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
+        ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
+        https://github.com/*)    ;;
+        *)                       remote="" ;;
+      esac
+      remote="${remote%.git}"
+      [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
+    fi
 
     # Origin identifier (dim, before branch) — "GitHub に上げたっけ" の即答用
     [[ -n "$repo_id" ]] && text+="${DIM}gh:${repo_id}${RST} "
@@ -215,6 +241,15 @@ build_git() {
     [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
     [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
     text+="${GIT}${branch_show}${RST}"
+
+    # PR review state (CC 2.1.145+ pr.review_state) — text colored by state.
+    # CC's built-in footer already shows "PR #<num>" with link, so we only surface the
+    # review_state (which the footer omits) to keep the two displays complementary.
+    if has_val "$pr_review_state"; then
+      local pr_color
+      pr_state_color "$pr_review_state" pr_color
+      text+=" ${pr_color}${pr_review_state}${RST}"
+    fi
 
     # Branch parent — reflog は ~90 日で GC; 古いブランチや clone 直後は出ない (graceful degradation)
     local last_reflog from_ref=""
@@ -426,10 +461,17 @@ else
     fi
     if [[ -f "$_head_file" ]]; then
       _head=$(<"$_head_file")
+      # Cold-start emits a stdin-only subset of build_git's layout, in the same left-to-right order
+      # (gh: → branch → PR state). build_git wins once the 5s background cache populates.
+      [[ -n "$ws_repo_id" ]] && line_git+=("${DIM}gh:${ws_repo_id}${RST}")
       if [[ "$_head" == ref:* ]]; then
         line_git+=("${GIT}${_head#ref: refs/heads/}${RST}")
       else
         line_git+=("${RED}HEAD@${_head:0:7}${RST}")
+      fi
+      if has_val "$pr_review_state"; then
+        pr_state_color "$pr_review_state" _pr_color
+        line_git+=("${_pr_color}${pr_review_state}${RST}")
       fi
     fi
   fi
