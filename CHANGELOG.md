@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.24.0] - 2026-05-21
+
+### Added
+
+- Line 1 の**最左**に vim mode バッジを新規追加。CC の vim mode (interactive-mode で `Esc` → `i` 等で操作可、4 モード: NORMAL/INSERT/VISUAL/VISUAL LINE) を stdin `.vim.mode` から取得し、`INSERT` は緑 bg、`VISUAL` / `VISUAL LINE` は橙 bg のバッジ (bold + 黒 fg) で表示。`VISUAL LINE` は `V-LINE` に短縮。**NORMAL とフィールド欠落時は非表示** (デフォルト状態のノイズ削減 + vim mode 無効セッションの graceful degradation)。CC 組み込みフッターの `-- INSERT --` 表示は dim テキストで見落とされやすいため、bg 色 + bold + 最左配置で意図的に圧倒的に目立たせる住み分け設計。bats 5 ケース追加 (INSERT/VISUAL/VISUAL LINE→V-LINE 短縮/NORMAL 非表示/フィールド欠落 graceful)
+
 ## [1.23.0] - 2026-05-21
 
 ### Added

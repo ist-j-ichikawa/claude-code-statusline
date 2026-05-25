@@ -411,6 +411,45 @@ _wait_for_cache() {
   [[ "$result" != *"gh:"* ]]
 }
 
+# ============================================================================
+# vim mode badge — NORMAL は非表示、INSERT/VISUAL/VISUAL LINE は bg 色付きで Line 1 最左に
+# ============================================================================
+@test "vim: INSERTモードで緑バッジが表示されること" {
+  result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"INSERT"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  # bg lime-green (48;5;148, gruvbox-ish) + bold + INSERT テキストが含まれること
+  [[ "$result" == *$'\033[1;30;48;5;148m INSERT '* ]]
+}
+
+@test "vim: VISUALモードで橙バッジが表示されること" {
+  result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"VISUAL"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[1;30;48;5;214m VISUAL '* ]]
+}
+
+@test "vim: VISUAL LINEはV-LINEに短縮して同じ橙バッジで表示されること" {
+  result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"VISUAL LINE"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[1;30;48;5;214m V-LINE '* ]]
+  [[ "$result" != *"VISUAL LINE"* ]]
+}
+
+@test "vim: NORMALモードはバッジを表示しないこと (デフォルト状態でノイズ削減)" {
+  result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"NORMAL"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"NORMAL"* ]]
+  [[ "$result" != *"48;5;148"* ]]
+  [[ "$result" != *"48;5;214"* ]]
+}
+
+@test "vim: vim.mode未設定の場合はバッジを表示しないこと (vim mode無効セッション)" {
+  result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"INSERT"* ]]
+  [[ "$result" != *"48;5;148"* ]]
+  [[ "$result" != *"48;5;214"* ]]
+}
+
 @test "Git: 非GitHub origin(GitLab等)ではgh:が表示されないこと" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   local tmp_repo

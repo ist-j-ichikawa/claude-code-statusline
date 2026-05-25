@@ -12,6 +12,10 @@ readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
+# vim mode badges: bold + bg color + black fg — louder than CC's footer "-- INSERT --" hint.
+# Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
+readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
+readonly VIM_VISUAL=$'\033[1;30;48;5;214m'  # bold black on gold (gruvbox-ish VISUAL)
 readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
@@ -156,6 +160,7 @@ five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
 pr_review_state=""
+vim_mode=""
 effort_level="" thinking_enabled="false"
 _jq_ok=1
 _jq_out=$(jq -r '
@@ -182,6 +187,7 @@ _jq_out=$(jq -r '
   @sh "ws_repo_owner=\(.workspace.repo.owner // "")",
   @sh "ws_repo_name=\(.workspace.repo.name // "")",
   @sh "pr_review_state=\(.pr.review_state // "")",
+  @sh "vim_mode=\(.vim.mode // "")",
   @sh "effort_level=\(.effort.level // "")",
   @sh "thinking_enabled=\(.thinking.enabled // false)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
@@ -324,6 +330,15 @@ if ((_jq_ok == 0)); then
   printf '%s\n' "$_out"
   exit 0
 fi
+
+# Vim mode badge (CC 2.1.x vim.mode) — leftmost so it catches the eye while typing.
+# CC's footer shows a dim "-- INSERT --" hint; this badge is intentionally louder.
+# NORMAL is hidden (it's the default — showing it adds noise).
+case "$vim_mode" in
+  INSERT)        line1+=("${VIM_INSERT} INSERT ${RST}") ;;
+  VISUAL)        line1+=("${VIM_VISUAL} VISUAL ${RST}") ;;
+  "VISUAL LINE") line1+=("${VIM_VISUAL} V-LINE ${RST}") ;;
+esac
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
