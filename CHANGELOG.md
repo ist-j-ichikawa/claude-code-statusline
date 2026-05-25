@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.25.0] - 2026-05-25
+
+### Changed
+
+- Built against を CC 2.1.150 に追従。2.1.147→2.1.150 の差分 (4 リリース分) を `/check-claude-code-update` で確認したが、statusline-command.sh に影響する変更は無し: 2.1.147 の `/simplify` → `/code-review` リネームは slash コマンド側の話で stdin スキーマ不変、2.1.149 の「skill/agent frontmatter の effort が status bar に反映」修正は CC 側のバグ修正で既存の `.effort.level` 抽出ロジックで自動的に正しく動く、2.1.148 (Bash exit 127 regression fix) と 2.1.150 (internal) も無関係、その他は Windows / PowerShell / plugin / UI 系で macOS 専用本スクリプトに影響なし
+
 ## [1.24.0] - 2026-05-21
 
 ### Added
