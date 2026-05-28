@@ -479,7 +479,10 @@ else
       # Cold-start emits a stdin-only subset of build_git's layout, in the same left-to-right order
       # (gh: → branch → PR state). build_git wins once the 5s background cache populates.
       [[ -n "$ws_repo_id" ]] && line_git+=("${DIM}gh:${ws_repo_id}${RST}")
-      if [[ "$_head" == ref:* ]]; then
+      # .invalid: Git's placeholder ref for empty/uninitialized repos (git init, clone aborted, ghq get失敗残骸)
+      if [[ "$_head" == "ref: refs/heads/.invalid" ]]; then
+        line_git+=("${DIM}(empty)${RST}")
+      elif [[ "$_head" == ref:* ]]; then
         line_git+=("${GIT}${_head#ref: refs/heads/}${RST}")
       else
         line_git+=("${RED}HEAD@${_head:0:7}${RST}")

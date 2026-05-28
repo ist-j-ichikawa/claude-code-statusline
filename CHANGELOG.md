@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.26.0] - 2026-05-28
+
+### Changed
+
+- Cold-start パス (`build_git()` の cache populate 前) で `.git/HEAD` の中身が `ref: refs/heads/.invalid` の時、`.invalid` をそのまま branch 名として表示せず dim の `(empty)` に置換するようにした。`.invalid` は Git が空リポジトリ (`git init` 直後、clone 途中失敗、`ghq get` の fetch 失敗残骸など) の HEAD placeholder として使う RFC 6761 予約名で、ユーザーから見れば「異常状態」を意味するノイズ。`(empty)` ラベルに翻訳することで、`(no git)` と同じ dim 表示で「ここは git だが commit が無い」状態を即視認できるようにする。`build_git()` 側は `git branch --show-current` が空リポで empty を返して early return するため修正不要、cold-start パスのみで完結
+
 ## [1.25.0] - 2026-05-25
 
 ### Changed

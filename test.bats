@@ -285,6 +285,24 @@ _wait_for_cache() {
   [[ "$result" != *"no git"* ]]
 }
 
+@test "Git: 空リポジトリ(.invalid HEAD)を(empty)に翻訳すること" {
+  # ghq get 失敗残骸 / git init 直後 / clone aborted を再現:
+  # HEAD は ref: refs/heads/.invalid だが refs/ も objects/ も空
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  mkdir -p "$tmp_repo/.git/refs" "$tmp_repo/.git/objects"
+  printf 'ref: refs/heads/.invalid\n' > "$tmp_repo/.git/HEAD"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" == *"(empty)"* ]]
+  [[ "$result" != *".invalid"* ]]
+  # (empty) は dim、Git オレンジでは無いこと
+  [[ "$result" == *"${DIM}(empty)${RST}"* ]]
+}
+
 @test "Git: コールドスタートでブランチ名を即時表示すること" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
