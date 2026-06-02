@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.26.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.150-purple)
+![Version](https://img.shields.io/badge/version-1.27.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.160-purple)
 
 ## Overview
 
@@ -24,7 +24,7 @@ Line 4: 5hレート制限 + コンテキストバー + weeklyレート制限
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 4.7 (1M context)  high  think  v2.1.146
+Anthropic(enterprise)  Opus 4.7 (1M context)  high  think  v2.1.160
 ~/dev/my-project  🌲 from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  from:main  A3 M2 ?1 ↑2 1h fix: update logic..
 ⣿⣀    16%  2:20  ⣿⣿⣄   48%  week:9%  金 12:00
@@ -64,30 +64,44 @@ Claude Code 運用で特に便利な機能:
 
 ## Installation
 
-### 1. スクリプトを配置
+このスクリプトは**リポジトリを直接参照**する運用を推奨します。コピーを作らないので、このリポジトリが single source of truth のまま `git pull` だけで更新が反映されます。
+
+### 1. リポジトリを clone
 
 ```bash
-cp statusline-command.sh ~/.claude/statusline-command.sh
-chmod +x ~/.claude/statusline-command.sh
+git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git
+# ghq 派は: ghq get ist-j-ichikawa/claude-code-statusline
 ```
 
 ### 2. settings.json に登録
 
-`~/.claude/settings.json` に以下を追加します:
+`~/.claude/settings.json` に、clone したスクリプトの**絶対パス**を指定します:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "/bin/bash /Users/<username>/.claude/statusline-command.sh",
+    "command": "/path/to/claude-code-statusline/statusline-command.sh",
     "refreshInterval": 30
   }
 }
 ```
 
-> **Note:** `<username>` は自分のユーザー名に置き換えてください。
+> **Note:** `/path/to/...` は clone 先の実際の絶対パスに置き換えてください (`~` は展開されないので絶対パスで書きます)。スクリプトは実行ビット付きでコミットされているため `chmod` は不要です。
 
 `refreshInterval` (CC 2.1.97+) はステータスラインを N 秒ごとに自動再実行する設定です。レート制限の残り時間やGit状態がアイドル中も更新されます。30秒推奨。
+
+### 代替: clone せず ~/.claude に置く
+
+clone を残したくない場合は、公開リポジトリからスクリプトだけを直接ダウンロードして `~/.claude` に配置できます。ただしこれは**コピー**なので、更新は手動 (再ダウンロード) になります:
+
+```bash
+curl -fsSL -o ~/.claude/statusline-command.sh \
+  https://raw.githubusercontent.com/ist-j-ichikawa/claude-code-statusline/main/statusline-command.sh
+chmod +x ~/.claude/statusline-command.sh
+```
+
+この場合は settings.json の `command` を `/Users/<username>/.claude/statusline-command.sh` (絶対パス) に向けます。
 
 ## Shell Script Details
 
@@ -109,7 +123,7 @@ statusline-command.sh
 ├── Subscription     fetch_subscription() — Keychain からサブスクリプション種別を取得（バックグラウンドキャッシュ）
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — ブランチ、dirty state、ahead/behind、last commit (age + msg)（5秒バックグラウンドキャッシュ、atomic mv 書き込み）
-├── Line 1           [vim mode バッジ (INSERT=緑 bg / VISUAL=橙 bg、NORMAL は非表示)] + プロバイダー + モデル名（Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree + from:branch + added_dirs (+N dirs)
 ├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (CC 2.1.145+ pr.review_state、テキスト色分け、PR # は CC 組み込み footer に任せて非表示) + from:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ)
@@ -120,6 +134,8 @@ statusline-command.sh
 
 | 指標 | 色 | ANSIコード |
 |---|---|---|
+| vim mode `INSERT` | 黒文字 / ライムグリーン bg (bold) | 1;30;48;5;148 |
+| vim mode `VISUAL` / `V-LINE` | 黒文字 / ゴールド bg (bold) | 1;30;48;5;214 |
 | コンテキスト使用率 | < 80% lime green / 80-89% 黄 / >= 90% 赤 | 38;5;82 / 33 / 31 |
 | Opus | コーラル | 38;5;209 |
 | Sonnet 4.6 | ティール | 38;5;79 |

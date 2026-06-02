@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.27.0] - 2026-06-02
+
+### Changed
+
+- Built against を CC 2.1.160 に追従。別 PC 作業で upstream tracking リポ (`anthropics/claude-code` の CHANGELOG) が未同期だったため `/check-claude-code-update` での影響分析は未実施 — バッジ数値のみ更新し、`statusline-command.sh` のロジックは変更していない。あわせて README のドリフトを点検・修正: ① カラーテーマ表に vim mode バッジの色 (`INSERT`=黒文字/ライムグリーン bg `1;30;48;5;148`、`VISUAL`・`V-LINE`=黒文字/ゴールド bg `1;30;48;5;214`) を追記 (1.24.0 で追加した機能なのに表から欠落していた)、② スクリプト構造の Line 1 説明で VISUAL を「橙 bg」と誤記していたのを実定数どおり「ゴールド bg」に修正し `V-LINE` 短縮も明記、③ 表示例の version 文字列を `v2.1.146` → `v2.1.160` に同期
+
+### Added
+
+- Installation 手順を再構成。**リポジトリを直接参照する運用 (clone → settings.json に clone 先スクリプトの絶対パスを指定) を推奨手順に**昇格させた。コピーを作らないので single source of truth が保たれ `git pull` だけで更新が反映される (CLAUDE.md の「no copy / single source of truth」方針と整合)。公開リポジトリ (PUBLIC) からの `curl` 直接ダウンロードは「clone せず `~/.claude` に置く」**代替**として併記 — この方法はコピーなので更新が手動になる旨を明記
+
 ## [1.26.0] - 2026-05-28
 
 ### Changed
