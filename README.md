@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.27.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.160-purple)
+![Version](https://img.shields.io/badge/version-1.28.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.170-purple)
 
 ## Overview
 
@@ -24,7 +24,7 @@ Line 4: 5hレート制限 + コンテキストバー + weeklyレート制限
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 4.7 (1M context)  high  think  v2.1.160
+Anthropic(enterprise)  Fable 5 (1M context)  high  think  v2.1.170
 ~/dev/my-project  🌲 from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  from:main  A3 M2 ?1 ↑2 1h fix: update logic..
 ⣿⣀    16%  2:20  ⣿⣿⣄   48%  week:9%  金 12:00
@@ -123,7 +123,7 @@ statusline-command.sh
 ├── Subscription     fetch_subscription() — Keychain からサブスクリプション種別を取得（バックグラウンドキャッシュ）
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — ブランチ、dirty state、ahead/behind、last commit (age + msg)（5秒バックグラウンドキャッシュ、atomic mv 書き込み）
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=スチールブルー, Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree + from:branch + added_dirs (+N dirs)
 ├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (CC 2.1.145+ pr.review_state、テキスト色分け、PR # は CC 組み込み footer に任せて非表示) + from:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ)
@@ -137,6 +137,7 @@ statusline-command.sh
 | vim mode `INSERT` | 黒文字 / ライムグリーン bg (bold) | 1;30;48;5;148 |
 | vim mode `VISUAL` / `V-LINE` | 黒文字 / ゴールド bg (bold) | 1;30;48;5;214 |
 | コンテキスト使用率 | < 80% lime green / 80-89% 黄 / >= 90% 赤 | 38;5;82 / 33 / 31 |
+| Fable | スチールブルー | 38;5;74 |
 | Opus | コーラル | 38;5;209 |
 | Sonnet 4.6 | ティール | 38;5;79 |
 | Sonnet 4.5 / 3.5 | アンバー | 38;5;214 |

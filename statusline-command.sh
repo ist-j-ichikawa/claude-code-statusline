@@ -9,7 +9,7 @@ readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
-readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
+readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m' FABLE=$'\033[38;5;74m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 # vim mode badges: bold + bg color + black fg — louder than CC's footer "-- INSERT --" hint.
@@ -369,7 +369,9 @@ case "$provider" in
     ;;
 esac
 
-if [[ "$model_show" == *opus* ]]; then
+if [[ "$model_show" == *fable* ]]; then
+  line1+=("${FABLE}${model_show}${RST}")
+elif [[ "$model_show" == *opus* ]]; then
   line1+=("${CORAL}${model_show}${RST}")
 elif [[ "$model_show" == *sonnet*4.5* || "$model_show" == *sonnet*3.5* ]]; then
   line1+=("${AMBER}${model_show}${RST}")

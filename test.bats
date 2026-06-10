@@ -10,7 +10,7 @@ setup() {
   export DIM=$'\033[2m'
   export GIT=$'\033[38;5;202m'
   export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
-  export CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
+  export CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m' FABLE=$'\033[38;5;74m'
   export AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
   export _NOW=$(date +%s)
   eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
@@ -153,6 +153,12 @@ _wait_for_cache() {
   result=$(echo '{"model":{"id":"claude-haiku-4-5","display_name":"Haiku 4.5"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" == *"38;5;183"*"Haiku 4.5"* ]]
+}
+
+@test "モデル色: Fableがスチールブルーで表示されること" {
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.170","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"38;5;74"*"Fable 5"* ]]
 }
 
 @test "モデル色: 大文字混在のdisplay_nameでも正しい色になること" {
