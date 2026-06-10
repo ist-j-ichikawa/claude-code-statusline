@@ -16,12 +16,15 @@ setup() {
   eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
 }
 
-# build_git の background cache 書き込み完了まで polling (最大 ~1秒)
-# 4 テストで `sleep 1` 固定にすると合計 +4秒のオーバーヘッドになるため
+# build_git の background cache 書き込み完了まで polling (最大 ~2秒)
+# 4 テストで `sleep` 固定にすると合計数秒のオーバーヘッドになるため
 _wait_for_cache() {
-  local cache_dir=$1 i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -n "$(ls -A "$cache_dir" 2>/dev/null)" ]] && return 0
+  local cache_dir=$1 i f
+  for i in {1..20}; do
+    # atomic 書き込みの中間ファイル (.tmp) は完成キャッシュではないので無視する
+    for f in "$cache_dir"/*; do
+      [[ -e "$f" && "$f" != *.tmp ]] && return 0
+    done
     sleep 0.1
   done
   return 1
