@@ -8,7 +8,7 @@ Single-file Bash script (`statusline-command.sh`) that renders a custom statusli
 
 ## Testing
 
-`bats test.bats` で自動テストを実行。テスト名は t-wada スタイル（日本語「〜すること」）。
+`bats test.bats` で自動テストを実行。テスト名は t-wada スタイル（日本語「〜すること」）。bats 内でだけ失敗するテストは `/tmp` に単発 `.bats` を作り `echo "..." >&3` で変数を観察する（bats は stdout を捕捉するので fd3 が唯一の表示窓）。
 ```bash
 bats test.bats
 ```
@@ -20,7 +20,7 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 
 ## Commits
 
-Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。
+Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。ただし `test:` 単独コミットはバージョン bump も CHANGELOG エントリも付けない（前例: a42a5db, 1597416）。
 
 ## Architecture
 
@@ -71,7 +71,7 @@ Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fi
 - **Bedrock detection uses `model_id`**: Provider prefix regex (`^(global|jp|...)\.`) must check `model_id`, not `model_show` (which may be `display_name` like "Opus 4.6").
 - **jq抽出とコードの同期**: 表示コードを削除/無効化したら、jqの`@sh`抽出行も必ず削除する。未使用のjq抽出はパフォーマンス劣化の原因になる。
 - **行数カウントは `grep -c .`** (単体): `wc -l | tr -d ' '` ではなく `grep -c .` を使う。forkが少なく macOS/Linux両方で安定。**`|| echo 0` は付けない**: `grep -c .` は no-match でも `"0"` を出力してから exit 1 するので、`|| echo 0` を付けると pipefail 下で stdout が `"0\n0"` の二重出力になり `((var > 0))` が syntax error を吐く。grep が無い等の異常時の defense は不要（grep は実質常駐）。
-- **キャッシュは atomic mv で書き込み**: `build_git()` の background 書き出しは `> "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc"` で必ず atomic 化する (`build_git()` の `& disown` 呼び出し箇所、現状 `statusline-command.sh:452`)。CC は `refreshInterval` で定期再実行するため、同時に走る別呼び出しが書き込み中の cache を read すると半端な内容を表示する。直接 `>` で書く"シンプル化"は破壊的。
+- **キャッシュは atomic mv で書き込み**: `build_git()` の background 書き出しは `> "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc"` で必ず atomic 化する (`build_git()` の `& disown` 呼び出し箇所、現状 `statusline-command.sh:452`)。CC は `refreshInterval` で定期再実行するため、同時に走る別呼び出しが書き込み中の cache を read すると半端な内容を表示する。直接 `>` で書く"シンプル化"は破壊的。逆に cache dir を polling する側（テストの `_wait_for_cache` 等）は `.tmp` 中間ファイルを完成キャッシュと誤認しないこと。
 - **README の Line 説明は 3 箇所重複**: `README.md` 「表示レイアウト」「表示例」(具体的なサンプル出力)「スクリプト構造」の3セクションで Line 1-4 の役割を別々に記述している。表示変更時は **3 箇所すべて** + CLAUDE.md + CHANGELOG + バージョンバッジを更新しないと食い違う。
 - **README バージョンバッジは手動同期**: L5-6 の `version-X.X.X` + `Claude_Code-X.X.X` は CHANGELOG bump 時に併せて手動更新する。自動同期はなく、放置すると数バージョン取り残される。
 - **CHANGELOG のバージョン分割ルール**: 1 コミット = 1 マイナー版が原則（同日でも別コミットなら別バージョン）。**ただし同一コミット内で複数性質の変更（例: feat + fix）がある場合は1バージョンに同居** OK — 1.14.0 (Changed + Removed) や 1.11.0 (Changed + Removed) が前例。
