@@ -241,22 +241,39 @@ _wait_for_cache() {
 # ============================================================================
 # 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================
-@test "Line4: コストとトークンが表示されないこと" {
-  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500},"cost":{"total_cost_usd":0.42}}' \
+@test "Line4: トークン数が表示されないこと" {
+  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.77","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"total_input_tokens":125000,"total_output_tokens":8500}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
-  [[ "$result" != *'$'* ]]
   [[ "$result" != *"↑"* ]]
   [[ "$result" != *"↓"* ]]
+  [[ "$result" != *"125"* ]]
+}
+
+@test "Line4: cost.total_cost_usdがdimの\$表示で出ること" {
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.173","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":4.83}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" == *'$4.83'* ]]
+}
+
+@test "Line4: コストがセント単位に四捨五入されること" {
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.173","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.426}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" == *'$0.43'* ]]
+}
+
+@test "Line4: コストが0のとき表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.173","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" != *'$'* ]]
+}
+
+@test "Line4: costフィールドがない旧Claude Codeで\$が表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" != *'$'* ]]
 }
 
 @test "Line4: Anthropicでレートリミットが表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
-  [[ "$result" == *"35%"* ]]
-  [[ "$result" == *"week:12%"* ]]
-}
-
-@test "Line4: Anthropicでrate_limitsからレートリミットを表示すること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" == *"35%"* ]]

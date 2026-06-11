@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.29.0] - 2026-06-11
+
+### Added
+
+- セッションコストを Line 4 最右に dim の `$X.XX` で表示するようにした。stdin JSON `cost.total_cost_usd` (Claude Code が cache read/write 区分込みで計算済みの API 換算額) をセント単位に四捨五入してそのまま $ 表示する。円換算は為替レートの入手手段（ネットワーク呼び出しゼロ方針との衝突）を要するため見送り。subscription 利用時は実請求なしの参考値なので、優先度の低い情報として最右・dim 配置。`$0.00`（セッション開始直後）とフィールド欠落（旧 Claude Code）では非表示。bash は float 演算ができないため jq 側で `* 100 | round` してセント整数で受け、表示は `printf -v` の整数演算のみ（fork ゼロ）
+
+### Changed
+
+- Built against を Claude Code 2.1.173 に追従 (`/check-claude-code-update` で 2.1.172〜2.1.173 を分析)。stdin JSON フィールドの変更はゼロ。2.1.173 の「Fable 5 の `[1m]` サフィックス正規化」は `*fable*` ワイルドカードマッチに影響なし（むしろ Line 1 が短くなる方向）
+
 ## [1.28.0] - 2026-06-10
 
 ### Added

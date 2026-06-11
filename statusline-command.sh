@@ -162,6 +162,7 @@ ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
 pr_review_state=""
 vim_mode=""
 effort_level="" thinking_enabled="false"
+cost_cents=0
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -189,7 +190,8 @@ _jq_out=$(jq -r '
   @sh "pr_review_state=\(.pr.review_state // "")",
   @sh "vim_mode=\(.vim.mode // "")",
   @sh "effort_level=\(.effort.level // "")",
-  @sh "thinking_enabled=\(.thinking.enabled // false)"
+  @sh "thinking_enabled=\(.thinking.enabled // false)",
+  @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -528,6 +530,13 @@ if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)); then
   format_reset_absolute "$seven_reset_epoch"
   line3+=("${DIM}week:${seven_pct}%${RST}")
   [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
+fi
+
+# Session cost (全プロバイダー共通。Claude Code 計算済みの API 換算 USD; subscription では実請求なしの参考値)
+# cost_cents > 0 が「フィールド欠落 (旧 Claude Code)」と「$0.00」の両方を非表示に倒す
+if ((cost_cents > 0)); then
+  printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
+  line3+=("${DIM}${_cost}${RST}")
 fi
 
 # ============================================================================
