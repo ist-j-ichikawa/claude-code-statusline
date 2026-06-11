@@ -14,17 +14,17 @@
 
 ### Added
 
-- Fable モデル (CC 2.1.170 で登場した Mythos-class の `claude-fable-5`) を Line 1 でスチールブルー (`FABLE` = `38;5;74`) で色分け表示するようにした。従来は `*opus*`/`*sonnet*`/`*haiku*` のどのワイルドカードにもマッチせず無色フォールバックだった。公式ブランド色が発表ページに記載されていないため、ヒーローアートワーク（ヴィンテージ標本画調の蝶で構成された「5」）の主役である大型のモルフォ蝶風の青から導出。74 `rgb(95,175,215)` は既存の青系 (VTEX=33, FNDY=39 の鮮やかなブルー / THINK=117 の淡い水色 / TEAL=79 のミント) と判別可能。claude.ai の UI に公式色が現れたらそちらに追従する。`*fable*` ワイルドカードなので将来の Fable 5.x も自動カバー
+- Fable モデル (Claude Code 2.1.170 で登場した Mythos-class の `claude-fable-5`) を Line 1 でスチールブルー (`FABLE` = `38;5;74`) で色分け表示するようにした。従来は `*opus*`/`*sonnet*`/`*haiku*` のどのワイルドカードにもマッチせず無色フォールバックだった。公式ブランド色が発表ページに記載されていないため、ヒーローアートワーク（ヴィンテージ標本画調の蝶で構成された「5」）の主役である大型のモルフォ蝶風の青から導出。74 `rgb(95,175,215)` は既存の青系 (VTEX=33, FNDY=39 の鮮やかなブルー / THINK=117 の淡い水色 / TEAL=79 のミント) と判別可能。claude.ai の UI に公式色が現れたらそちらに追従する。`*fable*` ワイルドカードなので将来の Fable 5.x も自動カバー
 
 ### Changed
 
-- Built against を CC 2.1.170 に追従 (`/check-claude-code-update` で 2.1.161〜2.1.170 の 9 リリースを分析)。stdin JSON フィールドの変更はゼロ。2.1.169 の「カスタム statusline 使用時にフッターヒントが出ない」バグは CC 側で修正済みでスクリプト対応不要。表示例のモデル名と version 文字列も Fable 5 / v2.1.170 に同期
+- Built against を Claude Code 2.1.170 に追従 (`/check-claude-code-update` で 2.1.161〜2.1.170 の 9 リリースを分析)。stdin JSON フィールドの変更はゼロ。2.1.169 の「カスタム statusline 使用時にフッターヒントが出ない」バグは Claude Code 側で修正済みでスクリプト対応不要。表示例のモデル名と version 文字列も Fable 5 / v2.1.170 に同期
 
 ## [1.27.0] - 2026-06-02
 
 ### Changed
 
-- Built against を CC 2.1.160 に追従。別 PC 作業で upstream tracking リポ (`anthropics/claude-code` の CHANGELOG) が未同期だったため `/check-claude-code-update` での影響分析は未実施 — バッジ数値のみ更新し、`statusline-command.sh` のロジックは変更していない。あわせて README のドリフトを点検・修正: ① カラーテーマ表に vim mode バッジの色 (`INSERT`=黒文字/ライムグリーン bg `1;30;48;5;148`、`VISUAL`・`V-LINE`=黒文字/ゴールド bg `1;30;48;5;214`) を追記 (1.24.0 で追加した機能なのに表から欠落していた)、② スクリプト構造の Line 1 説明で VISUAL を「橙 bg」と誤記していたのを実定数どおり「ゴールド bg」に修正し `V-LINE` 短縮も明記、③ 表示例の version 文字列を `v2.1.146` → `v2.1.160` に同期
+- Built against を Claude Code 2.1.160 に追従。別 PC 作業で upstream tracking リポ (`anthropics/claude-code` の CHANGELOG) が未同期だったため `/check-claude-code-update` での影響分析は未実施 — バッジ数値のみ更新し、`statusline-command.sh` のロジックは変更していない。あわせて README のドリフトを点検・修正: ① カラーテーマ表に vim mode バッジの色 (`INSERT`=黒文字/ライムグリーン bg `1;30;48;5;148`、`VISUAL`・`V-LINE`=黒文字/ゴールド bg `1;30;48;5;214`) を追記 (1.24.0 で追加した機能なのに表から欠落していた)、② スクリプト構造の Line 1 説明で VISUAL を「橙 bg」と誤記していたのを実定数どおり「ゴールド bg」に修正し `V-LINE` 短縮も明記、③ 表示例の version 文字列を `v2.1.146` → `v2.1.160` に同期
 
 ### Added
 
@@ -40,25 +40,25 @@
 
 ### Changed
 
-- Built against を CC 2.1.150 に追従。2.1.147→2.1.150 の差分 (4 リリース分) を `/check-claude-code-update` で確認したが、statusline-command.sh に影響する変更は無し: 2.1.147 の `/simplify` → `/code-review` リネームは slash コマンド側の話で stdin スキーマ不変、2.1.149 の「skill/agent frontmatter の effort が status bar に反映」修正は CC 側のバグ修正で既存の `.effort.level` 抽出ロジックで自動的に正しく動く、2.1.148 (Bash exit 127 regression fix) と 2.1.150 (internal) も無関係、その他は Windows / PowerShell / plugin / UI 系で macOS 専用本スクリプトに影響なし
+- Built against を Claude Code 2.1.150 に追従。2.1.147→2.1.150 の差分 (4 リリース分) を `/check-claude-code-update` で確認したが、statusline-command.sh に影響する変更は無し: 2.1.147 の `/simplify` → `/code-review` リネームは slash コマンド側の話で stdin スキーマ不変、2.1.149 の「skill/agent frontmatter の effort が status bar に反映」修正は Claude Code 側のバグ修正で既存の `.effort.level` 抽出ロジックで自動的に正しく動く、2.1.148 (Bash exit 127 regression fix) と 2.1.150 (internal) も無関係、その他は Windows / PowerShell / plugin / UI 系で macOS 専用本スクリプトに影響なし
 
 ## [1.24.0] - 2026-05-21
 
 ### Added
 
-- Line 1 の**最左**に vim mode バッジを新規追加。CC の vim mode (interactive-mode で `Esc` → `i` 等で操作可、4 モード: NORMAL/INSERT/VISUAL/VISUAL LINE) を stdin `.vim.mode` から取得し、`INSERT` は緑 bg、`VISUAL` / `VISUAL LINE` は橙 bg のバッジ (bold + 黒 fg) で表示。`VISUAL LINE` は `V-LINE` に短縮。**NORMAL とフィールド欠落時は非表示** (デフォルト状態のノイズ削減 + vim mode 無効セッションの graceful degradation)。CC 組み込みフッターの `-- INSERT --` 表示は dim テキストで見落とされやすいため、bg 色 + bold + 最左配置で意図的に圧倒的に目立たせる住み分け設計。bats 5 ケース追加 (INSERT/VISUAL/VISUAL LINE→V-LINE 短縮/NORMAL 非表示/フィールド欠落 graceful)
+- Line 1 の**最左**に vim mode バッジを新規追加。Claude Code の vim mode (interactive-mode で `Esc` → `i` 等で操作可、4 モード: NORMAL/INSERT/VISUAL/VISUAL LINE) を stdin `.vim.mode` から取得し、`INSERT` は緑 bg、`VISUAL` / `VISUAL LINE` は橙 bg のバッジ (bold + 黒 fg) で表示。`VISUAL LINE` は `V-LINE` に短縮。**NORMAL とフィールド欠落時は非表示** (デフォルト状態のノイズ削減 + vim mode 無効セッションの graceful degradation)。Claude Code 組み込みフッターの `-- INSERT --` 表示は dim テキストで見落とされやすいため、bg 色 + bold + 最左配置で意図的に圧倒的に目立たせる住み分け設計。bats 5 ケース追加 (INSERT/VISUAL/VISUAL LINE→V-LINE 短縮/NORMAL 非表示/フィールド欠落 graceful)
 
 ## [1.23.0] - 2026-05-21
 
 ### Added
 
-- Line 3 (git info) に PR review_state テキスト表示を新規追加。CC 2.1.145+ の stdin `pr.review_state` を branch 直後に **色付きテキスト** で表示する: `approved`=緑/`changes_requested`=赤/`pending`=黄/`commented` 他=dim。**PR 番号と URL は表示しない方針** — CC 組み込みフッターの PR badge (`PR #1234` リンク) が既に提供しているため重複させず、こちらはフッターが出さない review_state のみを提供して住み分ける。PR が無いブランチでは何も出さない (graceful degradation)。bats に approved / changes_requested / pending / state 空 / PR 番号非表示 の 5 ケース追加
+- Line 3 (git info) に PR review_state テキスト表示を新規追加。Claude Code 2.1.145+ の stdin `pr.review_state` を branch 直後に **色付きテキスト** で表示する: `approved`=緑/`changes_requested`=赤/`pending`=黄/`commented` 他=dim。**PR 番号と URL は表示しない方針** — Claude Code 組み込みフッターの PR badge (`PR #1234` リンク) が既に提供しているため重複させず、こちらはフッターが出さない review_state のみを提供して住み分ける。PR が無いブランチでは何も出さない (graceful degradation)。bats に approved / changes_requested / pending / state 空 / PR 番号非表示 の 5 ケース追加
 
 ## [1.22.0] - 2026-05-21
 
 ### Changed
 
-- Line 3 の `gh:owner/repo` 取得を **CC 2.1.145+ の stdin `workspace.repo.{host,owner,name}` 優先**に変更。Anthropic が 2.1.145 で statusline JSON に GitHub repo 情報を含めるようになったので、これを使えば ① cold start でも `gh:` を即表示できる (従来は 5s background cache populate 後)、② `git remote get-url origin` の fork が 1 回減る、③ SSH/HTTPS 正規化のロジックを bypass、というメリットがある。2.1.144 以前と origin が GitHub 以外 (GitLab 等) のケースでは従来通り `git remote` 正規化に fallback して graceful degradation。bats に新規 2 ケース追加 (`workspace.repo` あり cold-start で gh: 表示 / `workspace.repo.host=gitlab.com` で gh: 非表示)。Built against を CC 2.1.146 に追従
+- Line 3 の `gh:owner/repo` 取得を **Claude Code 2.1.145+ の stdin `workspace.repo.{host,owner,name}` 優先**に変更。Anthropic が 2.1.145 で statusline JSON に GitHub repo 情報を含めるようになったので、これを使えば ① cold start でも `gh:` を即表示できる (従来は 5s background cache populate 後)、② `git remote get-url origin` の fork が 1 回減る、③ SSH/HTTPS 正規化のロジックを bypass、というメリットがある。2.1.144 以前と origin が GitHub 以外 (GitLab 等) のケースでは従来通り `git remote` 正規化に fallback して graceful degradation。bats に新規 2 ケース追加 (`workspace.repo` あり cold-start で gh: 表示 / `workspace.repo.host=gitlab.com` で gh: 非表示)。Built against を Claude Code 2.1.146 に追従
 
 ## [1.21.0] - 2026-05-19
 
@@ -70,7 +70,7 @@
 
 ### Added
 
-- Line 3 (git info) の先頭に `gh:owner/repo` (dim) を追加表示 — origin が `https://github.com/...` または `git@github.com:...` の GitHub リポジトリの場合のみ、`git remote get-url origin` を SSH/HTTPS 両形式から正規化して `owner/repo` を抽出し、ブランチ名の直前に dim で出す。`.git` サフィックスは除去。非 GitHub remote (GitLab 等) や origin 未設定では表示しない。「GitHub に上げたっけ」を即答するためのインジケータ。public/private (visibility) は GitHub API / `gh repo view` 依存で完全ローカルでは判定不能なため軽い版に留め、表示しない方針 (`gh` の active account が `gh auth switch` で切り替わると複数 org にまたがる環境では false negative を出すリスクが大きく、トレードオフが見合わないと判断)。既存の tree URL リンク生成と remote 正規化ロジックを共有してフォーク数を増やさない。detached HEAD でも origin 情報自体は有用なので統一的に表示するよう、`HEAD@*` 判定の前に remote 正規化を移動するリファクタを同時実施。Built against を CC 2.1.144 に追従
+- Line 3 (git info) の先頭に `gh:owner/repo` (dim) を追加表示 — origin が `https://github.com/...` または `git@github.com:...` の GitHub リポジトリの場合のみ、`git remote get-url origin` を SSH/HTTPS 両形式から正規化して `owner/repo` を抽出し、ブランチ名の直前に dim で出す。`.git` サフィックスは除去。非 GitHub remote (GitLab 等) や origin 未設定では表示しない。「GitHub に上げたっけ」を即答するためのインジケータ。public/private (visibility) は GitHub API / `gh repo view` 依存で完全ローカルでは判定不能なため軽い版に留め、表示しない方針 (`gh` の active account が `gh auth switch` で切り替わると複数 org にまたがる環境では false negative を出すリスクが大きく、トレードオフが見合わないと判断)。既存の tree URL リンク生成と remote 正規化ロジックを共有してフォーク数を増やさない。detached HEAD でも origin 情報自体は有用なので統一的に表示するよう、`HEAD@*` 判定の前に remote 正規化を移動するリファクタを同時実施。Built against を Claude Code 2.1.144 に追従
 
 ## [1.19.0] - 2026-05-14
 
@@ -82,27 +82,27 @@
 
 ### Added
 
-- Line 3 (git info) に「切った元ブランチ」を `from:<parent>` (dim) で追加表示。`git reflog show <branch>` の最古エントリ (`branch: Created from <ref>`) をパースして取得し、worktree インジケータの `from:original_branch` と同じスタイルで揃える。reflog の GC 期間 (~90日) を超えた古いブランチや clone 直後のローカルチェックアウトされていないブランチでは表示されない (graceful degradation)。`Created from HEAD` (匿名 HEAD から作成) と detached HEAD では非表示。`build_git()` 内で従来 3 箇所に散らばっていた `[[ "$branch" != HEAD@* ]]` ガードを 1 つの if-else に集約するリファクタを同時実施。CC 2.1.141 の "multi-line statusline overflow" 修正に伴い `added_dirs` の挙動を再検証したが、修正は「行落ち」を「右端切り詰め」に変えただけで狭い端末では情報が見えないままなので、`(+N dirs)` 集約表示は維持
+- Line 3 (git info) に「切った元ブランチ」を `from:<parent>` (dim) で追加表示。`git reflog show <branch>` の最古エントリ (`branch: Created from <ref>`) をパースして取得し、worktree インジケータの `from:original_branch` と同じスタイルで揃える。reflog の GC 期間 (~90日) を超えた古いブランチや clone 直後のローカルチェックアウトされていないブランチでは表示されない (graceful degradation)。`Created from HEAD` (匿名 HEAD から作成) と detached HEAD では非表示。`build_git()` 内で従来 3 箇所に散らばっていた `[[ "$branch" != HEAD@* ]]` ガードを 1 つの if-else に集約するリファクタを同時実施。Claude Code 2.1.141 の "multi-line statusline overflow" 修正に伴い `added_dirs` の挙動を再検証したが、修正は「行落ち」を「右端切り詰め」に変えただけで狭い端末では情報が見えないままなので、`(+N dirs)` 集約表示は維持
 
 ## [1.17.0] - 2026-05-11
 
 ### Changed
 
-- README をスクリプト実装と一致させる全面メンテナンス。カラーテーマ表の Git 記号を実装通り (`A`/`M`/`U`/`?` の git standard symbols) に修正し、欠けていた色エントリ (Agent pink `38;5;213`、version gray `38;5;248`、Git brand orange `38;5;202`、branch セッション黄、untracked gray `38;5;248`) を追加。パフォーマンスセクションのバックグラウンドキャッシュを「Usage API (300秒)」→「Subscription 種別取得 (3600秒)」に訂正、worktree 検出は `git-dir`/`git-common-dir` 比較ではなく stdin JSON の `worktree.name` / `workspace.git_worktree` (CC 2.1.97+) であることを明記。Requirements を `Bash 4+` → `Bash 3.2+` (macOS 標準) に訂正し、`curl` の用途を `fetch_subscription()` 専用と明確化、macOS 専用 (`stat -f %m` / `md5 -q -s`) であることも追記。`build_git()` の説明から未実装の `stash` を削除し、Claude Code badge と表示例のバージョンを `2.1.139` に追従
+- README をスクリプト実装と一致させる全面メンテナンス。カラーテーマ表の Git 記号を実装通り (`A`/`M`/`U`/`?` の git standard symbols) に修正し、欠けていた色エントリ (Agent pink `38;5;213`、version gray `38;5;248`、Git brand orange `38;5;202`、branch セッション黄、untracked gray `38;5;248`) を追加。パフォーマンスセクションのバックグラウンドキャッシュを「Usage API (300秒)」→「Subscription 種別取得 (3600秒)」に訂正、worktree 検出は `git-dir`/`git-common-dir` 比較ではなく stdin JSON の `worktree.name` / `workspace.git_worktree` (Claude Code 2.1.97+) であることを明記。Requirements を `Bash 4+` → `Bash 3.2+` (macOS 標準) に訂正し、`curl` の用途を `fetch_subscription()` 専用と明確化、macOS 専用 (`stat -f %m` / `md5 -q -s`) であることも追記。`build_git()` の説明から未実装の `stash` を削除し、Claude Code badge と表示例のバージョンを `2.1.139` に追従
 
 ## [1.16.0] - 2026-05-11
 
 ### Changed
 
 - Effort/thinking indicator format simplified — `effort:high·think` → `high think`. プレフィックス `effort:` と中黒区切り `·` を削除し、レベル名そのまま (`low`/`high`/`max`) と `think` を半角スペース区切りで並べる。識別は色分け (`EFFORT=38;5;105` light purple、`THINK=38;5;117` light cyan) に委ねる方針。表示が短くなり Line 1 の他要素 (`Anthropic(enterprise)` 等) と視覚密度が揃う。中間変数 `_et` と `${_et:+ }` 条件区切りトリックも撤去し、`line1+=()` 2行に簡略化
-- Agent indicator on Line 1 — `⚡<name>` から記号を取って `<name>` のみのピンク (`AGENT=38;5;213`) 表示に。CC 2.1.139 で `claude agents` (Research Preview, agent view) が追加され、そこから起動したセッションには stdin JSON の `.agent.name="claude"` が流れてくるため、`⚡claude` が常時出るのが冗長だった。色だけで識別できるので記号は不要と判断。サブエージェント名 (`security-reviewer` 等) の表示も同形式に統一
+- Agent indicator on Line 1 — `⚡<name>` から記号を取って `<name>` のみのピンク (`AGENT=38;5;213`) 表示に。Claude Code 2.1.139 で `claude agents` (Research Preview, agent view) が追加され、そこから起動したセッションには stdin JSON の `.agent.name="claude"` が流れてくるため、`⚡claude` が常時出るのが冗長だった。色だけで識別できるので記号は不要と判断。サブエージェント名 (`security-reviewer` 等) の表示も同形式に統一
 - Context バーの低水準カラーを標準 ANSI 緑 (`GRN=\033[32m`) から bright lime green (`CTX_OK=\033[38;5;82m`) に変更 — Bedrock teal (`BDCK=38;5;72`) や暗いターミナルテーマ下での標準緑と区別がつきにくく、13% 程度の低使用率時に視認性が悪かった。`color_by_threshold` を Context バー専用関数化（`<80%`=lime / `>=80%`=黄 / `>=90%`=赤）。Git staged (`A3`) と ahead (`↑2`) は引き続き標準 ANSI 緑のまま（小さい記号なので視認性問題は出ない）
 
 ## [1.15.0] - 2026-05-07
 
 ### Added
 
-- Branch name on Line 3 is now an OSC 8 hyperlink to the GitHub `tree/<branch>` page — クリックでブランチをブラウザで開ける。CC 組み込みのフッター PR badge は PR への遷移を担うので、ここでは tree URL のみ提供して役割分担。`git remote get-url origin` を SSH (`git@github.com:owner/repo`)、SSH URL (`ssh://git@github.com/owner/repo`)、HTTPS いずれの形式からも正規化、non-GitHub remote (GitLab 等) と detached HEAD はリンク化スキップ。`gh` への依存はなくネットワーク呼び出しゼロを維持
+- Branch name on Line 3 is now an OSC 8 hyperlink to the GitHub `tree/<branch>` page — クリックでブランチをブラウザで開ける。Claude Code 組み込みのフッター PR badge は PR への遷移を担うので、ここでは tree URL のみ提供して役割分担。`git remote get-url origin` を SSH (`git@github.com:owner/repo`)、SSH URL (`ssh://git@github.com/owner/repo`)、HTTPS いずれの形式からも正規化、non-GitHub remote (GitLab 等) と detached HEAD はリンク化スキップ。`gh` への依存はなくネットワーク呼び出しゼロを維持
 
 ### Fixed
 
@@ -122,7 +122,7 @@
 
 ### Added
 
-- Effort and thinking indicator on Line 1 — `effort:high·think` between model and version. Reads `.effort.level` and `.thinking.enabled` from stdin JSON (CC 2.1.119+). CC stopped showing effort natively in recent versions, so the statusline surfaces it again. Colors chosen to avoid collision with model tier colors (CORAL/TEAL/AMBER/LAVENDER): `EFFORT=38;5;105` (light purple), `THINK=38;5;117` (light cyan). Level severity (`low`/`medium`/`high`/`xhigh`/`max`) is conveyed by the text — color is single-hue per indicator. Older CC versions without these fields render unchanged
+- Effort and thinking indicator on Line 1 — `effort:high·think` between model and version. Reads `.effort.level` and `.thinking.enabled` from stdin JSON (Claude Code 2.1.119+). Claude Code stopped showing effort natively in recent versions, so the statusline surfaces it again. Colors chosen to avoid collision with model tier colors (CORAL/TEAL/AMBER/LAVENDER): `EFFORT=38;5;105` (light purple), `THINK=38;5;117` (light cyan). Level severity (`low`/`medium`/`high`/`xhigh`/`max`) is conveyed by the text — color is single-hue per indicator. Older Claude Code versions without these fields render unchanged
 
 ## [1.12.0] - 2026-04-30
 
@@ -162,24 +162,24 @@
 
 ### Added
 
-- Mantle provider detection — `CLAUDE_CODE_USE_MANTLE=1` is now detected as Bedrock (CC 2.1.94+, "Amazon Bedrock powered by Mantle")
-- Git linked worktree indicator — `workspace.git_worktree` (CC 2.1.97+) shows 🌲 for manual `git worktree add` worktrees, not only CC `--worktree` sessions
-- `refreshInterval: 30` recommended in README settings example (CC 2.1.97+ auto-reruns statusline every N seconds)
+- Mantle provider detection — `CLAUDE_CODE_USE_MANTLE=1` is now detected as Bedrock (Claude Code 2.1.94+, "Amazon Bedrock powered by Mantle")
+- Git linked worktree indicator — `workspace.git_worktree` (Claude Code 2.1.97+) shows 🌲 for manual `git worktree add` worktrees, not only Claude Code `--worktree` sessions
+- `refreshInterval: 30` recommended in README settings example (Claude Code 2.1.97+ auto-reruns statusline every N seconds)
 
 ### Changed
 
-- Built against badge updated from CC 2.1.76 to 2.1.97
+- Built against badge updated from Claude Code 2.1.76 to 2.1.97
 
 ## [1.7.0] - 2026-04-06
 
 ### Added
 
-- `/add-dir` indicator on Line 2 — shows `(+N dirs)` when directories are added via `/add-dir` (CC 2.1.78+ `workspace.added_dirs`)
+- `/add-dir` indicator on Line 2 — shows `(+N dirs)` when directories are added via `/add-dir` (Claude Code 2.1.78+ `workspace.added_dirs`)
 - OSC 8 clickable path links via `file://` on Line 2
 
 ### Changed
 
-- Line 3 now shows only rate limits and context — removed token counts and session cost (CC's `total_input_tokens` excludes cache tokens, making the display misleading)
+- Line 3 now shows only rate limits and context — removed token counts and session cost (Claude Code's `total_input_tokens` excludes cache tokens, making the display misleading)
 
 - Dirty state symbols now use git standard: `A` (staged), `M` (modified), `?` (untracked), `U` (conflicts) — was `+`, `~`, `?`, `!`
 - Worktree origin indicator changed from `←branch` to `from:branch` for clarity
@@ -188,7 +188,7 @@
 
 ### Removed
 
-- `(no name)` indicator for unnamed sessions — CC shows session name natively
+- `(no name)` indicator for unnamed sessions — Claude Code shows session name natively
 - Subdirectory display (`→ current_dir`) — project root is sufficient
 - Stash count display — not relevant to Claude Code sessions
 - Unused `session_id` jq extraction
@@ -204,7 +204,7 @@
 
 ### Added
 
-- Vim mode indicator on Line 1 — `[I]` (green) for INSERT, `[N]` (dim) for NORMAL; hidden when vim is disabled (CC 2.1.84+ `vim.mode` field)
+- Vim mode indicator on Line 1 — `[I]` (green) for INSERT, `[N]` (dim) for NORMAL; hidden when vim is disabled (Claude Code 2.1.84+ `vim.mode` field)
 - Worktree indicator on Line 2 via stdin JSON `worktree.name` / `worktree.original_branch` — replaces git-command-based detection (zero fork, instant on cold start)
 - Session cost and token counts now displayed for all providers (was Bedrock/Vertex/Foundry only) — Anthropic sessions show cost + tokens + rate limit together on Line 3
 
@@ -250,7 +250,7 @@
 
 ### Fixed
 
-- Parse `resets_at` as Unix epoch seconds — CC 2.1.80 stdin uses epoch (not ISO 8601 like the old OAuth API), restoring reset time and weekly info on Line 4
+- Parse `resets_at` as Unix epoch seconds — Claude Code 2.1.80 stdin uses epoch (not ISO 8601 like the old OAuth API), restoring reset time and weekly info on Line 4
 - Add `floor` guard on `resets_at` jq extraction to handle potential float epochs
 
 ### Changed
@@ -261,9 +261,9 @@
 
 ### Changed
 
-- Migrate Anthropic rate limit from undocumented OAuth API to CC 2.1.80+ stdin `rate_limits` field
+- Migrate Anthropic rate limit from undocumented OAuth API to Claude Code 2.1.80+ stdin `rate_limits` field
 - Remove `get_oauth_token()`, `fetch_usage()`, and usage cache — ~50 lines deleted, 1 fewer jq fork
-- Pre-2.1.80 CC gracefully degrades (Line 4 empty for Anthropic)
+- Pre-2.1.80 Claude Code gracefully degrades (Line 4 empty for Anthropic)
 
 ## [1.2.0] - 2026-03-17
 

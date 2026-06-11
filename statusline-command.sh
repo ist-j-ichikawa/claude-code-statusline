@@ -12,7 +12,7 @@ readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m' FABLE=$'\033[38;5;74m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
-# vim mode badges: bold + bg color + black fg — louder than CC's footer "-- INSERT --" hint.
+# vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
 # Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
 readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
 readonly VIM_VISUAL=$'\033[1;30;48;5;214m'  # bold black on gold (gruvbox-ish VISUAL)
@@ -195,7 +195,7 @@ _jq_out=$(jq -r '
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
-# CC 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
+# Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
 # Empty unless stdin actually provided a GitHub repo identity — both call sites use this as the gate.
 if [[ "$ws_repo_host" == "github.com" ]] && has_val "$ws_repo_owner" && has_val "$ws_repo_name"; then
   ws_repo_id="${ws_repo_owner}/${ws_repo_name}"
@@ -225,8 +225,8 @@ build_git() {
   if [[ "$branch" == HEAD@* ]]; then
     text+="${RED}${branch}${RST}"
   else
-    # Repo identity: prefer precomputed $ws_repo_id (CC 2.1.145+) — zero fork, available at cold start.
-    # Fallback: parse origin URL (SSH/HTTPS → canonical https://github.com/owner/repo) for older CC.
+    # Repo identity: prefer precomputed $ws_repo_id (Claude Code 2.1.145+) — zero fork, available at cold start.
+    # Fallback: parse origin URL (SSH/HTTPS → canonical https://github.com/owner/repo) for older Claude Code.
     local remote repo_id="$ws_repo_id" link_url="" branch_show="$branch"
     if [[ -n "$repo_id" ]]; then
       remote="https://github.com/${repo_id}"
@@ -245,13 +245,13 @@ build_git() {
     # Origin identifier (dim, before branch) — "GitHub に上げたっけ" の即答用
     [[ -n "$repo_id" ]] && text+="${DIM}gh:${repo_id}${RST} "
 
-    # GitHub tree URL — PR は CC 組み込みフッターの PR badge に任せ、ここは tree URL のみ
+    # GitHub tree URL — PR は Claude Code 組み込みフッターの PR badge に任せ、ここは tree URL のみ
     [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
     [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
     text+="${GIT}${branch_show}${RST}"
 
-    # PR review state (CC 2.1.145+ pr.review_state) — text colored by state.
-    # CC's built-in footer already shows "PR #<num>" with link, so we only surface the
+    # PR review state (Claude Code 2.1.145+ pr.review_state) — text colored by state.
+    # Claude Code's built-in footer already shows "PR #<num>" with link, so we only surface the
     # review_state (which the footer omits) to keep the two displays complementary.
     if has_val "$pr_review_state"; then
       local pr_color
@@ -333,8 +333,8 @@ if ((_jq_ok == 0)); then
   exit 0
 fi
 
-# Vim mode badge (CC 2.1.x vim.mode) — leftmost so it catches the eye while typing.
-# CC's footer shows a dim "-- INSERT --" hint; this badge is intentionally louder.
+# Vim mode badge (Claude Code 2.1.x vim.mode) — leftmost so it catches the eye while typing.
+# Claude Code's footer shows a dim "-- INSERT --" hint; this badge is intentionally louder.
 # NORMAL is hidden (it's the default — showing it adds noise).
 case "$vim_mode" in
   INSERT)        line1+=("${VIM_INSERT} INSERT ${RST}") ;;
@@ -429,7 +429,7 @@ editor_url "$_display_dir" _editor_url
 osc8 "$_editor_url" "$_short_dir" _osc_tmp
 line2+=("$_osc_tmp")
 
-# Worktree indicator: CC worktree (wt_name) or git linked worktree (ws_git_worktree, CC 2.1.97+)
+# Worktree indicator: Claude Code worktree (wt_name) or git linked worktree (ws_git_worktree, Claude Code 2.1.97+)
 # Placed adjacent to the path since it qualifies what the path *is*.
 if has_val "$wt_name" || has_val "$ws_git_worktree"; then
   line2+=("🌲")
@@ -439,7 +439,7 @@ if has_val "$wt_name" || has_val "$ws_git_worktree"; then
 fi
 
 # Aggregate, not per-basename: per-basename can be truncated at terminal edge,
-# hiding which dirs are added. CC 2.1.141 fixed row-drop on overflow but still truncates.
+# hiding which dirs are added. Claude Code 2.1.141 fixed row-drop on overflow but still truncates.
 if ((added_dirs_count > 0)); then
   line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
 fi
@@ -505,7 +505,7 @@ fi
 # ============================================================================
 line3=()
 
-# 5-hour rate limit (Anthropic only, CC 2.1.80+) — leftmost for quick glance
+# 5-hour rate limit (Anthropic only, Claude Code 2.1.80+) — leftmost for quick glance
 if [[ -z "$provider" ]] && has_val "$five_pct"; then
   format_reset_remaining "$five_reset_epoch"
   braille_bar "$five_pct" _bbar

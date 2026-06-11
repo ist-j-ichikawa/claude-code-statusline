@@ -225,7 +225,7 @@ _wait_for_cache() {
   [[ "$result" != *"effort:"* ]]
 }
 
-@test "Effort/Thinking: 旧CC(両キーなし)でeffort/thinkが表示されないこと" {
+@test "Effort/Thinking: 旧 Claude Code(両キーなし)でeffort/thinkが表示されないこと" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.118","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" != *"effort:"* ]]
@@ -397,7 +397,7 @@ _wait_for_cache() {
   [[ "$result" != *"gh:acme/widgets.git"* ]]
 }
 
-@test "Git: workspace.repo(CC 2.1.145+)がコールドスタートでもgh:を表示すること" {
+@test "Git: workspace.repo(Claude Code 2.1.145+)がコールドスタートでもgh:を表示すること" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   # cache を消して即座に sed -n '3p' する = cold start。git remote get-url を介さず stdin から gh: が出る
@@ -439,7 +439,7 @@ _wait_for_cache() {
   [[ "$result" != *"pending"* ]]
 }
 
-@test "PR: PR番号(#)は表示しないこと — CC組み込みフッターと住み分け" {
+@test "PR: PR番号(#)は表示しないこと — Claude Code 組み込みフッターと住み分け" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"url":"https://github.com/acme/widgets/pull/1234","review_state":"approved"},"context_window":{"used_percentage":10}}' \
