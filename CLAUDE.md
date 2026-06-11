@@ -20,7 +20,7 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 
 ## Commits
 
-Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。ただし `test:` 単独コミットはバージョン bump も CHANGELOG エントリも付けない（前例: a42a5db, 1597416）。
+Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。ただし `test:` 単独コミット（前例: a42a5db, 1597416）と `docs:` 単独コミット（前例: c77ab7a, f394384, 9bff193）はバージョン bump も CHANGELOG エントリも付けない。
 
 ## Architecture
 
@@ -73,7 +73,8 @@ Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fi
 - **行数カウントは `grep -c .`** (単体): `wc -l | tr -d ' '` ではなく `grep -c .` を使う。forkが少なく macOS/Linux両方で安定。**`|| echo 0` は付けない**: `grep -c .` は no-match でも `"0"` を出力してから exit 1 するので、`|| echo 0` を付けると pipefail 下で stdout が `"0\n0"` の二重出力になり `((var > 0))` が syntax error を吐く。grep が無い等の異常時の defense は不要（grep は実質常駐）。
 - **キャッシュは atomic mv で書き込み**: `build_git()` の background 書き出しは `> "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc"` で必ず atomic 化する (`build_git()` の `& disown` 呼び出し箇所、現状 `statusline-command.sh:452`)。Claude Code は `refreshInterval` で定期再実行するため、同時に走る別呼び出しが書き込み中の cache を read すると半端な内容を表示する。直接 `>` で書く"シンプル化"は破壊的。逆に cache dir を polling する側（テストの `_wait_for_cache` 等）は `.tmp` 中間ファイルを完成キャッシュと誤認しないこと。
 - **README の Line 説明は 3 箇所重複**: `README.md` 「表示レイアウト」「表示例」(具体的なサンプル出力)「スクリプト構造」の3セクションで Line 1-4 の役割を別々に記述している。表示変更時は **3 箇所すべて** + CLAUDE.md + CHANGELOG + バージョンバッジを更新しないと食い違う。
-- **README バージョンバッジは手動同期**: L5-6 の `version-X.X.X` + `Claude_Code-X.X.X` は CHANGELOG bump 時に併せて手動更新する。自動同期はなく、放置すると数バージョン取り残される。
+- **README バージョンバッジは手動同期**: L5-6 の `version-X.X.X` + `Claude_Code-X.X.X` は CHANGELOG bump 時に併せて手動更新する。自動同期はなく、放置すると数バージョン取り残される。Built against を上げる時は**表示例の `v2.1.x` 文字列**（「表示例」セクションの Line 1 サンプル）も同期対象 — バッジだけ更新して表示例を忘れる前例あり（1.29.0 で発生、docs コミットで追従）。
+- **`.claude/` 配下はローカル専用**: `.claude/skills/`・`.claude/agents/`・`.claude/upstream-last-checked` は .gitignore 済みでリポジトリにはコミットされない（`git add` するとエラー）。skill の文面修正はディスク反映のみで完了する。CLAUDE.md 自体も .gitignore に列挙されているが tracked 済みなので通常どおりコミットできる。
 - **CHANGELOG のバージョン分割ルール**: 1 コミット = 1 マイナー版が原則（同日でも別コミットなら別バージョン）。**ただし同一コミット内で複数性質の変更（例: feat + fix）がある場合は1バージョンに同居** OK — 1.14.0 (Changed + Removed) や 1.11.0 (Changed + Removed) が前例。
 - **build_git cache と stdin-derived データの混合**: `build_git()` の出力は cache file に書かれ、cache key は `md5(dir)` のみ。stdin 由来の値 (`pr_review_state`, `ws_repo_id` 等) を build_git 内で render してしまうと、同一 dir で動く別セッションが最大 5s 間相手の stdin 値を表示する (cross-session contamination)。同一 dir = 同一 git state なら実害は小さいが、PR review_state のようにセッション固有 (= ブランチ固有) な値は注意。新規の stdin 派生表示要素は **build_git に入れず main flow で都度 append** を第一選択にする。
 - **Line 3 の 3 パス問題**: Line 3 の表示要素は (1) `build_git()` 非 detached HEAD パス (`else` ブランチ)、(2) `build_git()` detached HEAD パス (`if [[ "$branch" == HEAD@* ]]` ブランチ)、(3) cold-start (cache 未populate) の 3 経路で render される。新要素を追加する時は **3 パス全てで同じ条件で gate** すること。例えば `from:parent` / `gh:` / PR badge は (1)+(3) では出すが (2) では出さない、という方針なら 3 箇所すべてに同じ guard を入れる。片方だけ実装すると cache populate 5s 前後で表示が変わってフリッカーが起きる。
