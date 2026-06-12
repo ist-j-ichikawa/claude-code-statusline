@@ -348,7 +348,7 @@ model_show="${model:-$model_id}"
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
 shopt -s nocasematch
-if [[ "$model_id" =~ ^(global|jp|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]] || [[ "${CLAUDE_CODE_USE_MANTLE:-}" == "1" ]]; then
+if [[ "$model_id" =~ ^(global|jp|us-gov|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]] || [[ "${CLAUDE_CODE_USE_MANTLE:-}" == "1" ]]; then
   provider="bedrock"
 elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]]; then
   provider="vertex"

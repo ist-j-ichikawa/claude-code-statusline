@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.30.0] - 2026-06-12
+
+### Fixed
+
+- Bedrock 検出の model.id プレフィックスに `us-gov.` (AWS GovCloud) を追加。Claude Code 2.1.174 で GovCloud リージョンの inference profile prefix が `global` → `us-gov` に修正され、`us-gov.anthropic.claude-...` 形式の model.id が届くようになったため。既存の正規表現は `us` の直後に `.` を要求するので `us-gov.` にマッチしなかった。実利用では `CLAUDE_CODE_USE_BEDROCK=1` の環境変数検出が先に効くため防御的 fallback の補完。Built against を Claude Code 2.1.174 に追従（他の変更は statusline に影響なし）
+
 ## [1.29.0] - 2026-06-11
 
 ### Added

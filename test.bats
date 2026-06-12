@@ -182,6 +182,12 @@ _wait_for_cache() {
   [[ "$result" == *"Bedrock"* ]]
 }
 
+@test "プロバイダー: model_idのus-gov.プレフィックス(GovCloud)でBedrockと検出すること" {
+  result=$(echo '{"model":{"id":"us-gov.anthropic.claude-opus-4-6-v1","display_name":""},"version":"2.1.174","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"Bedrock"* ]]
+}
+
 @test "プロバイダー: CLAUDE_CODE_USE_MANTLE環境変数でBedrockと検出すること" {
   result=$(CLAUDE_CODE_USE_MANTLE=1 bash -c 'echo "{\"model\":{\"id\":\"claude-opus\",\"display_name\":\"Opus 4.6\"},\"version\":\"2.1.94\",\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | bash statusline-command.sh 2>/dev/null | head -1')
   [[ "$result" == *"Bedrock"* ]]
