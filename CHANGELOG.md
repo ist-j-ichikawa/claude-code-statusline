@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.31.0] - 2026-06-17
+
+### Changed
+
+- Built against を Claude Code 2.1.179 に追従 (`/check-claude-code-update` で 2.1.175〜2.1.179 を分析、2.1.177 は欠番)。stdin JSON フィールドの変更はゼロのため `statusline-command.sh` のロジック変更はなし (docs のみ)。各リリースの statusline 影響評価: 2.1.175 (`enforceAvailableModels` 管理設定) はモデル許可リストの話で stdin スキーマ不変、2.1.176 の `footerLinksRegexes` は **Claude Code 組み込みフッター行**のリンクバッジ設定でカスタム statusline 出力とは別レイヤー (既存の `prUrlTemplate` PR badge と同じく住み分け済み)、同 2.1.176 の「`/cd`・worktree 移動後に前ディレクトリの git ブランチを報告するバグ」修正は Claude Code 側が stdin に渡す `workspace.current_dir` / git 情報が正しくなる方向の改善で追従不要、2.1.178 の「statusline リンクのカスタム URI スキーム (`vscode://` 等) が `claude agents` でクリックで開けるよう修正」は本スクリプトが OSC 8 を `file://` 固定にしている方針 (端末側の URI スキーム対応に依存しない) のため影響なし、2.1.179 は接続断・スクロール・sandbox 系のバグ修正で stdin 無関係。表示例の version 文字列も `v2.1.179` に同期 (issue #2 の `footerLinksRegexes` 住み分け検討の結論を含む)
+
 ## [1.30.0] - 2026-06-12
 
 ### Fixed
