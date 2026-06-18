@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.32.0] - 2026-06-18
+
+### Fixed
+
+- Line 2 のパス表示を `workspace.current_dir` に統一。従来は `${project_dir:-$current_dir}` で `workspace.project_dir`（Claude Code を起動した時点のディレクトリ）を優先していたため、`/cd` 後に古いパスを表示し、worktree セッションでは `worktree.path` 上書き（d618e5d の fix）を project_dir が打ち消して original repo のパスを出しうる問題があった。current_dir は worktree 上書き済み・Claude Code 2.1.176+ で `/cd` にも追従するので一貫して正しい。未使用になった `project_dir` の jq 抽出・初期化も削除（fork 最小化方針）
+
+### Changed
+
+- Built against を Claude Code 2.1.181 に追従（2.1.180 は欠番）。stdin JSON フィールドの変更はゼロでロジック改修不要。2.1.181 の注目点: fullscreen モードの URL オープンが Cmd+click（macOS）/ Ctrl+click 必須に変更（当スクリプトの OSC 8 リンクのクリック操作に関わる UX 変化だが出力は不変）、AWS `awsCredentialExport` 系の修正（Bedrock 認証まわりで、subscription 取得に使う Anthropic OAuth/Keychain とは別系統）— いずれも影響なし
+- 公式 docs 突き合わせで `hideVimModeIndicator` 設定（CHANGELOG 未掲載・docs のみ）を発見し対応。本スクリプトは `vim.mode` を Line 1 先頭で目立つバッジに自前描画するため、`settings.json` の `statusLine.hideVimModeIndicator: true` を推奨（組み込みの dim な `-- INSERT --` との二重表示を解消、自前バッジは残る）。README / CLAUDE.md に推奨を明記し、`/check-claude-code-update` skill に docs 突き合わせステップ（Step 2.5）を追加
+
 ## [1.31.0] - 2026-06-17
 
 ### Changed

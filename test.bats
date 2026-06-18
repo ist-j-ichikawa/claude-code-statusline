@@ -671,12 +671,15 @@ _wait_for_cache() {
 }
 
 # ============================================================================
-# サブディレクトリ削除 — →current_dirが表示されないこと
+# パス表示 — current_dir を表示し project_dir には依存しないこと
 # ============================================================================
-@test "サブディレクトリ: project_dirとcurrent_dirが異なっても→が表示されないこと" {
-  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp/sub","project_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+@test "パス表示: current_dirとproject_dirが異なるときcurrent_dirを表示すること" {
+  # /cd 後など current_dir != project_dir のとき、launch 時の project_dir ではなく
+  # 現在地 current_dir を表示する (v1.32.0 で project_dir 優先をやめた)
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"/tmp/moved-here","project_dir":"/tmp/launched-here"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
-  [[ "$result" != *"→"* ]]
+  [[ "$result" == *"/tmp/moved-here"* ]]
+  [[ "$result" != *"launched-here"* ]]
 }
 
 # ============================================================================

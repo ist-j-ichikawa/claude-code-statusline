@@ -153,7 +153,7 @@ format_reset_absolute() {
 IFS= read -r -d '' input || true
 
 # Initialize all jq variables — prevents set -u instant death if eval fails
-model="" model_id="" current_dir="." project_dir="" used_pct=""
+model="" model_id="" current_dir="." used_pct=""
 exceeds_200k="false" cc_version="" session_name=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
@@ -168,7 +168,6 @@ _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
   @sh "model_id=\(.model.id // "")",
   @sh "current_dir=\(.workspace.current_dir // ".")",
-  @sh "project_dir=\(.workspace.project_dir // "")",
   @sh "used_pct=\(.context_window.used_percentage // "")",
   @sh "exceeds_200k=\(.exceeds_200k_tokens // false)",
   @sh "cc_version=\(.version // "")",
@@ -423,7 +422,9 @@ fi
 line2=()
 
 # Directory path (full display — no truncation)
-_display_dir="${project_dir:-$current_dir}"
+# Always use current_dir: the worktree.path override (above) and Claude Code 2.1.176+ keep it
+# pointing at the live dir. Do NOT fall back to project_dir — it pins to the launch dir (see CHANGELOG 1.32.0).
+_display_dir="$current_dir"
 _short_dir="${_display_dir/#$HOME/~}"
 editor_url "$_display_dir" _editor_url
 osc8 "$_editor_url" "$_short_dir" _osc_tmp
