@@ -20,7 +20,16 @@ Verify: exit code must be 0, all lines render with correct colors, no raw `\033`
 
 ## Commits
 
-Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` のみ。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。ただし `test:` 単独コミット（前例: a42a5db, 1597416）と `docs:` 単独コミット（前例: c77ab7a, f394384, 9bff193）はバージョン bump も CHANGELOG エントリも付けない。
+Conventional Commits 厳守。実履歴で使用しているのは `feat:` / `fix:` / `refactor:` / `docs:` / `test:` / `ci:` のみ（`ci:` は release workflow 追加 8d9e793 で初使用）。`chore:` / `style:` / `perf:` 等は未使用。1 コミット = 1 マイナー版 ＋ CHANGELOG 1 エントリが原則（詳細は Gotchas の「CHANGELOG のバージョン分割ルール」参照）。ただし `test:` 単独コミット（前例: a42a5db, 1597416）と `docs:` / `ci:` 単独コミット（前例: c77ab7a, f394384, 9bff193, 8d9e793）はバージョン bump も CHANGELOG エントリも付けない。
+
+## Releases
+
+GitHub Release を CHANGELOG.md と併用する（public リポ。v1.33.0 時点で全 39 版を遡って作成済み）。`.github/workflows/release.yml` が `v*` タグの push を契機に CHANGELOG.md の該当バージョン節を抽出して Release を自動生成する（タグ名はシェル環境変数 `GITHUB_REF_NAME` 経由で参照、`${{ }}` テンプレート展開は使わない＝injection 対策）。
+
+- **bump 時の手順**: CHANGELOG 更新 → commit → `git push` → `git tag vX.Y.Z <bump コミット> && git push origin vX.Y.Z`。タグ push で workflow が発火し Release が立つ。**タグは CHANGELOG bump コミットに打つ**（README/docs 整理など bump なしの `docs:` / `ci:` 単独コミットには打たない）。
+- **workflow は HEAD に `release.yml` がある状態の commit を指すタグでのみ発火**する。v1.33.0 以前のタグは workflow 未搭載 commit を指すため発火せず、遡及時は手動 `gh release create vX.Y.Z --target <sha> --notes-file <CHANGELOG該当節>` で作成した。**自動発火の初回は v1.34.0 から**。
+- **1 コミットに複数版が同梱されることがある**（前例 `31ee8bd` = 1.22.0 + 1.23.0 を同時追加）。その場合は同一 commit に両タグを打ち、Release も版ごとに 2 つ作る。
+- CHANGELOG 節の抽出は `awk` で `## [X.Y.Z]` 見出しの次行から次の `## [` 手前まで（workflow と遡及スクリプトで共通ロジック）。
 
 ## Architecture
 
