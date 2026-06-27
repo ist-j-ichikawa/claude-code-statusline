@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.33.0] - 2026-06-27
+
+### Changed
+
+- Built against を Claude Code 2.1.195 に追従（`/check-claude-code-update` で 2.1.182〜2.1.195 を分析。掲載は 2.1.183 / .185 / .186 / .187 / .190 / .191 / .193 / .195、それ以外は欠番）。stdin JSON フィールド・モデル・プロバイダー・認証のいずれにも変更がなく `statusline-command.sh` のロジック改修はなし。各リリースの statusline 影響評価: 2.1.186 の「usage-based Enterprise/Team 契約者で session cost が表示されなかったのを修正」は Claude Code 側が `cost.total_cost_usd` を populate する範囲が広がる変更で、Line 4 のコスト表示が**より多くのユーザーで出る方向**（当スクリプトは既に `cost.total_cost_usd` を扱い `$0.00`／欠落は非表示にしているため改修不要）。その他（2.1.183 auto-mode の破壊的 git ブロック・`attribution.sessionUrl`・`/config` トグル挙動、2.1.185 stream-stall ヒント文言、2.1.187 `sandbox.credentials`・org モデル制限、2.1.191 `/rewind` の `/clear` 前再開・hook の comma 区切り matcher 修正、2.1.193 `autoMode.classifyAllShell`・OTel `assistant_response`、2.1.195 `CLAUDE_CODE_DISABLE_MOUSE_CLICKS`・hook matcher の exact-match 化・日本語等スペース無し言語の音声 auto-submit 修正）は全て UI／CLI／エージェント管理／hook／認証ポリシー系で stdin スキーマ・表示要素に無関係
+- 公式 docs 突き合わせ（Step 2.5）: `pr.review_state` の docs 記載 enum が `approved` / `pending` / `changes_requested` / `draft` に更新（旧記載の `commented` は脱落）。当スクリプトの `pr_state_color()` は `approved`=緑／`changes_requested`=赤／`pending`=黄、それ以外を `*)` デフォルトで dim にフォールバックするため `draft` も無破壊で dim 表示（改修不要）。新規 stdin フィールド・新規 `statusLine` 設定オプション（`type` / `command` / `padding` / `refreshInterval` / `hideVimModeIndicator`）の取りこぼしもなし
+
 ## [1.32.0] - 2026-06-18
 
 ### Fixed

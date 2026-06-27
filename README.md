@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.32.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.181-purple)
+![Version](https://img.shields.io/badge/version-1.33.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.195-purple)
 
 ## Overview
 
@@ -24,7 +24,7 @@ Line 4: 5hレート制限 + コンテキストバー + weeklyレート制限 + �
 ### 表示例
 
 ```
-Anthropic(enterprise)  Fable 5 (1M context)  high  think  v2.1.181
+Anthropic(enterprise)  Fable 5 (1M context)  high  think  v2.1.195
 ~/dev/my-project  🌲 from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  from:main  A3 M2 ?1 ↑2 1h fix: update logic..
 ⣿⣀    16%  2:20  ⣿⣿⣄   48%  week:9%  金 12:00  $4.83
