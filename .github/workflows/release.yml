@@ -1,0 +1,44 @@
+name: Release
+
+# v* タグの push をトリガーに、CHANGELOG.md の該当バージョン節を本文にして
+# GitHub Release を自動生成する。タグは CHANGELOG bump コミットに対して打つ。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # "## [X.Y.Z]" 見出しの次行から、次の "## [" 見出しの手前までを本文として抽出
+          awk -v ver="$VERSION" '
+            $0 ~ ("^## \\[" ver "\\]") { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          # 前後の空行を除いて中身があるか確認
+          if [ -z "$(tr -d '[:space:]' < release-notes.md)" ]; then
+            echo "::error::No CHANGELOG.md entry found for version ${VERSION}"
+            exit 1
+          fi
+          echo "Release notes for ${TAG}:"
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md
