@@ -20,9 +20,9 @@ statusline-command.sh
 ├── Subscription     fetch_subscription() — Keychain からサブスクリプション種別を取得（バックグラウンドキャッシュ）
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — ブランチ、dirty state、ahead/behind、last commit (age + msg)（5秒バックグラウンドキャッシュ、atomic mv 書き込み）
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=スチールブルー, Opus=コーラル, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree + from:branch + added_dirs (+N dirs)
-├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + from:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
+├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ) + セッションコスト ($、dim)
 └── Output           printf で各行を出力
 ```
@@ -34,8 +34,9 @@ statusline-command.sh
 | vim mode `INSERT` | 黒文字 / ライムグリーン bg (bold) | 1;30;48;5;148 |
 | vim mode `VISUAL` / `V-LINE` | 黒文字 / ゴールド bg (bold) | 1;30;48;5;214 |
 | コンテキスト使用率 | < 80% lime green / 80-89% 黄 / >= 90% 赤 | 38;5;82 / 33 / 31 |
-| Fable | スチールブルー | 38;5;74 |
-| Opus | コーラル | 38;5;209 |
+| Fable | 多色・蝶標本 (文字ごとに循環) | `rainbow()` 178/172/130/167/143/107/66 |
+| Opus | コーラル (artwork実測) | 38;5;173 |
+| Sonnet 5 | 緑グラデーション (文字ごとにスイープ) | `gradient()` 28→154 |
 | Sonnet 4.6 | ティール | 38;5;79 |
 | Sonnet 4.5 / 3.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
@@ -53,7 +54,7 @@ statusline-command.sh
 | Git modified `M` | 黄 | 33 |
 | Git untracked `?` | グレー | 38;5;248 |
 | Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
-| last commit (age + msg)、worktree from、Git branch parent (`from:`)、Git origin (`gh:owner/repo`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
+| last commit (age + msg)、worktree from、Git branch parent (`base:`)、Git origin (`gh:owner/repo`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
 
 ## パフォーマンス
 

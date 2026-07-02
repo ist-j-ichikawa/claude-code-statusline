@@ -10,7 +10,7 @@ setup() {
   export DIM=$'\033[2m'
   export GIT=$'\033[38;5;202m'
   export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
-  export CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m' FABLE=$'\033[38;5;74m'
+  export CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
   export AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
   export _NOW=$(date +%s)
   eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
@@ -134,7 +134,7 @@ _wait_for_cache() {
 @test "モデル色: Opusがコーラルで表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;209"*"Opus 4.6"* ]]
+  [[ "$result" == *"38;5;173"*"Opus 4.6"* ]]
 }
 
 @test "モデル色: Sonnet 4.6がティールで表示されること" {
@@ -149,22 +149,39 @@ _wait_for_cache() {
   [[ "$result" == *"38;5;214"*"Sonnet 4.5"* ]]
 }
 
+@test "モデル色: Sonnet 5が緑グラデーション(文字ごとに色が変わる)で表示されること" {
+  result=$(echo '{"model":{"id":"claude-sonnet-5","display_name":"Sonnet 5"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  # 緑パレットを1回スイープ: 先頭 28(濃緑) → 末尾 154(黄緑)
+  [[ "$result" == *"38;5;28mS"* ]]
+  [[ "$result" == *"38;5;154m5"* ]]
+}
+
+@test "モデル色: Sonnet 5判定が Sonnet 4.5 に誤マッチしないこと" {
+  result=$(echo '{"model":{"id":"claude-sonnet-4-5","display_name":"Sonnet 4.5"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  # amber フラットのままで、グラデーション(28)にならないこと
+  [[ "$result" == *"38;5;214"*"Sonnet 4.5"* ]]
+  [[ "$result" != *"38;5;28m"* ]]
+}
+
 @test "モデル色: Haikuがラベンダーで表示されること" {
   result=$(echo '{"model":{"id":"claude-haiku-4-5","display_name":"Haiku 4.5"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" == *"38;5;183"*"Haiku 4.5"* ]]
 }
 
-@test "モデル色: Fableがスチールブルーで表示されること" {
-  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.170","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+@test "モデル色: Fableが蝶標本パレット(文字ごとに色が変わる)で表示されること" {
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;74"*"Fable 5"* ]]
+  # 各文字が蝶標本パレットで着色される: F=178, a=172, b=130 ...
+  [[ "$result" == *"38;5;178mF"*"38;5;172ma"*"38;5;130mb"* ]]
 }
 
 @test "モデル色: 大文字混在のdisplay_nameでも正しい色になること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"OPUS 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;209"*"OPUS 4.6"* ]]
+  [[ "$result" == *"38;5;173"*"OPUS 4.6"* ]]
 }
 
 @test "モデル色: nocasematchがスクリプト外に漏れないこと" {
@@ -605,13 +622,13 @@ _wait_for_cache() {
 @test "モデル色: Opus 4.7がコーラルで表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.112","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;209"*"Opus 4.7"* ]]
+  [[ "$result" == *"38;5;173"*"Opus 4.7"* ]]
 }
 
 @test "モデル色: Opus 4.7 (1M context) でもコーラルで表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-7[1m]","display_name":"Opus 4.7 (1M context)"},"version":"2.1.112","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;209"*"Opus 4.7 (1M context)"* ]]
+  [[ "$result" == *"38;5;173"*"Opus 4.7 (1M context)"* ]]
 }
 
 # ============================================================================

@@ -9,7 +9,7 @@ readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
-readonly CORAL=$'\033[38;5;209m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m' FABLE=$'\033[38;5;74m'
+readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
@@ -29,6 +29,32 @@ osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 
 # editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
 editor_url() { printf -v "$2" 'file://%s' "$1"; }
+
+# rainbow VARNAME TEXT — sets VARNAME to TEXT with each char cycling through a
+# multi-color palette (no subshell). Used for Fable: no official brand color, so the
+# palette is sampled from its announcement artwork (a vintage butterfly-specimen plate)
+# — a warm gold→rust→red→olive→green→teal cycle — to make it recognizable on Line 1.
+rainbow() {
+  local _txt="$2" _out="" _i _len=${#2}
+  local _pal=(178 172 130 167 143 107 66) _n=7
+  for ((_i=0; _i<_len; _i++)); do
+    _out+=$'\033[38;5;'"${_pal[_i % _n]}"'m'"${_txt:_i:1}"
+  done
+  printf -v "$1" '%s%s' "$_out" "$RST"
+}
+
+# gradient VARNAME TEXT — sets VARNAME to TEXT with a single sweep across a green
+# palette (no subshell). Sonnet 5: no official brand color, so a green gradient
+# (from its botanical announcement artwork) distinguishes it from Sonnet 4.6's flat teal.
+gradient() {
+  local _txt="$2" _out="" _i _len=${#2}
+  local _pal=(28 34 70 106 148 154) _n=6 _idx
+  for ((_i=0; _i<_len; _i++)); do
+    _idx=$(( _len > 1 ? _i * (_n - 1) / (_len - 1) : 0 ))
+    _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
+  done
+  printf -v "$1" '%s%s' "$_out" "$RST"
+}
 
 # pr_state_color STATE VARNAME — sets VARNAME to ANSI color for PR review state (no subshell)
 pr_state_color() {
@@ -265,7 +291,7 @@ build_git() {
       from_ref="${last_reflog##*: branch: Created from }"
     fi
     if [[ -n "$from_ref" && "$from_ref" != "HEAD" ]]; then
-      text+=" ${DIM}from:${from_ref}${RST}"
+      text+=" ${DIM}base:${from_ref}${RST}"
     fi
   fi
 
@@ -371,9 +397,13 @@ case "$provider" in
 esac
 
 if [[ "$model_show" == *fable* ]]; then
-  line1+=("${FABLE}${model_show}${RST}")
+  rainbow _model_rainbow "$model_show"
+  line1+=("$_model_rainbow")
 elif [[ "$model_show" == *opus* ]]; then
   line1+=("${CORAL}${model_show}${RST}")
+elif [[ "$model_show" == *"sonnet 5"* || "$model_show" == *"sonnet-5"* ]]; then
+  gradient _model_gradient "$model_show"
+  line1+=("$_model_gradient")
 elif [[ "$model_show" == *sonnet*4.5* || "$model_show" == *sonnet*3.5* ]]; then
   line1+=("${AMBER}${model_show}${RST}")
 elif [[ "$model_show" == *sonnet* ]]; then

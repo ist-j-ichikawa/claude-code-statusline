@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.35.0] - 2026-07-02
+
+### Added
+
+- 公式ブランド色が未発表のモデルを、発表アートワークからサンプリングした色で一目識別する `rainbow()` / `gradient()` ヘルパーを追加（`display_name` を 1 文字ずつ着色、`$(...)` フォークゼロの bash builtin・bash 3.2 互換）
+  - **Fable**（Mythos-class）を多色化。従来のスチールブルー単色（`38;5;74`、暫定色）を廃し、発表アートワーク（ヴィンテージの蝶標本プレート）の実測色を 1 文字ずつ循環させる `rainbow()` に変更。パレットは実アートワークの色分布（暖色主体・青はほぼ皆無）に忠実な gold→amber→rust→red→olive→green→teal の 7 色（`178`/`172`/`130`/`167`/`143`/`107`/`66`）
+  - **Sonnet 5**（Claude Code 2.1.197 で追加、`claude-sonnet-5`）を緑グラデーション化。従来は generic `*sonnet*` フォールバックで Sonnet 4.6 と同じ flat teal だったが、発表アートワークの植物モチーフ由来の緑パレット（`28`→`154`）を文字列全体で 1 回スイープする `gradient()` で 4.6 と差別化。判定は `*"sonnet 5"*` / `*"sonnet-5"*`（`*sonnet*5*` は "Sonnet 4.5" にも誤マッチするため不使用）で行い、generic `*sonnet*`（=4.6 teal）より前段に配置。両モデルとも claude.ai に公式色が現れたら flat 単色へ追従する
+
+### Changed
+
+- Opus のモデル色を coral `38;5;209`（鮮やか）→ `38;5;173`（発表アートワーク実測の粘土コーラル）に変更。全モデル色を公式アートワーク基準で見直した結果、Opus 4.x のアートワークは 4.x 世代で唯一 artwork 由来の色（コーラル 46.5%）を持つため実測に忠実な 173 へ寄せた。Sonnet 4.6（teal）/ 4.5・3.5（amber）/ Haiku（lavender）は 4.x 共通の黒線画＋coral 背景テンプレで固有色が無く、識別用の非 artwork 色として現状維持
+- Built against を Claude Code 2.1.198 に追従（`/check-claude-code-update` で `01f1617`〜2.1.198 を分析。新規版は 2.1.196 / .197 / .198）。上記 Sonnet 5 のモデル色対応以外に statusline へ影響する stdin JSON フィールド・設定変更はなし。各版の評価: 2.1.196（`/model` の org/role default 表示・起動時の可読な auto session 名・`claude mcp list/get` が self-approve MCP を起動しない修正・Bedrock `/context` 0-token 修正・`prompt_id` フィールド追加）／2.1.197（Sonnet 5 導入・default 化・native 1M context window）／2.1.198（Claude-in-Chrome GA・background-agent の `Notification` hook・`/dataviz` skill・Claude Platform on AWS `anthropicAws`）は、Sonnet 5 のモデル色を除き UI／CLI／エージェント管理／hook 系で表示要素に無関係。新規 `prompt_id`（2.1.196、現行プロンプトの UUID）も非表示要素
+
+## [1.34.0] - 2026-07-02
+
+### Changed
+
+- Line 3（git info）の「切った元ブランチ」ラベルを `from:<parent>` → `base:<parent>` に変更。Line 2 の worktree インジケータ `from:original_branch`（セッションを開始したときに乗っていた元ブランチ）と同じ `from:` 語を使っていたため、隣接する Line 2 / Line 3 で意味の異なる 2 つの `from:` が並び、値が食い違うケース（元ブランチ ≠ git の分岐元）で「どちらが本当の分岐元か」が紛らわしかった。git の実際の分岐元（reflog `branch: Created from` パース）を `base:` に改称し、語で役割を分離した（Line 2 `from:` = セッションの出所 ／ Line 3 `base:` = git ブランチの土台）。reflog パース・表示ゲート条件は不変でラベル文字列のみの変更。README / docs/internals.md / CLAUDE.md も追従
+
 ## [1.33.0] - 2026-06-27
 
 ### Changed
