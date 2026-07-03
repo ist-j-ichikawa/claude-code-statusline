@@ -23,7 +23,7 @@ statusline-command.sh
 ├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree + from:branch + added_dirs (+N dirs)
 ├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
-├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ) + セッションコスト ($、dim)
+├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッションコスト ($、dim)
 └── Output           printf で各行を出力
 ```
 
@@ -41,6 +41,7 @@ statusline-command.sh
 | Sonnet 4.5 / 3.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
 | Anthropic / 5hレート制限 | サンドベージュ | 38;5;180 |
+| extra-usage 実課金額 | gold | 38;5;220 |
 | Bedrock | ティールグリーン | 38;5;72 |
 | Vertex | Google ブルー | 38;5;33 |
 | Foundry | Azure ブルー | 38;5;39 |
@@ -68,11 +69,17 @@ statusline-command.sh
 
 **Anthropic** (rate_limits が届く場合)
 - Claude Code 2.1.80+ の stdin JSON `rate_limits` フィールドから直接取得
-- 表示: 5hバー + % + リセット残(H:MM) → コンテキストバー + % → week:% + リセット曜日時刻 → セッションコスト
+- 表示: 5hバー + % + リセット残(H:MM) → コンテキストバー + % → week:% + リセット曜日時刻 → extra-usage実課金 → セッションコスト
 - Pre-2.1.80 ではレート制限部分が非表示（graceful degradation）
 
 **Bedrock / Vertex AI / Foundry**
-- `rate_limits` フィールドは届かないため、コンテキストバーとコストのみ表示
+- `rate_limits` フィールドは届かないため、コンテキストバーとコストのみ表示（extra-usage も Anthropic 限定なので非表示）
+
+**extra-usage 実課金** (`extra:$X.XX`、gold `38;5;220`、Anthropic のみ)
+- `fetch_usage_spend()` が `/usage` OAuth エンドポイント (`api.anthropic.com/api/oauth/usage`) の `spend.used` を取得 — **stdin に無い唯一の課金情報**で、usage-credits の実消費額（参考値の session cost と別物）
+- **このスクリプト唯一のネットワーク呼び出し**。背景 subshell + 300s キャッシュで hot path をブロックしない。OAuth トークンは `curl --config -` で argv 非露出
+- Fable は 7/7 以降 extra-usage 課金に移行するため「実際に溶けた額」を出す実益が大きい
+- データ無し / 取得失敗 / `$0.00` は非表示。`CLAUDE_STATUSLINE_NO_NET=1` で fetch 自体を無効化（オフライン / プライバシー）。エンドポイントは非公式なので変わりうる前提の graceful degradation
 
 **セッションコスト** (`$X.XX`、dim、最右)
 - stdin JSON `cost.total_cost_usd` をそのまま表示。Claude Code がキャッシュ区分 (cache read/write) 込みで計算済みの API 換算額

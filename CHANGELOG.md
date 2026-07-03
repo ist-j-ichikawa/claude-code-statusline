@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.36.0] - 2026-07-03
+
+### Added
+
+- Line 4 に **extra-usage（usage-credits）の実課金額** を `extra:$X.XX`（gold `SPEND`=`38;5;220`、非ブランド）で表示。weekly レート制限と session cost の間に配置。session cost が全モデル合算の *参考値*（subscription では実請求なし）なのに対し、extra-usage は account の *実 credits 消費額* で **stdin JSON に無い唯一の課金情報**。Fable が 2026-07-07 以降 extra-usage 課金に移行するため「実際に溶けた額」を出す実益が大きい
+- 取得用に `fetch_usage_spend()` を追加 — `/usage` OAuth エンドポイント（`api.anthropic.com/api/oauth/usage`、header `anthropic-beta: oauth-2025-04-20`）の `spend.used.amount_minor`/`exponent` を jq で cents に正規化して受ける（bash float 演算を回避）。**本スクリプト初のネットワーク呼び出し**だが、`fetch_subscription()` と同じく背景 subshell（`& disown`）+ 300s キャッシュ（`USAGE_CACHE`、atomic `.tmp`+`mv`）で hot path をブロックしない。OAuth トークンは `curl --config -` で stdin 経由に渡し argv/`ps` 露出を防ぐ。**Anthropic provider のみ**（Bedrock/Vertex/Foundry では fetch も表示もしない）
+- `CLAUDE_STATUSLINE_NO_NET=1` でネットワーク取得を無効化できる（オフライン/プライバシー用途、およびテストの決定性 seam）。データ無し/取得失敗/`$0.00`/旧 Claude Code は非表示（graceful degradation）。エンドポイントは非公式（statusline docs 未記載）のため変わりうる前提
+
 ## [1.35.0] - 2026-07-02
 
 ### Added

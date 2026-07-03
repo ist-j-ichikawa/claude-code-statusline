@@ -12,6 +12,7 @@ readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
+readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) 実課金額 — gold, 非ブランド
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
 # Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
 readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
@@ -151,6 +152,37 @@ fetch_subscription() {
     ) & disown
   fi
   [[ -f "$SUB_CACHE" ]] && _sub_type=$(<"$SUB_CACHE") || _sub_type=""
+}
+
+# --- Extra-usage spend (usage-credits, cached, background refresh) ---
+# stdin に無い唯一の課金情報。/usage OAuth エンドポイントの spend.used を cents で取得。
+# `CLAUDE_STATUSLINE_NO_NET` を設定するとネットワーク取得を止める (オフライン/プライバシー用)。
+readonly USAGE_CACHE="${CACHE_BASE}/usage_spend"
+readonly USAGE_CACHE_MAX_AGE=300
+
+# fetch_usage_spend — sets _usage_cents (background curl; hot path はキャッシュ読みのみ)
+fetch_usage_spend() {
+  _usage_cents=""
+  [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
+  if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; then
+    (
+      local blob token out cents=0
+      blob=$(get_credentials_blob)
+      token=$(jq -r '.claudeAiOauth.accessToken // empty' <<< "$blob" 2>/dev/null)
+      if [[ -n "$token" ]]; then
+        # トークンは --config 経由 stdin で渡す (argv/ps 露出を防ぐ)
+        out=$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" \
+          | curl -s -m 4 --config - https://api.anthropic.com/api/oauth/usage 2>/dev/null)
+        cents=$(jq -r '(.spend.used // {}) | ((.amount_minor // 0) / pow(10; (.exponent // 2) - 2)) | round' <<< "$out" 2>/dev/null)
+        [[ "$cents" =~ ^[0-9]+$ ]] || cents=0
+      fi
+      # spend 0 / トークン無し / 取得失敗でも「0」を必ず atomic に書く。書かないと
+      # cache_stale が (ファイル不在=stale で) 毎レンダー refetch して curl storm になる
+      # (extra-usage 0 のユーザーが大多数なので致命的)。display は 0 を非表示にするので実害なし。
+      echo "$cents" > "${USAGE_CACHE}.tmp" && mv "${USAGE_CACHE}.tmp" "$USAGE_CACHE"
+    ) & disown
+  fi
+  [[ -f "$USAGE_CACHE" ]] && _usage_cents=$(<"$USAGE_CACHE")
 }
 
 # format_reset_remaining EPOCH — sets _reset (no subshell)
@@ -561,6 +593,16 @@ if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)); then
   format_reset_absolute "$seven_reset_epoch"
   line3+=("${DIM}week:${seven_pct}%${RST}")
   [[ -n "$_reset" ]] && line3+=("${DIM}${_reset}${RST}")
+fi
+
+# Extra-usage spend (usage-credits, Anthropic only) — 実課金額。stdin に無いので /usage を背景取得。
+# weekly の後・session cost の前に置き、参考値の session cost とは別に「実際に溶けた額」を示す。
+if [[ -z "$provider" ]]; then
+  fetch_usage_spend
+  if [[ "$_usage_cents" =~ ^[0-9]+$ ]] && ((_usage_cents > 0)); then
+    printf -v _xtra 'extra:$%d.%02d' $((_usage_cents / 100)) $((_usage_cents % 100))
+    line3+=("${SPEND}${_xtra}${RST}")
+  fi
 fi
 
 # Session cost (全プロバイダー共通。Claude Code 計算済みの API 換算 USD; subscription では実請求なしの参考値)

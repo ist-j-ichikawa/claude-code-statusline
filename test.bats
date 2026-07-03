@@ -13,6 +13,9 @@ setup() {
   export CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
   export AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
   export _NOW=$(date +%s)
+  # extra-usage の背景 curl を止めてテストを決定的にし、共有キャッシュ汚染も掃除する
+  export CLAUDE_STATUSLINE_NO_NET=1
+  rm -f /tmp/ist-j-ichikawa-claude-statusline/usage_spend 2>/dev/null || true
   eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
 }
 
@@ -294,6 +297,31 @@ _wait_for_cache() {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '4p')
   [[ "$result" != *'$'* ]]
+}
+
+@test "Line4: extra-usage キャッシュがあると extra:\$X.XX が表示されること" {
+  mkdir -p /tmp/ist-j-ichikawa-claude-statusline
+  echo 214 > /tmp/ist-j-ichikawa-claude-statusline/usage_spend
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  rm -f /tmp/ist-j-ichikawa-claude-statusline/usage_spend
+  [[ "$result" == *'extra:$2.14'* ]]
+}
+
+@test "Line4: extra-usage データがないとき extra: が表示されないこと" {
+  # setup() で usage_spend は削除済み・NO_NET で fetch も走らない
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  [[ "$result" != *'extra:'* ]]
+}
+
+@test "Line4: Bedrockでは extra-usage を取得も表示もしないこと" {
+  mkdir -p /tmp/ist-j-ichikawa-claude-statusline
+  echo 500 > /tmp/ist-j-ichikawa-claude-statusline/usage_spend
+  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '4p')
+  rm -f /tmp/ist-j-ichikawa-claude-statusline/usage_spend
+  [[ "$result" != *'extra:'* ]]
 }
 
 @test "Line4: Anthropicでレートリミットが表示されること" {
