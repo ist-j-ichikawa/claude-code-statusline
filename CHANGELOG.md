@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.37.0] - 2026-07-03
+
+### Changed
+
+- Built against を Claude Code 2.1.200 に追従（`/check-claude-code-update` で `75709ea`〜2.1.200 を分析。新規版は 2.1.199 / .200）。**statusline に影響する stdin JSON フィールド・`statusLine` 設定・モデル・プロバイダー・認証の変更はゼロ**でロジック改修なし。2.1.199（skill stacking・SSL/429 リトライ・background daemon 修正多数・subagent の partial 返却・hook stderr 表示・`claude agents` の PR リンクを bare `#N` 化）／2.1.200（permission mode の "Manual" 化・`AskUserQuestion` の auto-continue 廃止・MCP config crash 修正・tmux 3.4+ の synchronized output・screen-reader 改善）は全て UI／CLI／エージェント管理／hook／a11y 系で表示要素に無関係。`claude agents` の PR リンク変更は agents ビュー行の話で、当スクリプトの `pr.review_state`（Line 3）とは別レイヤー
+- 公式 docs 突き合わせ（Step 2.5）: statusline の stdin フィールド一覧を当スクリプトの jq 抽出と全照合し、依存フィールドの削除・リネームなし／新規 `statusLine` 設定なしを確認。参考: `cost.total_lines_added`/`cost.total_lines_removed`（コード行増減）が stdin に存在する（没にした git 行差分は git 呼び出し不要で stdin から取れる）が、ミニマル方針で不採用のまま
+
 ## [1.36.0] - 2026-07-03
 
 ### Added
