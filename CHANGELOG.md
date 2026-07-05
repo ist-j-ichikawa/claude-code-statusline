@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.38.0] - 2026-07-03
+
+### Changed
+
+- Built against を Claude Code 2.1.201 に追従（`/check-claude-code-update` で `1322e9b`〜2.1.201 を分析）。新規は 2.1.201 の1件のみ「Claude Sonnet 5 セッションが harness reminder に mid-conversation system role を使わなくなった」で、Claude Code 内部のプロンプト注入方式の変更。stdin JSON フィールド・モデル・プロバイダー・認証・`statusLine` 設定のいずれにも無関係で **statusline 影響ゼロ・ロジック改修なし**
+
 ## [1.37.0] - 2026-07-03
 
 ### Changed
