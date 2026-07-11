@@ -13,6 +13,7 @@ readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' L
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) 実課金額 — gold, 非ブランド
+readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
 # Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
 readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
@@ -63,6 +64,7 @@ pr_state_color() {
     approved)          printf -v "$2" '%s' "$GRN" ;;
     changes_requested) printf -v "$2" '%s' "$RED" ;;
     pending)           printf -v "$2" '%s' "$YLW" ;;
+    draft)             printf -v "$2" '%s' "$DRAFT" ;;
     *)                 printf -v "$2" '%s' "$DIM" ;;
   esac
 }

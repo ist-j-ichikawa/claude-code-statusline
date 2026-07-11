@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.39.0] - 2026-07-12
+
+### Changed
+
+- Line 3 の PR review_state で `draft` を専用のニュートラルグレー（`DRAFT`=`38;5;245`）で表示するようにした。従来は明示 case が無く `pending`(黄) 以外の未知値と同じ dim にフォールバックしていたが、draft PR（レビュー依頼前の下書き）を `pending`（レビュー待ち）や未知値と色で区別できるようにした。`approved`=緑/`changes_requested`=赤/`pending`=黄/`draft`=グレー/他（`commented` 等）=dim。色は GitHub の draft バッジのニュートラルグレーに準拠する非ブランド識別色で、公式色が現れれば追従する。1.38.0 の docs 突き合わせで `pr.review_state` の docs enum が `approved`/`pending`/`changes_requested`/`draft` に更新され `draft` が dim フォールバック中と記録した件への対応。bats に draft=グレー のケースを追加
+
 ## [1.38.0] - 2026-07-03
 
 ### Changed

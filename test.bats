@@ -481,6 +481,14 @@ _wait_for_cache() {
   [[ "$result" == *$'\033[33m'"pending"* ]]
 }
 
+@test "PR: pr.review_state=draftでグレー(38;5;245)のテキストが表示されること" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"pr":{"number":1234,"review_state":"draft"},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *$'\033[38;5;245m'"draft"* ]]
+}
+
 @test "PR: pr.review_stateが空の場合は何も表示しないこと" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null

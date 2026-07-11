@@ -55,6 +55,7 @@ statusline-command.sh
 | Git modified `M` | 黄 | 33 |
 | Git untracked `?` | グレー | 38;5;248 |
 | Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
+| PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
 | last commit (age + msg)、worktree from、Git branch parent (`base:`)、Git origin (`gh:owner/repo`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
 
 ## パフォーマンス
