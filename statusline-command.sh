@@ -525,8 +525,9 @@ if [[ -n "$_is_wt" ]]; then
   else
     line2+=("🌲")
   fi
-  # from:HEAD（匿名 HEAD から作成）は情報ゼロなので非表示 — Line 3 の base:HEAD 抑止と同じ扱い
-  if has_val "$wt_orig_branch" && [[ "$wt_orig_branch" != "HEAD" ]]; then
+  # from:HEAD (detached HEAD から作成) も「detached から切った」事実を示すので表示する
+  # (Line 3 base: が reflog GC 等で欠けた時の唯一の切り元シグナルになりうる)
+  if has_val "$wt_orig_branch"; then
     line2+=("${DIM}from:${wt_orig_branch}${RST}")
   fi
 fi

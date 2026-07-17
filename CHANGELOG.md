@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.42.0] - 2026-07-17
+
+### Changed
+
+- **Line 2: `from:HEAD` を再表示（1.41.0 の抑止を撤回）**。1.41.0 で「detached HEAD から作成した worktree の `from:HEAD` は情報ゼロ」として非表示にしたが、「detached から切った」事実自体がシグナルであり、Line 3 の `base:`（切った元ブランチ）が reflog の GC で欠けた場合には唯一の切り元情報になりうる。ユーザー判断で `HEAD` の特別扱いをやめ、`worktree.original_branch` があれば値によらず `from:<branch>` を表示する方針に戻した（`from:main` 等の実ブランチ名は 1.41.0 でも表示されていたので、変わるのは `from:HEAD` の 1 ケースのみ）。Line 2 のパス分割・Line 3 の `gh:owner/repo` 通常輝度化・detached cold-start フリッカー修正（すべて 1.41.0）はそのまま維持。bats の該当ケースを「非表示」から「表示」に反転
+
 ## [1.41.0] - 2026-07-17
 
 ### Changed

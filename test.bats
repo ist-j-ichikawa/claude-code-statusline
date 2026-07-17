@@ -657,11 +657,11 @@ _wait_for_cache() {
   [[ "$result" == *"from:main"* ]]
 }
 
-@test "Worktree: original_branchがHEADのときfrom:が表示されないこと" {
+@test "Worktree: original_branchがHEAD(detached)でもfrom:HEADを表示すること" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"wt","original_branch":"HEAD"}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '2p')
   [[ "$result" == *"🌲"* ]]
-  [[ "$result" != *"from:"* ]]
+  [[ "$result" == *"from:HEAD"* ]]
 }
 
 @test "Worktree: worktree配下のサブディレクトリでは分割せずフルパス表示されること" {
