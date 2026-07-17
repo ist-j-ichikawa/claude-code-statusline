@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.40.0] - 2026-07-17
+
+### Changed
+
+- Built against を Claude Code 2.1.212 に追従（`/check-claude-code-update` で `d4d8fbb`〜2.1.212 = 2.1.208〜2.1.212 の 5 版を分析）。**stdin JSON フィールド・`statusLine` 設定・モデル・プロバイダー・認証への破壊的変更はゼロ**でロジック改修なし。表示に好影響の Claude Code 側修正が 2 件: 2.1.211「`/clear` が session cost をリセットしない問題の修正」（Line 4 のセッションコストが `/clear` 後に $0 から正しく再スタート。docs の `cost.total_cost_usd` にも min-version 注記が追加）、2.1.208「CLI 自動更新後に context window size が一時的に 200k へリセットされ 100% 使用と誤表示される問題の修正」（Line 4 のコンテキストバーの誤表示が減る方向）
+- 2.1.212 で `/fork` が「会話を background session へコピーする」別機能として復活（従来の in-session subagent 起動は `/subtask` に改名）。新 `/fork` のコピーはプロンプト由来の名前が付く仕様で、session_name への `(Fork)` マーカー付与は確認されていない。`(Fork)` 検出は旧セッション互換のため残置 — マーカーが付かない場合は黄色 `branch` 表示が出ないだけで実害なし（graceful degradation）
+- 公式 docs 突き合わせ（Step 2.5）: statusline の stdin フィールド一覧を jq 抽出と全照合し、依存フィールドの削除・リネームなしを確認。新発見: `subagentStatusLine` 設定（CHANGELOG 非掲載・docs のみ。per-task `model`/`contextWindowSize` は 2.1.205+）— agent panel のサブエージェント行を独自描画する別系統の statusline で、本スクリプトとは独立した別コマンドが必要。未採用（採用可否は別途検討）
+
 ## [1.39.0] - 2026-07-12
 
 ### Changed
