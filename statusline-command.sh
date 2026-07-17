@@ -301,8 +301,9 @@ build_git() {
       [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
     fi
 
-    # Origin identifier (dim, before branch) — "GitHub に上げたっけ" の即答用
-    [[ -n "$repo_id" ]] && text+="${DIM}gh:${repo_id}${RST} "
+    # Origin identifier (before branch) — repo 識別の一次情報。ローカル dir 名と origin repo 名が
+    # 食い違うケースはここでしか判別できないため owner/repo は通常輝度、gh: プレフィックスのみ dim。
+    [[ -n "$repo_id" ]] && text+="${DIM}gh:${RST}${repo_id} "
 
     # GitHub tree URL — PR は Claude Code 組み込みフッターの PR badge に任せ、ここは tree URL のみ
     [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
@@ -490,15 +491,42 @@ line2=()
 # pointing at the live dir. Do NOT fall back to project_dir — it pins to the launch dir (see CHANGELOG 1.32.0).
 _display_dir="$current_dir"
 _short_dir="${_display_dir/#$HOME/~}"
-editor_url "$_display_dir" _editor_url
-osc8 "$_editor_url" "$_short_dir" _osc_tmp
+
+# Worktree path split: `<repo>/.claude/worktrees/<name>` はパス末尾がランダムな worktree 名になり
+# リポ dir が中程に埋まって「どこの repo か」が読めないため、リポ root と 🌲<name> に分割表示する
+# （リンクは root / worktree 各ディレクトリへ）。worktree 内サブディレクトリや既定外配置では
+# marker 不一致で分割せずフルパス表示に fallback する。
+_wt_marker="/.claude/worktrees/"
+_is_wt=""
+if has_val "$wt_name" || has_val "$ws_git_worktree"; then _is_wt=1; fi
+_wt_leaf=""
+# `?*` = marker より前に 1 文字以上 — リポが / 直下の極端ケースで root が空になり空リンク要素が出るのを防ぐ
+if [[ -n "$_is_wt" && "$_short_dir" == ?*"$_wt_marker"* ]]; then
+  _wt_leaf="${_short_dir##*"$_wt_marker"}"
+  [[ -z "$_wt_leaf" || "$_wt_leaf" == */* ]] && _wt_leaf=""
+fi
+
+if [[ -n "$_wt_leaf" ]]; then
+  editor_url "${_display_dir%"$_wt_marker"*}" _editor_url
+  osc8 "$_editor_url" "${_short_dir%"$_wt_marker"*}" _osc_tmp
+else
+  editor_url "$_display_dir" _editor_url
+  osc8 "$_editor_url" "$_short_dir" _osc_tmp
+fi
 line2+=("$_osc_tmp")
 
 # Worktree indicator: Claude Code worktree (wt_name) or git linked worktree (ws_git_worktree, Claude Code 2.1.97+)
 # Placed adjacent to the path since it qualifies what the path *is*.
-if has_val "$wt_name" || has_val "$ws_git_worktree"; then
-  line2+=("🌲")
-  if has_val "$wt_orig_branch"; then
+if [[ -n "$_is_wt" ]]; then
+  if [[ -n "$_wt_leaf" ]]; then
+    editor_url "$_display_dir" _editor_url
+    osc8 "$_editor_url" "$_wt_leaf" _osc_tmp
+    line2+=("🌲${DIM}${_osc_tmp}${RST}")
+  else
+    line2+=("🌲")
+  fi
+  # from:HEAD（匿名 HEAD から作成）は情報ゼロなので非表示 — Line 3 の base:HEAD 抑止と同じ扱い
+  if has_val "$wt_orig_branch" && [[ "$wt_orig_branch" != "HEAD" ]]; then
     line2+=("${DIM}from:${wt_orig_branch}${RST}")
   fi
 fi
@@ -547,7 +575,9 @@ else
       _head=$(<"$_head_file")
       # Cold-start emits a stdin-only subset of build_git's layout, in the same left-to-right order
       # (gh: → branch → PR state). build_git wins once the 5s background cache populates.
-      [[ -n "$ws_repo_id" ]] && line_git+=("${DIM}gh:${ws_repo_id}${RST}")
+      # gh: は detached (raw sha) では出さない — build_git の detached パスと gate を揃えないと
+      # cache populate 時に gh: が消えるフリッカーになる (3 パス問題)。
+      [[ -n "$ws_repo_id" && "$_head" == ref:* ]] && line_git+=("${DIM}gh:${RST}${ws_repo_id}")
       # .invalid: Git's placeholder ref for empty/uninitialized repos (git init, clone aborted, ghq get失敗残骸)
       if [[ "$_head" == "ref: refs/heads/.invalid" ]]; then
         line_git+=("${DIM}(empty)${RST}")

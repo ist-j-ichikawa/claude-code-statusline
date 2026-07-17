@@ -21,8 +21,8 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — ブランチ、dirty state、ahead/behind、last commit (age + msg)（5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ Agent + Version + branch
-├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree + from:branch + added_dirs (+N dirs)
-├── Line 3           Git ([gh:owner/repo (dim, GitHub origin あり時のみ)] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
+├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD は情報ゼロのため非表示
+├── Line 3           Git ([gh: (dim) + owner/repo (通常輝度)、GitHub origin あり時のみ] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッションコスト ($、dim)
 └── Output           printf で各行を出力
 ```
@@ -56,7 +56,8 @@ statusline-command.sh
 | Git untracked `?` | グレー | 38;5;248 |
 | Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
-| last commit (age + msg)、worktree from、Git branch parent (`base:`)、Git origin (`gh:owner/repo`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
+| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git branch parent (`base:`)、Git origin プレフィックス (`gh:`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
+| Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
 ## パフォーマンス
 
@@ -64,7 +65,7 @@ statusline-command.sh
 - **単一 jq 呼び出し**: stdin JSON を `eval` + `@sh` で一括抽出（フィールドごとの再パースなし）
 - **共有タイムスタンプ**: `_NOW=$(date +%s)` を1回だけ呼び、全キャッシュ判定で再利用
 - **キャッシュ**: `/tmp/ist-j-ichikawa-claude-statusline/{git,subscription}` (mkdir 700) に保存
-- **Git worktree 対応**: stdin JSON の `worktree.name` または `workspace.git_worktree` (Claude Code 2.1.97+) を検出して 🌲 を表示
+- **Git worktree 対応**: stdin JSON の `worktree.name` または `workspace.git_worktree` (Claude Code 2.1.97+) を検出して 🌲 を表示。`.claude/worktrees` 配下ではパスをリポ root で切り worktree 名を 🌲 直後に表示（パス末尾のランダム名でリポ dir が埋まるのを防ぐ）
 
 ## Line 4: レート制限 + コンテキストバー + コスト
 

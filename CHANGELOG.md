@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.41.0] - 2026-07-17
+
+### Changed
+
+- **Line 2: worktree パスの分割表示**。パスが `<repo>/.claude/worktrees/<name>` で終わる場合、パス本文をリポジトリ root までで切り、worktree 名を `🌲<name>`（dim）として表示するようにした。従来は worktree セッションのパス末尾がランダムな worktree 名（例: `sprightly-scribbling-melody`）で占領され、リポジトリのディレクトリ名がパス中程に埋まって「どこの repo にいるのか」が読み取りにくかった。OSC 8 リンクはパス部分がリポ root、worktree 名部分が worktree ディレクトリを開く。worktree 内サブディレクトリ滞在や既定外配置ではフルパス表示に fallback（分割しない）
+- **Line 2: `from:HEAD` を非表示**。worktree を匿名 HEAD から作成した場合の `worktree.original_branch` = `HEAD` は情報ゼロのノイズのため表示しない。Line 3 の `base:HEAD` 抑止と同じ扱い（`from:main` 等の実ブランチ名は従来どおり表示）
+- **Line 3: `gh:owner/repo` の `owner/repo` を dim から通常輝度に変更**。repo 識別の一次情報に昇格 — ローカルのディレクトリ名と origin のリポジトリ名が食い違うケース（例: dir は `MyApp`、origin は `myapp-core`）はここでしか判別できないため。`gh:` プレフィックスは dim のまま。非ブランド色（デフォルト前景色）なので視認性調整は自由
+- **Line 3: cold start の detached HEAD で `gh:` が一瞬表示されて消えるフリッカーを修正**。cold start（cache 未生成）は `gh:` を無条件に出していたが、`build_git()` の detached パスは `gh:` を出さないため、5 秒後の cache 生成時に `gh:` が消えて見えた。cold start 側も HEAD が ref のときだけ `gh:` を出すよう gate を統一。bats にワークツリー分割 3 ケース・detached cold start・gh: 輝度のテストを追加・更新
+
 ## [1.40.0] - 2026-07-17
 
 ### Changed

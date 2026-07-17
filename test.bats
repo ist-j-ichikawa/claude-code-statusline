@@ -397,7 +397,7 @@ _wait_for_cache() {
   [[ "$result" == *$'\033[38;5;202m'* ]]
 }
 
-@test "Git: GitHub originでgh:owner/repoがdimでブランチ前に表示されること" {
+@test "Git: GitHub originでgh:プレフィックスがdim・owner/repoが通常輝度でブランチ前に表示されること" {
   local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
   rm -f "$cache_dir"/* 2>/dev/null
   # cold start: build_git の background が cache を書く
@@ -406,8 +406,8 @@ _wait_for_cache() {
   _wait_for_cache "$cache_dir"
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *"gh:ist-j-ichikawa/claude-code-statusline"* ]]
-  [[ "$result" == *"${DIM}gh:"* ]]
+  # gh: のみ dim、owner/repo は RST 後の通常輝度（ローカル dir 名と origin 名の食い違い判別用）
+  [[ "$result" == *"${DIM}gh:${RST}ist-j-ichikawa/claude-code-statusline"* ]]
   # gh: 部分が GIT オレンジのブランチ名より左にあること
   gh_pos="${result%%gh:*}"
   branch_pos="${result%%${GIT}*}"
@@ -443,9 +443,9 @@ _wait_for_cache() {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
   rm -rf "$tmp_repo"
-  [[ "$result" == *"gh:acme/widgets"* ]]
+  [[ "$result" == *"gh:${RST}acme/widgets"* ]]
   # .git サフィックスが取れていること
-  [[ "$result" != *"gh:acme/widgets.git"* ]]
+  [[ "$result" != *"acme/widgets.git"* ]]
 }
 
 @test "Git: workspace.repo(Claude Code 2.1.145+)がコールドスタートでもgh:を表示すること" {
@@ -454,7 +454,23 @@ _wait_for_cache() {
   # cache を消して即座に sed -n '3p' する = cold start。git remote get-url を介さず stdin から gh: が出る
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
     | bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  [[ "$result" == *"gh:acme/widgets"* ]]
+  [[ "$result" == *"gh:${RST}acme/widgets"* ]]
+}
+
+@test "Git: detached HEADのcold startではgh:を表示しないこと(build_git detachedパスとgate統一)" {
+  local cache_dir="/tmp/ist-j-ichikawa-claude-statusline/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  ( cd "$tmp_repo" && git init -q \
+    && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init \
+    && git checkout -q --detach )
+  rm -f "$cache_dir"/* 2>/dev/null
+  # cold start: build_git の detached パスは gh: を出さないので、cold start が出すと cache populate 時にフリッカーする
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$tmp_repo"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" != *"gh:"* ]]
+  [[ "$result" == *"HEAD@"* ]]
 }
 
 @test "PR: pr.review_state=approvedで緑色のテキストが表示されること" {
@@ -627,6 +643,35 @@ _wait_for_cache() {
   # worktree path should appear, not original repo path
   [[ "$result" == *"worktree-dir"* ]]
   [[ "$result" != *"original-repo"* ]]
+}
+
+@test "Worktree: .claude/worktrees配下のパスがリポroot+🌲worktree名に分割表示されること" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/home/user/myrepo","project_dir":""},"context_window":{"used_percentage":10},"worktree":{"name":"melody","path":"/home/user/myrepo/.claude/worktrees/melody","original_branch":"main"}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  # 🌲 より左（パス本文とそのリンク URL）はリポ root まで — marker が現れない
+  pre="${result%%🌲*}"
+  [[ "$pre" == *"/home/user/myrepo"* ]]
+  [[ "$pre" != *".claude/worktrees"* ]]
+  # worktree 名は 🌲 直後に dim で表示
+  [[ "$result" == *"🌲${DIM}"*"melody"* ]]
+  [[ "$result" == *"from:main"* ]]
+}
+
+@test "Worktree: original_branchがHEADのときfrom:が表示されないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.84","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10},"worktree":{"name":"wt","original_branch":"HEAD"}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  [[ "$result" == *"🌲"* ]]
+  [[ "$result" != *"from:"* ]]
+}
+
+@test "Worktree: worktree配下のサブディレクトリでは分割せずフルパス表示されること" {
+  # /cd で worktree 内サブディレクトリへ移動した git linked worktree — leaf に / が含まれるため分割しない
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.97","workspace":{"current_dir":"/home/user/myrepo/.claude/worktrees/melody/src","git_worktree":true},"context_window":{"used_percentage":10}}' \
+    | bash statusline-command.sh 2>/dev/null | sed -n '2p')
+  # 🌲 が無いと ${result%%🌲*} は全文になり vacuous pass するので、先に 🌲 の存在を assert する
+  [[ "$result" == *"🌲"* ]]
+  pre="${result%%🌲*}"
+  [[ "$pre" == *".claude/worktrees/melody/src"* ]]
 }
 
 # ============================================================================
