@@ -264,6 +264,30 @@ _wait_for_cache() {
   [[ "$result" != *"think"* ]]
 }
 
+@test "FastMode: fast_mode=trueでgreenyellow(38;5;190)のfastが表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"version":"2.1.216","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"fast_mode":true}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[38;5;190m'*"fast"* ]]
+}
+
+@test "FastMode: fast_mode=falseでfastが表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"version":"2.1.216","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"fast_mode":false}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"fast"* ]]
+}
+
+@test "FastMode: fast_modeキー欠落(旧 Claude Code)でfastが表示されないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"fast"* ]]
+}
+
+@test "FastMode: effort/think/fastが半角スペース区切りで併記されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"version":"2.1.216","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"},"thinking":{"enabled":true},"fast_mode":true}' \
+    | bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"high"*"think"*"fast"* ]]
+}
+
 # ============================================================================
 # 統合テスト: Line 3 — コンテキスト + プロバイダー別表示が正しいこと
 # ============================================================================

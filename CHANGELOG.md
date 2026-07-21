@@ -1,11 +1,19 @@
 # Changelog
 
+## [1.44.0] - 2026-07-21
+
+### Added
+
+- **Line 1 に fast mode インジケータを追加**。stdin JSON の `fast_mode`（boolean、`/fast` 有効時に true。Claude Code 2.1.216 の docs で確認、CHANGELOG 非掲載）が true のとき、effort / think の隣に greenyellow（`FAST`=`38;5;190`）の `fast` を表示する。fast mode は Opus 専用機能なので Line 1 で model coral と同居するが、色相が離れているため衝突しにくい。色は effort / think と同じくモデル色との衝突回避のため選んだ非ブランドの識別色で、tunable。`fast_mode=false` / キー欠落（旧 Claude Code）では非表示（graceful degradation）。effort / think / fast が複数あるときは半角スペース区切りで併記（`high think fast`）。bats に fast on / off / キー欠落 / 併記の 4 ケースを追加
+
 ## [1.43.0] - 2026-07-21
 
 ### Changed
 
 - Built against を Claude Code 2.1.216 に追従（`/check-claude-code-update` で `67f390c`〜2.1.216 = 2.1.214 / .215 / .216 の 3 版を分析。2.1.213 は欠番）。**stdin JSON フィールド・`statusLine` 設定・モデル・プロバイダー・認証への破壊的変更はゼロ**でロジック改修なし。subagent 周りの変更（2.1.214 で `subagentStatusLine` payload に per-task `effort` フィールド追加＝定義 frontmatter か invocation の reasoning effort、文字列レベルか数値 token budget、session effort 継承時は absent／2.1.216 で resume 時に background subagent が起動直後にキャンセルされる・resume で default agent に戻る等のバグ修正）はいずれも `subagentStatusLine`・agent 管理レイヤーの話で、本スクリプト（主 statusLine）は未採用のため影響なし。表示に好影響の修正が 1 件: 2.1.216「resume 時に statusline コマンドが 2 回走り最初の結果がちらつく問題の修正」（docs にも `min-version: 2.1.216` 注記が追加。本スクリプトが resume 直後に二重実行されていた無駄が解消される方向）
 - 公式 docs 突き合わせ（Step 2.5）で新フィールド **`fast_mode`**（boolean、fast mode 有効か。CHANGELOG 非掲載・docs のみ＝取りこぼしパターン。absent リストにも無く常在）を確認。Line 1 の effort/think と同じセッション状態系トグルだが、ミニマル方針のため採用は別途判断（未採用）。他の抽出依存フィールドの削除・リネームは無し
+
+## [1.42.0] - 2026-07-17
 
 ### Changed
 

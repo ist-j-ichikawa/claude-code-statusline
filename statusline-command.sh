@@ -12,6 +12,7 @@ readonly GIT=$'\033[38;5;202m'
 readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
+readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
 readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) 実課金額 — gold, 非ブランド
 readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
@@ -221,7 +222,7 @@ wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
 pr_review_state=""
 vim_mode=""
-effort_level="" thinking_enabled="false"
+effort_level="" thinking_enabled="false" fast_mode="false"
 cost_cents=0
 _jq_ok=1
 _jq_out=$(jq -r '
@@ -250,6 +251,7 @@ _jq_out=$(jq -r '
   @sh "vim_mode=\(.vim.mode // "")",
   @sh "effort_level=\(.effort.level // "")",
   @sh "thinking_enabled=\(.thinking.enabled // false)",
+  @sh "fast_mode=\(.fast_mode // false)",
   @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
@@ -452,6 +454,8 @@ shopt -u nocasematch
 
 has_val "$effort_level" && line1+=("${EFFORT}${effort_level}${RST}")
 [[ "$thinking_enabled" == "true" ]] && line1+=("${THINK}think${RST}")
+# fast mode (Claude Code 2.1.216 docs で確認、fast_mode boolean) — /fast 有効時のみ。false/欠落は非表示
+[[ "$fast_mode" == "true" ]] && line1+=("${FAST}fast${RST}")
 
 # Agent name
 if has_val "$agent_name"; then
