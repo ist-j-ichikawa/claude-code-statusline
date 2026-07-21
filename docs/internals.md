@@ -2,6 +2,12 @@
 
 `statusline-command.sh` の内部構造・カラーテーマ・パフォーマンス最適化・プロバイダー検出ロジックの詳細。利用者向けの導入手順は [README](../README.md) を参照。
 
+## ファイル構成
+
+- **`statusline-command.sh`** — メイン statusLine (プロンプト直下の 4 行)。`settings.json` の `statusLine` から参照。
+- **`subagent-statusline-command.sh`** — agent panel の各サブエージェント行 (`subagentStatusLine`、v1.45.0 追加)。`settings.json` の `subagentStatusLine` から参照。
+- **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。
+
 ## 仕組み
 
 Claude Code はアシスタントの応答ごとに（300ms デバウンス付きで）このスクリプトを呼び出します。セッション情報は JSON で **stdin** に渡され、`printf` の出力がそのままステータスラインの各行になります。ANSI カラーと OSC 8 ハイパーリンクに対応しています。
@@ -26,6 +32,23 @@ statusline-command.sh
 ├── Line 4           5hレート制限 + コンテキストバー + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッションコスト ($、dim)
 └── Output           printf で各行を出力
 ```
+
+## Subagent statusline (`subagent-statusline-command.sh`)
+
+agent panel (プロンプト下のサブエージェント一覧) の各行を独自描画する別系統の statusline。Claude Code の `subagentStatusLine` で有効化する (任意)。メイン statusLine とは**入出力の契約が別物**:
+
+| | メイン statusLine | subagentStatusLine |
+|---|---|---|
+| stdin | セッション 1 件の JSON | 表示中の全行を 1 個の JSON (`columns` + `tasks[]`) |
+| stdout | プレーンテキスト (そのまま行になる) | 上書きする行ごとに JSON 1 行 `{"id":..,"content":..}` |
+| 行の扱い | 常に全行出力 | `id` を出せば上書き / 省けば既定描画 / `content:""` で非表示 |
+
+各行の描画: `⚡name` (AGENT pink、`label` 優先) + モデル色 (`model_color`、`model` は id 形式) + コンテキストバー (`tokenCount / contextWindowSize` を `braille_bar` + `color_by_threshold`) + effort (light purple、`effort` は 2.1.214+) + description (dim、`columns` から概算した予算で切り詰め)。`model` / `contextWindowSize` は 2.1.205+。
+
+実装の要点:
+- **単一 jq で抽出**: `tasks[]` を US (`0x1f`) 区切りで連結。`read` の `IFS=tab` は空フィールドを潰す (tab は IFS 空白扱い) ため、effort 欠落時に桁ずれする → 非空白の US を区切りに使う。name/description の改行・タブは jq `gsub` で空白化し 1 行 = 1 task を保つ。
+- **単一 jq で JSON 化**: `jq -Rc 'split("0x1f") | {id,content}'`。content 内の ESC / 引用符 / バックスラッシュを安全にエスケープ (Claude Code 側で JSON パース後、ANSI/OSC 8 としてそのまま描画される)。
+- **graceful degradation**: `model`/`effort`/`contextWindowSize` 欠落 (旧 Claude Code)、`tasks` 空、不正 JSON、空入力のいずれでも `exit 0`。上書きしない行は Claude Code 既定の `名前 · 説明 · トークン数` に委ねる。
 
 ## カラーテーマ
 

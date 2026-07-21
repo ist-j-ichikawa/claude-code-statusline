@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.44.0-blue)
+![Version](https://img.shields.io/badge/version-1.45.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.216-purple)
 
 ## Overview
@@ -96,14 +96,37 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git
 
 `hideVimModeIndicator: true` は Claude Code 組み込みの `-- INSERT --` 表示を抑止します。本スクリプトは vim mode を Line 1 先頭に目立つバッジで自前描画するため、これを `true` にして二重表示を防ぎます (vim mode を使う場合の推奨設定)。
 
+> **Note:** `statusline-command.sh` は同じディレクトリの `lib.sh` (共有ライブラリ) を読み込みます。clone した場合は同梱されているので追加作業は不要です。
+
+### 3. (任意) サブエージェント行もカスタマイズ
+
+`subagentStatusLine` を追加すると、agent panel に並ぶサブエージェントの各行も同じ配色で描画します (モデル色 + コンテキストバー + effort + 説明):
+
+```json
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "/path/to/claude-code-statusline/subagent-statusline-command.sh"
+  }
+```
+
+メインの `statusLine` とは独立した設定です。省略すれば Claude Code 既定の行 (`名前 · 説明 · トークン数`) のままになります。このスクリプトも `lib.sh` を共有します。
+
 ### 代替: clone せず ~/.claude に置く
 
-clone を残したくない場合は、公開リポジトリからスクリプトだけを直接ダウンロードして `~/.claude` に配置できます。ただしこれは**コピー**なので、更新は手動 (再ダウンロード) になります:
+clone を残したくない場合は、公開リポジトリからスクリプトを直接ダウンロードして `~/.claude` に配置できます。ただしこれは**コピー**なので、更新は手動 (再ダウンロード) になります。`lib.sh` はスクリプトと同じディレクトリに必須です:
 
 ```bash
+mkdir -p ~/.claude
+# 共有ライブラリ (必須) + メイン statusline
+curl -fsSL -o ~/.claude/lib.sh \
+  https://raw.githubusercontent.com/ist-j-ichikawa/claude-code-statusline/main/lib.sh
 curl -fsSL -o ~/.claude/statusline-command.sh \
   https://raw.githubusercontent.com/ist-j-ichikawa/claude-code-statusline/main/statusline-command.sh
 chmod +x ~/.claude/statusline-command.sh
+# (任意) サブエージェント行のカスタマイズも使う場合
+curl -fsSL -o ~/.claude/subagent-statusline-command.sh \
+  https://raw.githubusercontent.com/ist-j-ichikawa/claude-code-statusline/main/subagent-statusline-command.sh
+chmod +x ~/.claude/subagent-statusline-command.sh
 ```
 
 この場合は settings.json の `command` を `/Users/<username>/.claude/statusline-command.sh` (絶対パス) に向けます。

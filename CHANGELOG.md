@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.45.0] - 2026-07-21
+
+### Added
+
+- **サブエージェント行の独自描画 (`subagent-statusline-command.sh`)**。Claude Code の `subagentStatusLine` 設定に対応する新コマンドを追加し、agent panel に並ぶ各サブエージェントの行をメイン statusline と同じ配色で描画できるようにした。各行は `⚡名前`（`label` 優先）+ モデル色（tier 色）+ コンテキスト使用率バー（`tokenCount / contextWindowSize` を braille バー + %）+ effort + 説明（端末幅で切り詰め）。`settings.json` の `subagentStatusLine` から参照（任意設定。省略すれば Claude Code 既定行のまま）。`model` / `contextWindowSize` は Claude Code 2.1.205+、`effort` は 2.1.214+ で提供される。model/effort/contextWindowSize 欠落・tasks 空・不正 JSON でも exit 0（graceful degradation）
+
+### Changed
+
+- **共有ライブラリ `lib.sh` を新設**し、メイン statusline とサブエージェント statusline が色定数と presentation ヘルパー（`has_val` / `osc8` / `editor_url` / `rainbow` / `gradient` / `model_color` / `braille_bar` / `color_by_threshold` / `format_tokens`）を単一ソースで共有するようにした。特に**モデルの tier 色分けを `model_color` 関数に一元化**し、両 statusline で同一の色になるようにした（従来 `statusline-command.sh` に inline had）。`model_color` は `Sonnet 4.5` のような display_name に加え `claude-sonnet-4-5` のような **model id 形式にもマッチ**する（サブエージェントの `model` は id 形式で来るため）。`lib.sh` はネットワーク / キャッシュ / `date` 等の副作用を持たず、それらは `statusline-command.sh` 側に残す。両スクリプトは同じディレクトリの `lib.sh` を `source` する（相対起動でも解決できるよう fallback 付き）。表示・挙動の変更はなく（既存テスト 105 件そのまま通過）、内部構造のリファクタ + サブエージェント機能追加でテストは 113 件に
+
+**Note:** `~/.claude` に直接ダウンロードして使っている場合は、`statusline-command.sh` と同じディレクトリに `lib.sh` も配置する必要があります（README「代替」参照）。
+
 ## [1.44.0] - 2026-07-21
 
 ### Added

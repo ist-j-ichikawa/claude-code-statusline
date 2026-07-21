@@ -3,61 +3,19 @@
 # https://code.claude.com/docs/en/statusline
 set -uo pipefail
 
-# --- Constants ---
-readonly RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
-readonly CTX_OK=$'\033[38;5;82m'
-readonly DIM=$'\033[2m'
-readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
-readonly GIT=$'\033[38;5;202m'
-readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
-readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
-readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
-readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
-readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) 実課金額 — gold, 非ブランド
-readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
-# vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
-# Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
-readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
-readonly VIM_VISUAL=$'\033[1;30;48;5;214m'  # bold black on gold (gruvbox-ish VISUAL)
+# Shared colors + presentation helpers (also used by subagent-statusline-command.sh)
+# 相対起動 (bash statusline-command.sh) では BASH_SOURCE にスラッシュが無く %/* が縮まないため "." に fallback
+_selfdir="${BASH_SOURCE%/*}"; [[ "$_selfdir" == "$BASH_SOURCE" ]] && _selfdir="."
+source "$_selfdir/lib.sh"
+
+# --- Main-only constants ---
 readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
 readonly _NOW=$(date +%s)
 
-# --- Helpers ---
-has_val() { [[ -n "$1" && "$1" != "null" ]]; }
-
-# osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
-osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
-
-# editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
-editor_url() { printf -v "$2" 'file://%s' "$1"; }
-
-# rainbow VARNAME TEXT — sets VARNAME to TEXT with each char cycling through a
-# multi-color palette (no subshell). Used for Fable: no official brand color, so the
-# palette is sampled from its announcement artwork (a vintage butterfly-specimen plate)
-# — a warm gold→rust→red→olive→green→teal cycle — to make it recognizable on Line 1.
-rainbow() {
-  local _txt="$2" _out="" _i _len=${#2}
-  local _pal=(178 172 130 167 143 107 66) _n=7
-  for ((_i=0; _i<_len; _i++)); do
-    _out+=$'\033[38;5;'"${_pal[_i % _n]}"'m'"${_txt:_i:1}"
-  done
-  printf -v "$1" '%s%s' "$_out" "$RST"
-}
-
-# gradient VARNAME TEXT — sets VARNAME to TEXT with a single sweep across a green
-# palette (no subshell). Sonnet 5: no official brand color, so a green gradient
-# (from its botanical announcement artwork) distinguishes it from Sonnet 4.6's flat teal.
-gradient() {
-  local _txt="$2" _out="" _i _len=${#2}
-  local _pal=(28 34 70 106 148 154) _n=6 _idx
-  for ((_i=0; _i<_len; _i++)); do
-    _idx=$(( _len > 1 ? _i * (_n - 1) / (_len - 1) : 0 ))
-    _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
-  done
-  printf -v "$1" '%s%s' "$_out" "$RST"
-}
+# --- Main-only helpers (generic presentation helpers — has_val/osc8/editor_url/
+# rainbow/gradient/model_color/braille_bar/color_by_threshold/format_tokens — live in lib.sh) ---
 
 # pr_state_color STATE VARNAME — sets VARNAME to ANSI color for PR review state (no subshell)
 pr_state_color() {
@@ -68,35 +26,6 @@ pr_state_color() {
     draft)             printf -v "$2" '%s' "$DRAFT" ;;
     *)                 printf -v "$2" '%s' "$DIM" ;;
   esac
-}
-
-# braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
-# 8 braille levels per char × 5 chars = 40 steps of precision
-braille_bar() {
-  local pct=$1 width=5
-  [[ "$pct" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '     '; return; }
-  local b0=' ' b1='⣀' b2='⣄' b3='⣤' b4='⣦' b5='⣶' b6='⣷' b7='⣿'
-  local _bb="" level=$((pct * width * 7 / 100)) i seg varname
-  ((level > width * 7)) && level=$((width * 7))
-  ((level < 0)) && level=0
-  for ((i = 0; i < width; i++)); do
-    seg=$((level - i * 7))
-    ((seg < 0)) && seg=0
-    ((seg > 7)) && seg=7
-    varname="b${seg}"
-    _bb+="${!varname}"
-  done
-  printf -v "$2" '%s' "$_bb"
-}
-
-# color_by_threshold VAL HI MID VARNAME — sets VARNAME to context-bar color (no subshell)
-# OK = lime green (CTX_OK), distinct from Bedrock teal and standard ANSI green
-color_by_threshold() {
-  local val=$1 hi=$2 mid=$3
-  [[ "$val" =~ ^[0-9]+$ ]] || { printf -v "$4" '%s' "$DIM"; return; }
-  if ((val >= hi)); then printf -v "$4" '%s' "$RED"
-  elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
-  else printf -v "$4" '%s' "$CTX_OK"; fi
 }
 
 cache_stale() {
@@ -110,16 +39,6 @@ cache_stale() {
 git_cache_file() {
   [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$GIT_CACHE_DIR"
   _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
-}
-
-# format_tokens TOK VARNAME — sets VARNAME (no subshell)
-format_tokens() {
-  local tok=$1
-  [[ "$tok" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '?'; return; }
-  if ((tok >= 1000000)); then printf -v "$2" '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
-  elif ((tok >= 1000)); then printf -v "$2" '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
-  else printf -v "$2" '%d' "$tok"
-  fi
 }
 
 # --- Credentials blob (Keychain → file fallback) ---
@@ -417,6 +336,7 @@ elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]]; then
 elif [[ "${CLAUDE_CODE_USE_FOUNDRY:-}" == "1" ]]; then
   provider="foundry"
 fi
+shopt -u nocasematch
 
 # Provider indicator (first in line)
 case "$provider" in
@@ -433,24 +353,9 @@ case "$provider" in
     ;;
 esac
 
-if [[ "$model_show" == *fable* ]]; then
-  rainbow _model_rainbow "$model_show"
-  line1+=("$_model_rainbow")
-elif [[ "$model_show" == *opus* ]]; then
-  line1+=("${CORAL}${model_show}${RST}")
-elif [[ "$model_show" == *"sonnet 5"* || "$model_show" == *"sonnet-5"* ]]; then
-  gradient _model_gradient "$model_show"
-  line1+=("$_model_gradient")
-elif [[ "$model_show" == *sonnet*4.5* || "$model_show" == *sonnet*3.5* ]]; then
-  line1+=("${AMBER}${model_show}${RST}")
-elif [[ "$model_show" == *sonnet* ]]; then
-  line1+=("${TEAL}${model_show}${RST}")
-elif [[ "$model_show" == *haiku* ]]; then
-  line1+=("${LAVENDER}${model_show}${RST}")
-else
-  line1+=("${model_show}")
-fi
-shopt -u nocasematch
+# Model (colored by tier) — 共有 model_color が nocasematch スコープを内部管理する
+model_color _model_col "$model_show"
+line1+=("$_model_col")
 
 has_val "$effort_level" && line1+=("${EFFORT}${effort_level}${RST}")
 [[ "$thinking_enabled" == "true" ]] && line1+=("${THINK}think${RST}")

@@ -5,18 +5,13 @@
 # --- セットアップ: ヘルパー関数のみを読み込む ---
 setup() {
   export COLUMNS=120
-  export RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
-  export CTX_OK=$'\033[38;5;82m'
-  export DIM=$'\033[2m'
-  export GIT=$'\033[38;5;202m'
-  export ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
-  export CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
-  export AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
+  # 色定数と presentation ヘルパー(has_val/braille_bar/color_by_threshold/format_tokens/
+  # rainbow/gradient/model_color/osc8/editor_url)は lib.sh から読む(本体と単一ソース化)
+  source "$BATS_TEST_DIRNAME/lib.sh"
   export _NOW=$(date +%s)
   # extra-usage の背景 curl を止めてテストを決定的にし、共有キャッシュ汚染も掃除する
   export CLAUDE_STATUSLINE_NO_NET=1
   rm -f /tmp/ist-j-ichikawa-claude-statusline/usage_spend 2>/dev/null || true
-  eval "$(sed -n '/^# --- Helpers ---$/,/^# --- Credentials/{ /^# --- Credentials/d; p; }' statusline-command.sh)"
 }
 
 # build_git の background cache 書き込み完了まで polling (最大 ~2秒)
@@ -836,4 +831,68 @@ _wait_for_cache() {
 @test "端末幅: 長いパスがCOLUMNS=50でも省略されないこと" {
   result=$(COLUMNS=50 bash -c 'echo "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.76\",\"workspace\":{\"current_dir\":\"/Users/user/very/long/path/to/some/deep/project\"},\"context_window\":{\"used_percentage\":10}}" | bash statusline-command.sh 2>/dev/null | sed -n "2p"')
   [[ "$result" != *"…"* ]]
+}
+
+# ============================================================================
+# Subagent statusline — subagent-statusline-command.sh (agent panel の行描画)
+# ============================================================================
+@test "Subagent: taskごとにid付きJSON行を出しcontentにモデル色/effort/context%が入ること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t1","name":"code-reviewer","model":"claude-sonnet-5","effort":"high","tokenCount":40000,"contextWindowSize":200000,"description":"reviewing"}]}' \
+    | bash subagent-statusline-command.sh)
+  [[ "$(echo "$result" | jq -r .id)" == "t1" ]]
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *"code-reviewer"* ]]
+  [[ "$content" == *"high"* ]]
+  [[ "$content" == *"20%"* ]]              # 40000/200000
+  [[ "$content" == *"reviewing"* ]]
+  [[ "$content" == *$'\033[38;5;28m'* ]]   # Sonnet 5 = 緑グラデーション先頭色
+}
+
+@test "Subagent: effort欠落でも桁ずれせずcontextバーとモデル色が出ること(空フィールド潰れ回帰)" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t2","name":"bash-auditor","model":"claude-haiku-4-5-20251001","tokenCount":8000,"contextWindowSize":200000,"description":"x"}]}' \
+    | bash subagent-statusline-command.sh)
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *"4%"* ]]                     # 8000/200000、tokenCount が effort 欄にずれ込まない
+  [[ "$content" == *$'\033[38;5;183m'* ]]        # Haiku ラベンダー(id 形式)
+  [[ "$content" != *$'\033[38;5;105m'* ]]        # EFFORT 色が出ない = 桁ずれしていない
+}
+
+@test "Subagent: tasksが空なら何も出力しないこと" {
+  result=$(echo '{"columns":120,"tasks":[]}' | bash subagent-statusline-command.sh)
+  [[ -z "$result" ]]
+}
+
+@test "Subagent: model/contextWindowSize欠落(旧CC)でも名前と説明を出しバーは出さないこと" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t3","name":"agent-x","description":"doing work"}]}' \
+    | bash subagent-statusline-command.sh)
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *"agent-x"* ]]
+  [[ "$content" == *"doing work"* ]]
+  [[ "$content" != *"%"* ]]
+}
+
+@test "Subagent: labelがnameより優先されること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t4","name":"raw-name","label":"Pretty Label","description":"d"}]}' \
+    | bash subagent-statusline-command.sh)
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *"Pretty Label"* ]]
+  [[ "$content" != *"raw-name"* ]]
+}
+
+@test "Subagent: Sonnet 4.5のmodel id(claude-sonnet-4-5)がアンバーになること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t5","name":"a","model":"claude-sonnet-4-5","description":"d"}]}' \
+    | bash subagent-statusline-command.sh)
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *$'\033[38;5;214m'* ]]        # AMBER
+}
+
+@test "Subagent: idなしタスクは上書きせず出力しないこと(既定描画に委ねる)" {
+  result=$(echo '{"columns":120,"tasks":[{"name":"noid","description":"d"}]}' | bash subagent-statusline-command.sh)
+  [[ -z "$result" ]]
+}
+
+@test "Subagent: 空入力/tasks欠落でもクラッシュせずexit 0すること" {
+  echo '' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
+  echo '{}' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
+  echo 'not json' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
 }
