@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.48.0-blue)
+![Version](https://img.shields.io/badge/version-1.49.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.218-purple)
 
 ## Overview
@@ -100,7 +100,7 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git
 
 ### 3. (任意) サブエージェント行もカスタマイズ
 
-`subagentStatusLine` を追加すると、agent panel に並ぶサブエージェントの各行も既存 statusline と協調した配色で描画します (説明 + モデル色 + コンテキストバー + 状態[実行中↑/頭打ち▪/完了✓/入力待ち] + 経過 + worktree):
+`subagentStatusLine` を追加すると、agent panel に並ぶサブエージェントの各行を、既存 statusline と協調した配色で描画します:
 
 ```json
   "subagentStatusLine": {
@@ -108,6 +108,19 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git
     "command": "/path/to/claude-code-statusline/subagent-statusline-command.sh"
   }
 ```
+
+各行は **説明 + モデル(tier 色) + コンテキスト使用率バー + [入力待ち等の状態] + 経過時間 + [🌲worktree]** です（行頭の `❯ ◯` と「実行中」表示は Claude Code 側が描画）:
+
+```
+❯ ◯ review the diff for correctness bugs   Sonnet 5   ⣦    34%  1m02s
+❯ ◯ /code-review xhigh                     Opus 4.8   ⣀    5%   30s   🌲issue-41
+❯ ◯ 承認待ちのデプロイ                       Opus 4.8   ⣀    2%   needs_input
+```
+
+- **モデル**は Line 1 と同じ表記・tier 色（Bedrock の `jp.anthropic.claude-opus-4-8` 等も `Opus 4.8` に整形）
+- **コンテキスト%** は Line 4 と同じ braille バー + 閾値色
+- **状態**は通常は出さず（実行中は Claude Code 標準の `○`/スピナーが示す）、`needs_input` など**注意が要る時だけ黄色い語**で表示
+- **worktree** 隔離エージェントは作業先を `🌲名` で表示
 
 メインの `statusLine` とは独立した設定です。省略すれば Claude Code 既定の行 (`名前 · 説明 · トークン数`) のままになります。このスクリプトも `lib.sh` を共有します。
 

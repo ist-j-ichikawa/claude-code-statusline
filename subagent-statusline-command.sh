@@ -7,7 +7,8 @@
 # stdout = 上書きしたい行ごとに JSON 1 行 `{"id":..,"content":..}`。id を省いた行は既定描画のまま。
 # content は ANSI / OSC 8 をそのまま解釈。per-task の model/contextWindowSize は 2.1.205+ で来る。
 #
-# 行 = 説明 + モデル(pretty・tier色) + context%バー + 状態(↑/▪/✓/status語) + 経過 + [🌲worktree]。
+# 行 = 説明 + モデル(pretty・tier色) + context%バー + [status語] + 経過 + [🌲worktree]。
+# 「実行中」表示は Claude Code のネイティブ chrome (行頭の ○/スピナー) に委ね、行本文に独自グリフは出さない。
 # 端末幅での切り詰めはしない方針 (主 statusline と同じ。全要素フル出力・折り返し/切れは端末に委ねる)。
 set -uo pipefail
 # 相対起動でも解決できるよう %/* が縮まない (スラッシュ無し) 場合は "." に fallback
@@ -20,9 +21,6 @@ IFS= read -r -d '' input || true
 _now=$(date +%s)   # 経過時間用に 1 回だけ (主 statusline の _NOW と同じく 1 date fork)
 
 # per-task を単一 jq で US(0x1f) 区切り抽出。全 text フィールドの改行/タブは空白化 (US 連結行の分割崩れ防止)。
-# grow(伸び): tokenSamples が「配列で 2 点以上」の時だけ末尾と数点前を比較して "1"(伸び)/"0"(頭打ち)、
-#   それ以外は "" (不明)。type=="array" ガードで、tokenSamples が非配列(不正型)でも .[-1] 等を index せず
-#   jq が abort しない（1 task の型不正で全 task の描画が消えるのを防ぐ）。
 _rows=$(jq -r '.tasks[]? | [
   (.id // "" | gsub("[\n\r\t]"; " ")),
   (.label // .description // .name // "" | gsub("[\n\r\t]"; " ")),
@@ -31,7 +29,6 @@ _rows=$(jq -r '.tasks[]? | [
   (.tokenCount // 0 | tostring),
   (.contextWindowSize // 0 | tostring),
   (.startTime // 0 | tostring),
-  ((.tokenSamples // []) | if (type == "array" and length >= 2) then (if .[-1] > (.[-4] // .[0]) then "1" else "0" end) else "" end),
   (.cwd // "" | gsub("[\n\r\t]"; " "))
 ] | join("\u001f")' <<< "$input" 2>/dev/null) || exit 0
 [[ -z "$_rows" ]] && exit 0
@@ -40,7 +37,8 @@ _rows=$(jq -r '.tasks[]? | [
 # (opus/sonnet/haiku/fable) の新形式 id のみ整形。旧形式 (claude-3-5-sonnet-… 版が tier より前) や
 # 未知形式は cleaned id をそのまま出す (誤分割で "3 5.sonnet…" のように文字化けさせない)。
 prettify_model() {
-  local m="${1#claude-}"; m="${m%\[1m\]}"
+  local m="${1##*.anthropic.}"     # Bedrock inference-profile prefix (jp./global./us. 等 .anthropic.) を剥がす
+  m="${m#claude-}"; m="${m%\[1m\]}"; m="${m%-v[0-9]}"   # claude- 接頭辞 / [1m] / Bedrock の -vN 接尾辞を除去
   local tier="${m%%-*}" ver="${m#*-}" _t
   case "$tier" in
     opus)_t=Opus;; sonnet)_t=Sonnet;; haiku)_t=Haiku;; fable)_t=Fable;;
@@ -64,7 +62,7 @@ add() { row+="${row:+  }$1"; }
 
 # here-string 供給なのでループは現シェル (サブシェル無し・_out に蓄積)。
 _out=""
-while IFS=$'\037' read -r id label model status tok ctx start grow cwd; do
+while IFS=$'\037' read -r id label model status tok ctx start cwd; do
   [[ -z "$id" ]] && continue
   row=""
   # 説明 (先頭・通常輝度・切り詰めなし)
@@ -79,13 +77,11 @@ while IFS=$'\037' read -r id label model status tok ctx start grow cwd; do
     braille_bar "$pct" _bar; color_by_threshold "$pct" 90 80 _bc
     add "${_bc}${_bar}${RST} ${DIM}${pct}%${RST}"
   fi
-  # 状態グリフ: running は伸び ↑ / 頭打ち ▪ / 不明(サンプル不足)は無表示(CC の ◯ に委ねる)、
-  # completed は ✓、それ以外(入力待ち等の未知値)は生の値を黄で (取りこぼし防止・PR review_state と同じ作法)。
+  # 「実行中」表示は Claude Code のネイティブ chrome (行頭 ○/スピナー) に委ね、行本文に独自グリフは出さない。
+  # running / completed(行はまもなく消える) / 無し は無表示、それ以外(入力待ち等)だけ黄で status 語を出す。
   case "$status" in
-    running)   case "$grow" in 1) add "${CTX_OK}↑${RST}" ;; 0) add "${DIM}▪${RST}" ;; esac ;;
-    completed) add "${DIM}✓${RST}" ;;
-    "")        : ;;
-    *)         add "${YLW}${status}${RST}" ;;
+    running|completed|"") : ;;
+    *) add "${YLW}${status}${RST}" ;;
   esac
   # 経過時間 (startTime は epoch ms)。completed は now-start が伸び続け「まだ実行中」に見えるので出さない。
   if [[ "$status" != "completed" ]] && [[ "$start" =~ ^[0-9]+$ ]] && (( start > 0 )); then

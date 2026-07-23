@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.49.0] - 2026-07-23
+
+### Changed
+
+- **サブエージェント行の「実行中」表示を Claude Code のネイティブ描画に委ね、独自グリフを廃止**。Claude Code は各行の先頭に `○`／スピナーを自前で描くため、こちらの `↑`(伸び中) / `▪`(頭打ち) / `✓`(完了) は重複だった。加えて statusline は refresh tick ごとの再実行で連続アニメーションできず、tick 駆動の擬似スピナーは CC の本物より劣る。よって `↑`/`▪`/`✓` と `tokenSamples` のトレンド判定を全廃し、行本文は **説明 + モデル + コンテキスト%バー + [注意状態の status 語] + 経過 + [🌲worktree]** の静的情報に絞った。`needs_input` 等の注意が要る状態のみ黄色い語で表示（実行中は CC の `○` が示す）。副次的に `tokenSamples` を index しなくなり、型不正による jq abort リスクも消滅
+
+### Fixed
+
+- **Bedrock の inference-profile model id が整形されず生表示される問題を修正**。`jp.anthropic.claude-opus-4-8`（`<region>.anthropic.` prefix 付き）等が `prettify_model` を素通りして生 id のまま出ていた。prefix と `-vN` 接尾辞を剥がすようにし、`Opus 4.8`（coral）に整形されるようにした（Bedrock 運用で毎行 raw id が出ていた）
+
 ## [1.48.0] - 2026-07-23
 
 ### Fixed

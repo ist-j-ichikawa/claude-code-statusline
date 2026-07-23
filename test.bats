@@ -834,88 +834,93 @@ _wait_for_cache() {
 }
 
 # ============================================================================
-# Subagent statusline — subagent-statusline-command.sh (agent panel の行描画)
+# Subagent statusline — subagent-statusline-command.sh (agent panel の行描画, v1.49.0 デザイン)
+#   行 = 説明 + モデル(pretty・tier色) + context%バー + [status語] + 経過 + [🌲wt]。
+#   「実行中」表示は Claude Code 側 chrome に委ね、独自グリフ(↑/▪/✓)は出さない。
 # ============================================================================
 @test "Subagent: id付きJSON行で説明先頭+モデルpretty(tier色)+context%が出ること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t1","label":"reviewing the diff","model":"claude-opus-4-8[1m]","status":"running","tokenCount":40000,"contextWindowSize":200000,"tokenSamples":[1,2,40000]}]}' \
+  result=$(echo '{"columns":120,"tasks":[{"id":"t1","label":"reviewing the diff","model":"claude-opus-4-8[1m]","status":"running","tokenCount":40000,"contextWindowSize":200000}]}' \
     | bash subagent-statusline-command.sh)
   [[ "$(echo "$result" | jq -r .id)" == "t1" ]]
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"reviewing the diff"* ]]
-  [[ "$content" == *$'\033[38;5;173m'"Opus 4.8"* ]]   # pretty-name + coral (claude-/[1m] 除去)
-  [[ "$content" == *"20%"* ]]                          # 40000/200000
+  local c; c=$(echo "$result" | jq -r .content)
+  [[ "$c" == *"reviewing the diff"* ]]
+  [[ "$c" == *$'\033[38;5;173m'"Opus 4.8"* ]]   # pretty-name + coral
+  [[ "$c" == *"20%"* ]]
 }
 
-@test "Subagent: ⚡を出さないこと(場所でsubagentと分かる方針)" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t1","label":"x","model":"claude-opus-4-8","status":"running","tokenCount":1,"contextWindowSize":200000}]}' \
-    | bash subagent-statusline-command.sh)
-  [[ "$(echo "$result" | jq -r .content)" != *"⚡"* ]]
+@test "Subagent: ⚡や独自の実行中グリフ(↑/▪/✓)を出さないこと(CC の chrome に委ねる)" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-opus-4-8","status":"running","tokenCount":1,"contextWindowSize":200000,"tokenSamples":[1,2,9]}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" != *"⚡"* ]]; [[ "$c" != *"↑"* ]]; [[ "$c" != *"▪"* ]]; [[ "$c" != *"✓"* ]]
 }
 
-@test "Subagent: 状態グリフ running+伸び で ↑(CTX_OK) が出ること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","tokenSamples":[1,2,3,100]}]}' \
-    | bash subagent-statusline-command.sh)
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"↑"* ]]
+@test "Subagent: Bedrock inference-profile id(jp.anthropic.claude-opus-4-8)がOpus 4.8になること" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"jp.anthropic.claude-opus-4-8"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[38;5;173m'"Opus 4.8"* ]]   # prefix 剥がして pretty + coral
+  [[ "$c" != *"anthropic"* ]]
 }
 
-@test "Subagent: 状態グリフ running+頭打ち で ▪(dim) が出て ↑ にならないこと" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","tokenSamples":[5,5,5,5]}]}' \
-    | bash subagent-statusline-command.sh)
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"▪"* ]]
-  [[ "$content" != *"↑"* ]]
-}
-
-@test "Subagent: 状態グリフ completed で ✓ が出ること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"completed"}]}' \
-    | bash subagent-statusline-command.sh)
-  [[ "$(echo "$result" | jq -r .content)" == *"✓"* ]]
+@test "Subagent: 旧形式 model id(claude-3-5-sonnet-…)を文字化けさせないこと" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"a","label":"x","model":"claude-3-5-sonnet-20241022"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"3-5-sonnet-20241022"* ]]   # cleaned id のまま
+  [[ "$c" != *"3 5.sonnet"* ]]
 }
 
 @test "Subagent: 未知status(入力待ち等)は黄で生の値を表示すること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"needs_input"}]}' \
-    | bash subagent-statusline-command.sh)
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *$'\033[33m'"needs_input"* ]]   # YLW + 生の status 値
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"needs_input"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[33m'"needs_input"* ]]
+}
+
+@test "Subagent: completed は経過も状態グリフも出さないこと / running は経過を出すこと" {
+  now=$(date +%s); st=$(( (now - 7200) * 1000 ))
+  cc=$(echo '{"columns":120,"tasks":[{"id":"c","label":"x","status":"completed","startTime":'"$st"'}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$cc" != *"2h"* ]]; [[ "$cc" != *"✓"* ]]
+  rr=$(echo '{"columns":120,"tasks":[{"id":"r","label":"x","status":"running","startTime":'"$st"'}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$rr" == *"2h"* ]]
 }
 
 @test "Subagent: モデル pretty-name と tier 色(Sonnet 4.5=amber / Fable=rainbow)" {
   s45=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-5"}]}' \
     | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$s45" == *$'\033[38;5;214m'"Sonnet 4.5"* ]]   # amber(id ハイフン形も拾う)
+  [[ "$s45" == *$'\033[38;5;214m'"Sonnet 4.5"* ]]
   fab=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-fable-5"}]}' \
     | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$fab" == *$'\033[38;5;178m'"F"* ]]            # Fable = 1 文字ずつ rainbow(先頭 178)
-}
-
-@test "Subagent: startTime(epoch ms)から経過時間を出すこと" {
-  now=$(date +%s); st=$(( (now - 90) * 1000 ))   # 90 秒前 -> "1m"
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","startTime":'"$st"'}]}' \
-    | bash subagent-statusline-command.sh)
-  [[ "$(echo "$result" | jq -r .content)" == *"1m"* ]]
+  [[ "$fab" == *$'\033[38;5;178m'"F"* ]]
 }
 
 @test "Subagent: cwdが.claude/worktrees配下のとき🌲名を出すこと(Line2と協調)" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","cwd":"/Users/u/repo/.claude/worktrees/fix-bug/src"}]}' \
-    | bash subagent-statusline-command.sh)
-  [[ "$(echo "$result" | jq -r .content)" == *"🌲fix-bug"* ]]
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","cwd":"/Users/u/repo/.claude/worktrees/fix-bug/src"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"🌲fix-bug"* ]]
 }
 
 @test "Subagent: labelがnameより優先されること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t4","name":"raw-name","label":"Pretty Label"}]}' \
-    | bash subagent-statusline-command.sh)
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"Pretty Label"* ]]
-  [[ "$content" != *"raw-name"* ]]
+  c=$(echo '{"columns":120,"tasks":[{"id":"t4","name":"raw-name","label":"Pretty Label"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"Pretty Label"* ]]; [[ "$c" != *"raw-name"* ]]
 }
 
-@test "Subagent: 旧CC(model/status/ctx/startTime欠落)でも説明を出しバー/状態は出さないこと" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t3","name":"agent-x","description":"doing work"}]}' \
-    | bash subagent-statusline-command.sh)
-  local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"doing work"* ]]
-  [[ "$content" != *"%"* ]]
+@test "Subagent: 旧CC(model/status/ctx/startTime欠落)でも説明を出しバーは出さないこと" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"t3","name":"agent-x","description":"doing work"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"doing work"* ]]; [[ "$c" != *"%"* ]]
+}
+
+@test "Subagent: 型不正な tokenSamples を含む複数 task でも全行が出力されること(jq abort 回帰)" {
+  ids=$(echo '{"columns":120,"tasks":[{"id":"good","label":"ok"},{"id":"bad","label":"y","tokenSamples":5}]}' \
+    | bash subagent-statusline-command.sh | jq -rc .id | sort | tr '\n' ',')
+  [[ "$ids" == "bad,good," ]]
+}
+
+@test "Subagent: label 空でも content 先頭に空白が付かないこと" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"e","label":"","model":"claude-opus-4-8","tokenCount":1,"contextWindowSize":200000}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" != " "* ]]
 }
 
 @test "Subagent: tasksが空/idなしなら何も出力しないこと" {
@@ -927,41 +932,4 @@ _wait_for_cache() {
   echo '' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo '{}' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo 'not json' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
-}
-
-@test "Subagent: 旧形式 model id(claude-3-5-sonnet-…)を文字化けさせないこと(CR1)" {
-  c=$(echo '{"tasks":[{"id":"a","label":"x","model":"claude-3-5-sonnet-20241022"}]}' \
-    | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$c" == *"3-5-sonnet-20241022"* ]]   # cleaned id をそのまま（先頭が tier 名でないので整形しない）
-  [[ "$c" != *"3 5.sonnet"* ]]            # 誤分割の文字化けが出ない
-}
-
-@test "Subagent: 不正型 tokenSamples の task が他 task の描画を消さないこと(CR2 jq abort回帰)" {
-  ids=$(echo '{"tasks":[{"id":"good","label":"ok"},{"id":"bad","label":"y","tokenSamples":5}]}' \
-    | bash subagent-statusline-command.sh | jq -rc .id | sort | tr '\n' ',')
-  [[ "$ids" == "bad,good," ]]              # 両方出力される（1件の型不正で全消えしない）
-}
-
-@test "Subagent: completed は経過を出さず ✓ を出すこと / running は経過を出すこと(CR3)" {
-  now=$(date +%s); st=$(( (now - 7200) * 1000 ))   # 2h 前
-  cc=$(echo '{"tasks":[{"id":"c","label":"x","status":"completed","startTime":'"$st"'}]}' \
-    | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$cc" == *"✓"* ]]
-  [[ "$cc" != *"2h"* ]]                    # 完了タスクに now-start の伸び続ける経過を出さない
-  rr=$(echo '{"tasks":[{"id":"r","label":"x","status":"running","startTime":'"$st"',"tokenSamples":[1,2,3]}]}' \
-    | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$rr" == *"2h"* ]]                     # running は経過を出す
-}
-
-@test "Subagent: running でも tokenSamples 不足なら状態グリフを出さないこと(CR4)" {
-  c=$(echo '{"tasks":[{"id":"r","label":"x","status":"running"}]}' \
-    | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$c" != *"↑"* ]]
-  [[ "$c" != *"▪"* ]]                       # トレンド不明なら ▪(stalled) を出さない(CC の ◯ に委ねる)
-}
-
-@test "Subagent: label 空でも content 先頭に空白が付かないこと(CR5)" {
-  c=$(echo '{"tasks":[{"id":"e","label":"","model":"claude-opus-4-8","tokenCount":1,"contextWindowSize":200000}]}' \
-    | bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$c" != " "* ]]
 }
