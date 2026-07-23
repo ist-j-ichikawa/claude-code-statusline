@@ -836,62 +836,94 @@ _wait_for_cache() {
 # ============================================================================
 # Subagent statusline — subagent-statusline-command.sh (agent panel の行描画)
 # ============================================================================
-@test "Subagent: taskごとにid付きJSON行を出しcontentにモデル色/effort/context%が入ること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t1","name":"code-reviewer","model":"claude-sonnet-5","effort":"high","tokenCount":40000,"contextWindowSize":200000,"description":"reviewing"}]}' \
+@test "Subagent: id付きJSON行で説明先頭+モデルpretty(tier色)+context%が出ること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t1","label":"reviewing the diff","model":"claude-opus-4-8[1m]","status":"running","tokenCount":40000,"contextWindowSize":200000,"tokenSamples":[1,2,40000]}]}' \
     | bash subagent-statusline-command.sh)
   [[ "$(echo "$result" | jq -r .id)" == "t1" ]]
   local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"code-reviewer"* ]]
-  [[ "$content" == *"high"* ]]
-  [[ "$content" == *"20%"* ]]              # 40000/200000
-  [[ "$content" == *"reviewing"* ]]
-  [[ "$content" == *$'\033[38;5;28m'* ]]   # Sonnet 5 = 緑グラデーション先頭色
+  [[ "$content" == *"reviewing the diff"* ]]
+  [[ "$content" == *$'\033[38;5;173m'"Opus 4.8"* ]]   # pretty-name + coral (claude-/[1m] 除去)
+  [[ "$content" == *"20%"* ]]                          # 40000/200000
 }
 
-@test "Subagent: effort欠落でも桁ずれせずcontextバーとモデル色が出ること(空フィールド潰れ回帰)" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t2","name":"bash-auditor","model":"claude-haiku-4-5-20251001","tokenCount":8000,"contextWindowSize":200000,"description":"x"}]}' \
+@test "Subagent: ⚡を出さないこと(場所でsubagentと分かる方針)" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t1","label":"x","model":"claude-opus-4-8","status":"running","tokenCount":1,"contextWindowSize":200000}]}' \
+    | bash subagent-statusline-command.sh)
+  [[ "$(echo "$result" | jq -r .content)" != *"⚡"* ]]
+}
+
+@test "Subagent: 状態グリフ running+伸び で ↑(CTX_OK) が出ること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","tokenSamples":[1,2,3,100]}]}' \
     | bash subagent-statusline-command.sh)
   local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"4%"* ]]                     # 8000/200000、tokenCount が effort 欄にずれ込まない
-  [[ "$content" == *$'\033[38;5;183m'* ]]        # Haiku ラベンダー(id 形式)
-  [[ "$content" != *$'\033[38;5;105m'* ]]        # EFFORT 色が出ない = 桁ずれしていない
+  [[ "$content" == *"↑"* ]]
 }
 
-@test "Subagent: tasksが空なら何も出力しないこと" {
-  result=$(echo '{"columns":120,"tasks":[]}' | bash subagent-statusline-command.sh)
-  [[ -z "$result" ]]
-}
-
-@test "Subagent: model/contextWindowSize欠落(旧CC)でも名前と説明を出しバーは出さないこと" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t3","name":"agent-x","description":"doing work"}]}' \
+@test "Subagent: 状態グリフ running+頭打ち で ▪(dim) が出て ↑ にならないこと" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","tokenSamples":[5,5,5,5]}]}' \
     | bash subagent-statusline-command.sh)
   local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *"agent-x"* ]]
-  [[ "$content" == *"doing work"* ]]
-  [[ "$content" != *"%"* ]]
+  [[ "$content" == *"▪"* ]]
+  [[ "$content" != *"↑"* ]]
+}
+
+@test "Subagent: 状態グリフ completed で ✓ が出ること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"completed"}]}' \
+    | bash subagent-statusline-command.sh)
+  [[ "$(echo "$result" | jq -r .content)" == *"✓"* ]]
+}
+
+@test "Subagent: 未知status(入力待ち等)は黄で生の値を表示すること" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"needs_input"}]}' \
+    | bash subagent-statusline-command.sh)
+  local content; content=$(echo "$result" | jq -r .content)
+  [[ "$content" == *$'\033[33m'"needs_input"* ]]   # YLW + 生の status 値
+}
+
+@test "Subagent: モデル pretty-name と tier 色(Sonnet 4.5=amber / Fable=rainbow)" {
+  s45=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-5"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$s45" == *$'\033[38;5;214m'"Sonnet 4.5"* ]]   # amber(id ハイフン形も拾う)
+  fab=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-fable-5"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$fab" == *$'\033[38;5;178m'"F"* ]]            # Fable = 1 文字ずつ rainbow(先頭 178)
+}
+
+@test "Subagent: startTime(epoch ms)から経過時間を出すこと" {
+  now=$(date +%s); st=$(( (now - 90) * 1000 ))   # 90 秒前 -> "1m"
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","status":"running","startTime":'"$st"'}]}' \
+    | bash subagent-statusline-command.sh)
+  [[ "$(echo "$result" | jq -r .content)" == *"1m"* ]]
+}
+
+@test "Subagent: cwdが.claude/worktrees配下のとき🌲名を出すこと(Line2と協調)" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","cwd":"/Users/u/repo/.claude/worktrees/fix-bug/src"}]}' \
+    | bash subagent-statusline-command.sh)
+  [[ "$(echo "$result" | jq -r .content)" == *"🌲fix-bug"* ]]
 }
 
 @test "Subagent: labelがnameより優先されること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t4","name":"raw-name","label":"Pretty Label","description":"d"}]}' \
+  result=$(echo '{"columns":120,"tasks":[{"id":"t4","name":"raw-name","label":"Pretty Label"}]}' \
     | bash subagent-statusline-command.sh)
   local content; content=$(echo "$result" | jq -r .content)
   [[ "$content" == *"Pretty Label"* ]]
   [[ "$content" != *"raw-name"* ]]
 }
 
-@test "Subagent: Sonnet 4.5のmodel id(claude-sonnet-4-5)がアンバーになること" {
-  result=$(echo '{"columns":120,"tasks":[{"id":"t5","name":"a","model":"claude-sonnet-4-5","description":"d"}]}' \
+@test "Subagent: 旧CC(model/status/ctx/startTime欠落)でも説明を出しバー/状態は出さないこと" {
+  result=$(echo '{"columns":120,"tasks":[{"id":"t3","name":"agent-x","description":"doing work"}]}' \
     | bash subagent-statusline-command.sh)
   local content; content=$(echo "$result" | jq -r .content)
-  [[ "$content" == *$'\033[38;5;214m'* ]]        # AMBER
+  [[ "$content" == *"doing work"* ]]
+  [[ "$content" != *"%"* ]]
 }
 
-@test "Subagent: idなしタスクは上書きせず出力しないこと(既定描画に委ねる)" {
-  result=$(echo '{"columns":120,"tasks":[{"name":"noid","description":"d"}]}' | bash subagent-statusline-command.sh)
-  [[ -z "$result" ]]
+@test "Subagent: tasksが空/idなしなら何も出力しないこと" {
+  [[ -z "$(echo '{"columns":120,"tasks":[]}' | bash subagent-statusline-command.sh)" ]]
+  [[ -z "$(echo '{"columns":120,"tasks":[{"label":"noid"}]}' | bash subagent-statusline-command.sh)" ]]
 }
 
-@test "Subagent: 空入力/tasks欠落でもクラッシュせずexit 0すること" {
+@test "Subagent: 空入力/tasks欠落/不正JSONでもクラッシュせずexit 0すること" {
   echo '' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo '{}' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo 'not json' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]

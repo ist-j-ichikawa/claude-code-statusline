@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.45.0-blue)
+![Version](https://img.shields.io/badge/version-1.46.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.216-purple)
 
 ## Overview
@@ -100,7 +100,7 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git
 
 ### 3. (任意) サブエージェント行もカスタマイズ
 
-`subagentStatusLine` を追加すると、agent panel に並ぶサブエージェントの各行も同じ配色で描画します (モデル色 + コンテキストバー + effort + 説明):
+`subagentStatusLine` を追加すると、agent panel に並ぶサブエージェントの各行も既存 statusline と協調した配色で描画します (説明 + モデル色 + コンテキストバー + 状態[実行中↑/頭打ち▪/完了✓/入力待ち] + 経過 + worktree):
 
 ```json
   "subagentStatusLine": {

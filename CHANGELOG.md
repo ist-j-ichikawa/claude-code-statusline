@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.46.0] - 2026-07-22
+
+### Changed
+
+- **サブエージェント行を再設計**（v1.45.0 の初版から、既存 statusline と協調するデザインへ）。実際の `subagentStatusLine` ペイロードを観測して判明した事実（`type` は総称 `local_agent`／`name` は多くの場合 null・意味ある識別子は `label`＝`description`／セッション effort はペイロードに来ない／`startTime` は epoch ミリ秒／`tokenSamples` はトークン数の履歴配列）に基づく。新デザインは `説明(先頭) + モデル(pretty-name・tier色) + context%バー + 状態グリフ + 経過 + [🌲worktree]`:
+  - **`⚡` プレフィックスを廃止** — agent panel という場所自体がサブエージェントを示すため、独自グリフはミニマル方針に反すると判断
+  - **モデルは Line 1 と同じ表記に整形** — ペイロードは id 形式（`claude-opus-4-8[1m]`）で来るので `prettify_model` で `Opus 4.8` 風にし、`model_color` で tier 色（Fable=rainbow 等も id 形式にマッチ）
+  - **context% は Line 4 と同じ** braille バー＋閾値色（同一閾値: 黄 ≥80% / 赤 ≥90%）
+  - **状態グリフ**（`status`＋`tokenSamples` のトレンド）: 実行中で伸びていれば `↑`、頭打ちなら `▪`、完了は `✓`、それ以外（入力待ち等の未知の status 値）は生の値を黄で表示（PR review_state と同じ色付き単語の作法で取りこぼさない）
+  - **経過時間**を `startTime` から算出し dim・コンパクト表記（Line 3 の commit age と協調）
+  - **worktree 隔離**エージェントは `cwd` から `🌲名` を表示（Line 2 の worktree 表示と協調）
+  - 端末幅での切り詰めはしない方針を踏襲（全要素フル出力・折り返し/切れは端末に委ねる）
+- 抽出・出力とも**単一 jq**を維持（区切りは非空白の US `0x1f` で空フィールド桁ずれを回避、トレンド判定も同 jq 内）。経過用の `date` はループ前に 1 回のみ。bats のサブエージェント系テストを新デザイン（状態グリフ4種・pretty-name・経過・worktree・⚡不在）に刷新
+
 ## [1.45.0] - 2026-07-21
 
 ### Added
