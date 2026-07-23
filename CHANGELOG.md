@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.47.0] - 2026-07-22
+
+### Changed
+
+- Built against を Claude Code 2.1.218 に追従（`/check-claude-code-update` で `4d07874`〜2.1.218 = 2.1.217 / .218 の 2 版を分析）。**stdin JSON フィールド・`subagentStatusLine` payload・`statusLine` 設定・モデル・プロバイダー・認証への変更はゼロ**でロジック改修なし。subagent 系の変更（2.1.217 で同時実行数の上限 default 20＝`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`・ネスト spawn の既定無効化＝`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`・`--max-budget-usd` での停止、2.1.218 で `/code-review` の background subagent 化・`context: fork` skill の既定 background 化）はいずれも実行制御／挙動の変更で、agent panel の各行に来るフィールドは不変（＝v1.46.0 のサブエージェント行描画に影響なし）。2.1.217 の footer PR badge の hyperlink 化（`FORCE_HYPERLINK`）は Claude Code 組み込み footer レイヤーの話で、本スクリプトの OSC 8 リンクとは独立
+- 公式 docs 突き合わせ（Step 2.5）: statusline の stdin フィールド一覧と subagentStatusLine の per-task フィールドを実装と全照合し、削除・リネーム・新規フィールドなしを確認
+
 ## [1.46.0] - 2026-07-22
 
 ### Changed
