@@ -405,7 +405,7 @@ _short_dir="${_display_dir/#$HOME/~}"
 # リポ dir が中程に埋まって「どこの repo か」が読めないため、リポ root と 🌲<name> に分割表示する
 # （リンクは root / worktree 各ディレクトリへ）。worktree 内サブディレクトリや既定外配置では
 # marker 不一致で分割せずフルパス表示に fallback する。
-_wt_marker="/.claude/worktrees/"
+_wt_marker="$WT_MARKER"   # lib.sh の共有定数（両 statusline で drift 防止）
 _is_wt=""
 if has_val "$wt_name" || has_val "$ws_git_worktree"; then _is_wt=1; fi
 _wt_leaf=""

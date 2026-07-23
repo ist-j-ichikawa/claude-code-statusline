@@ -5,7 +5,7 @@
 #
 # 契約 (Claude Code docs): stdin = `columns` + `tasks[]` を持つ 1 個の JSON。
 # stdout = 上書きしたい行ごとに JSON 1 行 `{"id":..,"content":..}`。id を省いた行は既定描画のまま。
-# content は ANSI / OSC 8 をそのまま解釈。model/contextWindowSize は 2.1.205+、effort は 2.1.214+。
+# content は ANSI / OSC 8 をそのまま解釈。per-task の model/contextWindowSize は 2.1.205+ で来る。
 #
 # 行 = 説明 + モデル(pretty・tier色) + context%バー + 状態(↑/▪/✓/status語) + 経過 + [🌲worktree]。
 # 端末幅での切り詰めはしない方針 (主 statusline と同じ。全要素フル出力・折り返し/切れは端末に委ねる)。
@@ -19,9 +19,10 @@ IFS= read -r -d '' input || true
 
 _now=$(date +%s)   # 経過時間用に 1 回だけ (主 statusline の _NOW と同じく 1 date fork)
 
-# per-task を単一 jq で US(0x1f) 区切り抽出。grow(伸び) は tokenSamples の末尾と数点前を比較して算出。
-# 区切りに tab を使うと read の IFS=tab が空フィールドを潰して桁ずれするため非空白の US を使う。
-# 自由入力 (label) は改行/タブを空白へ潰し 1 行 = 1 task を保つ。
+# per-task を単一 jq で US(0x1f) 区切り抽出。全 text フィールドの改行/タブは空白化 (US 連結行の分割崩れ防止)。
+# grow(伸び): tokenSamples が「配列で 2 点以上」の時だけ末尾と数点前を比較して "1"(伸び)/"0"(頭打ち)、
+#   それ以外は "" (不明)。type=="array" ガードで、tokenSamples が非配列(不正型)でも .[-1] 等を index せず
+#   jq が abort しない（1 task の型不正で全 task の描画が消えるのを防ぐ）。
 _rows=$(jq -r '.tasks[]? | [
   (.id // "" | gsub("[\n\r\t]"; " ")),
   (.label // .description // .name // "" | gsub("[\n\r\t]"; " ")),
@@ -30,22 +31,27 @@ _rows=$(jq -r '.tasks[]? | [
   (.tokenCount // 0 | tostring),
   (.contextWindowSize // 0 | tostring),
   (.startTime // 0 | tostring),
-  ((.tokenSamples // []) | if length >= 2 then (if .[-1] > (.[-4] // .[0]) then "1" else "0" end) else "0" end),
+  ((.tokenSamples // []) | if (type == "array" and length >= 2) then (if .[-1] > (.[-4] // .[0]) then "1" else "0" end) else "" end),
   (.cwd // "" | gsub("[\n\r\t]"; " "))
 ] | join("\u001f")' <<< "$input" 2>/dev/null) || exit 0
 [[ -z "$_rows" ]] && exit 0
 
-# model id -> "Opus 4.8" 風 (Line 1 の display_name と協調、fork-free)。claude- 接頭辞と [1m] 接尾辞を除く。
+# model id -> "Opus 4.8" 風 (Line 1 の display_name と協調、fork-free)。先頭セグメントが tier 名
+# (opus/sonnet/haiku/fable) の新形式 id のみ整形。旧形式 (claude-3-5-sonnet-… 版が tier より前) や
+# 未知形式は cleaned id をそのまま出す (誤分割で "3 5.sonnet…" のように文字化けさせない)。
 prettify_model() {
   local m="${1#claude-}"; m="${m%\[1m\]}"
   local tier="${m%%-*}" ver="${m#*-}" _t
-  [[ "$ver" == "$tier" ]] && ver=""
+  case "$tier" in
+    opus)_t=Opus;; sonnet)_t=Sonnet;; haiku)_t=Haiku;; fable)_t=Fable;;
+    *) printf -v "$2" '%s' "$m"; return;;
+  esac
+  [[ "$m" != *-* ]] && ver=""      # 版が無い id (例 "opus") は tier のみ
   ver="${ver//-/.}"
-  case "$tier" in opus)_t=Opus;;sonnet)_t=Sonnet;;haiku)_t=Haiku;;fable)_t=Fable;;*)_t="$tier";;esac
   printf -v "$2" '%s%s' "$_t" "${ver:+ $ver}"
 }
 
-# 秒 -> "45s"/"3m"/"1h03m" (Line 3 の commit age と協調。dim・コンパクト単一/二連単位)
+# 秒 -> "45s"/"3m"/"1h03m" (Line 3 の commit age と協調。dim・コンパクト)
 fmt_elapsed() {
   local s=$1
   if   ((s < 60));   then printf -v "$2" '%ds' "$s"
@@ -53,46 +59,49 @@ fmt_elapsed() {
   else printf -v "$2" '%dh%02dm' $((s / 3600)) $(((s % 3600) / 60)); fi
 }
 
+# row への追記。要素間は 2 スペース区切り (先頭要素には付けない → row が空なら区切り無し。全要素で統一)。
+add() { row+="${row:+  }$1"; }
+
 # here-string 供給なのでループは現シェル (サブシェル無し・_out に蓄積)。
 _out=""
 while IFS=$'\037' read -r id label model status tok ctx start grow cwd; do
   [[ -z "$id" ]] && continue
+  row=""
   # 説明 (先頭・通常輝度・切り詰めなし)
-  row="$label"
+  has_val "$label" && add "$label"
   # モデル (pretty-name + tier 色)
   if has_val "$model"; then
-    prettify_model "$model" _pm
-    model_color _mc "$_pm"
-    row+="${row:+  }${_mc}"
+    prettify_model "$model" _pm; model_color _mc "$_pm"; add "$_mc"
   fi
-  # context 使用率バー + % (主 Line 4 と同じ braille + 閾値色)
+  # context 使用率バー + % (主 Line 4 と同じ braille + 閾値色: 黄≥80/赤≥90)
   if [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx > 0 )) && [[ "$tok" =~ ^[0-9]+$ ]]; then
     pct=$(( tok * 100 / ctx )); (( pct > 100 )) && pct=100
-    braille_bar "$pct" _bar; color_by_threshold "$pct" 90 80 _bc   # 主 Line 4 と同一閾値 (黄≥80/赤≥90)
-    row+="  ${_bc}${_bar}${RST} ${DIM}${pct}%${RST}"
+    braille_bar "$pct" _bar; color_by_threshold "$pct" 90 80 _bc
+    add "${_bc}${_bar}${RST} ${DIM}${pct}%${RST}"
   fi
-  # 状態グリフ: status + 伸び。running は ↑(伸び中)/▪(頭打ち)、completed は ✓、
-  # それ以外 (入力待ち等の未知値) は生の値を黄で表示 (取りこぼし防止・PR review_state と同じ作法)。
+  # 状態グリフ: running は伸び ↑ / 頭打ち ▪ / 不明(サンプル不足)は無表示(CC の ◯ に委ねる)、
+  # completed は ✓、それ以外(入力待ち等の未知値)は生の値を黄で (取りこぼし防止・PR review_state と同じ作法)。
   case "$status" in
-    running)   [[ "$grow" == "1" ]] && row+="  ${CTX_OK}↑${RST}" || row+="  ${DIM}▪${RST}" ;;
-    completed) row+="  ${DIM}✓${RST}" ;;
+    running)   case "$grow" in 1) add "${CTX_OK}↑${RST}" ;; 0) add "${DIM}▪${RST}" ;; esac ;;
+    completed) add "${DIM}✓${RST}" ;;
     "")        : ;;
-    *)         row+="  ${YLW}${status}${RST}" ;;
+    *)         add "${YLW}${status}${RST}" ;;
   esac
-  # 経過時間 (startTime は epoch ミリ秒)
-  if [[ "$start" =~ ^[0-9]+$ ]] && (( start > 0 )); then
+  # 経過時間 (startTime は epoch ms)。completed は now-start が伸び続け「まだ実行中」に見えるので出さない。
+  if [[ "$status" != "completed" ]] && [[ "$start" =~ ^[0-9]+$ ]] && (( start > 0 )); then
     _els=$(( _now - start / 1000 )); (( _els < 0 )) && _els=0
-    fmt_elapsed "$_els" _el; row+="  ${DIM}${_el}${RST}"
+    fmt_elapsed "$_els" _el; add "${DIM}${_el}${RST}"
   fi
   # worktree: cwd が .claude/worktrees 配下の時だけ 🌲名 (Line 2 の worktree 表示と協調)
-  if [[ "$cwd" == */.claude/worktrees/* ]]; then
-    _wt="${cwd##*/.claude/worktrees/}"; _wt="${_wt%%/*}"
-    has_val "$_wt" && row+="  ${DIM}🌲${_wt}${RST}"
+  if [[ "$cwd" == *"$WT_MARKER"* ]]; then
+    _wt="${cwd##*"$WT_MARKER"}"; _wt="${_wt%%/*}"
+    has_val "$_wt" && add "${DIM}🌲${_wt}${RST}"
   fi
   [[ -z "$row" ]] && continue
   _out+="${id}"$'\037'"${row}"$'\n'
 done <<< "$_rows"
 
-# JSON lines を単一 jq で出力 (id/content を US で分割)。ESC/引用符/バックスラッシュは jq が安全にエスケープ。
-[[ -n "$_out" ]] && printf '%s' "$_out" | jq -Rc 'split("\u001f") | {id: .[0], content: .[1]}'
+# JSON lines を単一 jq で出力 (id/content を US で分割)。入力側と同じく here-string で printf のサブシェル fork を避ける。
+# _out 末尾の改行を 1 個外す (<<< が改行を付けるため。付けたままだと空行 → bogus な空 record が出る)。
+[[ -n "$_out" ]] && jq -Rc 'split("\u001f") | {id: .[0], content: .[1]}' <<< "${_out%$'\n'}"
 exit 0

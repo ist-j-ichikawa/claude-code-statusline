@@ -928,3 +928,40 @@ _wait_for_cache() {
   echo '{}' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo 'not json' | bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
 }
+
+@test "Subagent: 旧形式 model id(claude-3-5-sonnet-…)を文字化けさせないこと(CR1)" {
+  c=$(echo '{"tasks":[{"id":"a","label":"x","model":"claude-3-5-sonnet-20241022"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"3-5-sonnet-20241022"* ]]   # cleaned id をそのまま（先頭が tier 名でないので整形しない）
+  [[ "$c" != *"3 5.sonnet"* ]]            # 誤分割の文字化けが出ない
+}
+
+@test "Subagent: 不正型 tokenSamples の task が他 task の描画を消さないこと(CR2 jq abort回帰)" {
+  ids=$(echo '{"tasks":[{"id":"good","label":"ok"},{"id":"bad","label":"y","tokenSamples":5}]}' \
+    | bash subagent-statusline-command.sh | jq -rc .id | sort | tr '\n' ',')
+  [[ "$ids" == "bad,good," ]]              # 両方出力される（1件の型不正で全消えしない）
+}
+
+@test "Subagent: completed は経過を出さず ✓ を出すこと / running は経過を出すこと(CR3)" {
+  now=$(date +%s); st=$(( (now - 7200) * 1000 ))   # 2h 前
+  cc=$(echo '{"tasks":[{"id":"c","label":"x","status":"completed","startTime":'"$st"'}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$cc" == *"✓"* ]]
+  [[ "$cc" != *"2h"* ]]                    # 完了タスクに now-start の伸び続ける経過を出さない
+  rr=$(echo '{"tasks":[{"id":"r","label":"x","status":"running","startTime":'"$st"',"tokenSamples":[1,2,3]}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$rr" == *"2h"* ]]                     # running は経過を出す
+}
+
+@test "Subagent: running でも tokenSamples 不足なら状態グリフを出さないこと(CR4)" {
+  c=$(echo '{"tasks":[{"id":"r","label":"x","status":"running"}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" != *"↑"* ]]
+  [[ "$c" != *"▪"* ]]                       # トレンド不明なら ▪(stalled) を出さない(CC の ◯ に委ねる)
+}
+
+@test "Subagent: label 空でも content 先頭に空白が付かないこと(CR5)" {
+  c=$(echo '{"tasks":[{"id":"e","label":"","model":"claude-opus-4-8","tokenCount":1,"contextWindowSize":200000}]}' \
+    | bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" != " "* ]]
+}

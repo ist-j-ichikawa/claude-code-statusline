@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.48.0] - 2026-07-23
+
+### Fixed
+
+- **`/code-review` で見つかったサブエージェント行の不具合を修正**（`/simplify` の cleanup も同時反映）:
+  - **1 件の不正な `tokenSamples`（非配列）で agent panel の全行が既定描画に戻る**問題を修正。トレンド判定の jq が配列前提で index して abort → `|| exit 0` で全出力が消えていた。`type == "array"` を確認してから index するようにし、型不正の task があっても他の task の描画は保たれる
+  - **完了タスクに経過時間が伸び続けて表示され「まだ実行中」に見える**問題を修正。`completed` には経過を出さない（`✓` のみ）。経過は `now - startTime` で終了時刻を持たないため、完了後は伸び続けていた
+  - **起動直後の実行中タスクが誤って `▪`（停滞）表示になる**問題を修正。`tokenSamples` が 2 点未満/非配列でトレンドが不明な時は状態グリフを出さない（Claude Code の `◯` に委ねる）。`▪` は「頭打ち」を確認できた時だけ
+  - **旧形式の model id（`claude-3-5-sonnet-…` など版が tier より前）が `prettify_model` で文字化けする**問題を修正。先頭セグメントが tier 名の新形式のみ整形し、旧形式は cleaned id をそのまま出す
+  - **`label` が空のとき content 先頭に余分な空白が付く**問題を修正。行組み立てを `add()` ヘルパーに統一し、先頭要素以外にのみ 2 スペース区切りを付与
+
+### Changed
+
+- worktree marker 文字列 `/.claude/worktrees/` を `lib.sh` の共有定数 `WT_MARKER` に集約（主 statusline とサブエージェント statusline の 2 ファイル 3 箇所に散在していた外部契約文字列の drift を防止）
+- サブエージェント statusline の出力を `printf | jq` から here-string 供給（`jq … <<< "${_out%$'\n'}"`）に変更し、入力側と同じく `printf` の subshell fork を回避（fork 3→2）。text フィールド全て（`id`/`label`/`model`/`status`/`cwd`）の改行・タブを `gsub` で空白化して 1 行 = 1 task を堅牢化
+
 ## [1.47.0] - 2026-07-22
 
 ### Changed
