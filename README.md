@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.57.0-blue)
+![Version](https://img.shields.io/badge/version-1.58.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -92,7 +92,10 @@ cd claude-code-statusline
 | `-n`, `--dry-run` | 変更内容を表示するだけで書き込まない |
 | `-y`, `--yes` | 確認プロンプトを省略（非対話環境ではこれが必須。付けないと中止します） |
 | `--main-only` | サブエージェント行は Claude Code 既定のままにする |
+| `--uninstall` | `statusLine` / `subagentStatusLine` の登録を外す（他のキーは触らない） |
 | `CLAUDE_SETTINGS=<path>` | 書き込み先の settings.json を差し替える |
+
+外すときは `./install.sh --uninstall` です。登録時と同じく差分を表示して確認を求め、バックアップも取ります。clone を消してしまった後でも（スクリプト本体が無くても）実行できるので、孤児になった設定の掃除に使えます。
 
 **更新は `git pull` だけ** — コピーを作らずリポジトリを直接参照するので、このリポジトリが single source of truth のままになります。
 

@@ -4,15 +4,16 @@
 # バックアップを取る (上書きしない)。詳細は README の Installation 参照。
 set -euo pipefail
 
-main_only=0 assume_yes=0 dry_run=0
+main_only=0 assume_yes=0 dry_run=0 uninstall=0
 for a in "$@"; do
   case "$a" in
     --main-only) main_only=1 ;;
+    --uninstall) uninstall=1 ;;
     -y|--yes)    assume_yes=1 ;;
     -n|--dry-run) dry_run=1 ;;
     -h|--help)
       cat <<'USAGE'
-usage: ./install.sh [--dry-run] [--yes] [--main-only]
+usage: ./install.sh [--dry-run] [--yes] [--main-only] [--uninstall]
 
   ~/.claude/settings.json に statusLine (と subagentStatusLine) を登録します。
   既定では変更内容を差分で表示して確認を求めます。スクリプトは clone したこの場所を
@@ -21,6 +22,7 @@ usage: ./install.sh [--dry-run] [--yes] [--main-only]
   -n, --dry-run  変更内容を表示するだけで書き込まない
   -y, --yes      確認プロンプトを省略する (非対話環境ではこれが必須)
       --main-only  メインの statusLine だけ登録し、サブエージェント行は Claude Code 既定のままにする
+      --uninstall  statusLine / subagentStatusLine の登録を外す (他のキーは触らない)
 
   CLAUDE_SETTINGS=<path>  書き込み先の settings.json を差し替える (既定: ~/.claude/settings.json)
 USAGE
@@ -40,18 +42,20 @@ repo=$(cd "$_selfdir" && pwd)   # ~ 展開されない環境でも効くよう�
 
 # settings.json の command 文字列にパスを埋めるので、空白入りパスは引用できず壊れる。
 # 試走は通ってしまい「入れたのに真っ白」になるため、書く前に断る。
-case "$repo" in
+[[ $uninstall -eq 1 ]] || case "$repo" in
   *[[:space:]]*)
     printf 'clone 先のパスに空白が含まれています:\n  %s\n' "$repo" >&2
     printf '設定値の分割で壊れるため登録できません。空白を含まないパスに clone し直してください。\n' >&2
     exit 1 ;;
 esac
 
+if [[ $uninstall -eq 0 ]]; then
 scripts=(statusline-command.sh lib.sh)
 [[ $main_only -eq 1 ]] || scripts+=(subagent-statusline-command.sh)
 for f in "${scripts[@]}"; do
   [[ -f "$repo/$f" ]] || { printf '%s が %s に見つかりません\n' "$f" "$repo" >&2; exit 1; }
 done
+fi
 
 settings="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 _dir="${settings%/*}"; [[ "$_dir" == "$settings" ]] && _dir="."   # スラッシュ無しなら cwd
@@ -80,23 +84,30 @@ _probe() {
   out=$(printf '%s' "$2" | CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$repo/$1" 2>/dev/null) || return 1
   [[ -n "$out" ]]
 }
+if [[ $uninstall -eq 0 ]]; then
 _probe statusline-command.sh \
   '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"0","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":1}}' \
   || { printf 'statusline-command.sh が正常に動きませんでした (%s)\n' "$repo" >&2; exit 1; }
 [[ $main_only -eq 1 ]] || _probe subagent-statusline-command.sh \
   '{"columns":80,"tasks":[{"id":"p","label":"probe","model":"claude-opus-5"}]}' \
   || { printf 'subagent-statusline-command.sh が正常に動きませんでした (%s)\n' "$repo" >&2; exit 1; }
+fi
 
 # 既存の statusLine の他キー (padding 等) と、ユーザーが決めた refreshInterval /
 # hideVimModeIndicator は保つ (//= なので未設定時だけ既定値を入れる)。
-filter='
-  .statusLine = ((.statusLine // {}) + {type: "command", command: $main})
-  | .statusLine.refreshInterval //= 30
-  | .statusLine.hideVimModeIndicator //= true
-'
-[[ $main_only -eq 1 ]] || filter+='
-  | .subagentStatusLine = ((.subagentStatusLine // {}) + {type: "command", command: $sub})
-'
+if [[ $uninstall -eq 1 ]]; then
+  # 2 キーだけ落とす。他のキーには触らないので個人設定は残る
+  filter='del(.statusLine) | del(.subagentStatusLine)'
+else
+  filter='
+    .statusLine = ((.statusLine // {}) + {type: "command", command: $main})
+    | .statusLine.refreshInterval //= 30
+    | .statusLine.hideVimModeIndicator //= true
+  '
+  [[ $main_only -eq 1 ]] || filter+='
+    | .subagentStatusLine = ((.subagentStatusLine // {}) + {type: "command", command: $sub})
+  '
+fi
 
 _new=$(jq --arg main "/bin/bash $repo/statusline-command.sh" \
           --arg sub  "/bin/bash $repo/subagent-statusline-command.sh" \
@@ -107,7 +118,11 @@ _before=$(jq -S "$_keys" "$settings")
 _after=$(printf '%s' "$_new" | jq -S "$_keys")
 
 if [[ "$_before" == "$_after" ]]; then
-  printf '既に登録済みです (変更なし): %s\n' "$settings"
+  if [[ $uninstall -eq 1 ]]; then
+    printf '登録されていません (変更なし): %s\n' "$settings"
+  else
+    printf '既に登録済みです (変更なし): %s\n' "$settings"
+  fi
   exit 0
 fi
 
@@ -144,4 +159,8 @@ _tmp="$settings.tmp.$$"
 chmod "$(stat -f '%Lp' "$settings")" "$_tmp"
 printf '%s\n' "$_new" > "$_tmp" && mv "$_tmp" "$settings"
 
-printf '登録しました: %s\nバックアップ: %s\n次回 Claude Code 起動時 (または /doctor) から反映されます。\n' "$settings" "$_bak"
+if [[ $uninstall -eq 1 ]]; then
+  printf '登録を外しました: %s\nバックアップ: %s\n次回 Claude Code 起動時から標準のステータスラインに戻ります。\n' "$settings" "$_bak"
+else
+  printf '登録しました: %s\nバックアップ: %s\n次回 Claude Code 起動時 (または /doctor) から反映されます。\n' "$settings" "$_bak"
+fi

@@ -63,47 +63,66 @@ _paint() {
   shift 3                          # 以降 "$@" = パレット (変数名は先に _vn へ退避済み)
   local _pal=("$@") _n=$#
   (( _n == 0 )) && { printf -v "$_vn" '%s' "$_txt"; return; }
+  # sweep の分母。1 文字なら 0 になるので下で if でガードする — **三項演算子は使えない**:
+  # bash 3.2 は `((cond ? a/0 : 0))` で未選択の分岐も評価して "division by 0" を出し、
+  # 呼び出し側の変数が未設定のまま set -u に当たって statusline が丸ごと空白になる (bash 4+ は平気)
+  local _den=$(( 2 * (_len - 1) ))
   for ((_i=0; _i<_len; _i++)); do
     # sweep の添字は四捨五入。切り捨てだと最終ストップが末尾 1 文字にしか載らず
     # (35 字の Bedrock id で 17/17/1 字)、一番明るい色がほぼ見えなくなる
-    _idx=$(( _sweep ? (_len > 1 ? (2 * _i * (_n - 1) + _len - 1) / (2 * (_len - 1)) : 0) : _i % _n ))
+    if   ((_sweep && _den > 0)); then _idx=$(( (2 * _i * (_n - 1) + _len - 1) / _den ))
+    elif ((_sweep));             then _idx=0
+    else                              _idx=$(( _i % _n )); fi
     _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
   done
   printf -v "$_vn" '%s%s' "$_out" "$RST"
 }
 
-# model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
-# tier color (no subshell). Shared by Line 1 (main) and the subagent rows so both
-# use identical model coloring. Handles its own nocasematch scope (bash 3.2-safe).
-# Fable/Sonnet 5/Opus 5 have no official flat color → multi-color rainbow/gradient render.
-# 5-tier match uses "opus 5"/"opus-5" (not *opus*5* which also hits "Opus 4.5"), same for
-# Sonnet 5. Both must be tested BEFORE the generic *opus*/*sonnet* flat-color branches.
-# Tier 判定は MODEL_SHOW + MODEL_ID の連結で行い、描画は MODEL_SHOW のみ — display_name が版を
-# 含まない形 ("Opus"/"Sonnet") で来ても id 側の "claude-opus-5" で拾い、Line 1 と subagent 行が
-# 同じ tier 色に収まる (subagent 側は id しか持たないため、片側だけ版を見ると色が食い違う)。
-model_color() {
-  local _ms="$2" _key="$2|${3:-}"   # 区切りは非空白 — 空白だと "Opus"+"5-…" が跨って "opus 5" に化ける
+# model_key VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to a canonical "tier version"
+# ("opus 5" / "sonnet 4.5" / "fable" / "" = unknown)。display_name と model id の両形、Bedrock の
+# inference-profile、旧形式 (版が tier より前) を 1 つの正規形に畳む。
+# 正規形は**必ず小文字**になる (tier 名はループのリテラルから取るので bash 4+ の ${var,,} が不要)。
+# これがあるので model_color 側は「順序に依存する 15 個の glob」ではなく完全一致で分岐できる。
+model_key() {
+  local _s="$2|${3:-}" _t _v _out=""
   shopt -s nocasematch
-  if [[ "$_key" == *fable* ]]; then
-    rainbow "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"}
-  elif [[ "$_key" == *"opus 5"* || "$_key" == *"opus-5"* ]]; then
-    gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"}
-  elif [[ "$_key" == *opus* ]]; then
-    printf -v "$1" '%s' "${CORAL}${_ms}${RST}"
-  elif [[ "$_key" == *"sonnet 5"* || "$_key" == *"sonnet-5"* ]]; then
-    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"}
-  elif [[ "$_key" == *sonnet*4.5* || "$_key" == *sonnet*3.5* || "$_key" == *sonnet*4-5* || "$_key" == *sonnet*3-5* ]]; then
-    # display_name ("Sonnet 4.5") と model id ("claude-sonnet-4-5") の両形を拾う
-    # (主 statusline は display_name 空時に model_id=dash 形へ fallback するため両形が来る)
-    printf -v "$1" '%s' "${AMBER}${_ms}${RST}"
-  elif [[ "$_key" == *sonnet* ]]; then
-    printf -v "$1" '%s' "${TEAL}${_ms}${RST}"
-  elif [[ "$_key" == *haiku* ]]; then
-    printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}"
-  else
-    printf -v "$1" '%s' "$_ms"
-  fi
+  for _t in fable opus sonnet haiku; do
+    [[ "$_s" == *"$_t"* ]] || continue
+    if [[ "$_s" =~ ([0-9]+)[-.]([0-9]+)[-\ ]$_t ]]; then
+      # 旧形式 ("claude-3-5-sonnet-…" / "Claude 3.5 Sonnet") を先に見る。
+      # 後回しにすると新形式の規則が "sonnet-20241022" の日付を版として拾う
+      _out="$_t ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+    elif [[ "$_s" =~ $_t[-\ ]([0-9]+)([-.]([0-9]+))? ]]; then
+      _v="${BASH_REMATCH[1]}"
+      [[ -n "${BASH_REMATCH[3]}" ]] && _v="$_v.${BASH_REMATCH[3]}"
+      _out="$_t $_v"
+    else
+      _out="$_t"          # 版が読めない ("Opus" 単体等) — generic tier 色に落ちる
+    fi
+    break
+  done
   shopt -u nocasematch
+  printf -v "$1" '%s' "$_out"
+}
+
+# model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
+# tier color (no subshell)。Shared by Line 1 (main) and the subagent rows so both use identical
+# model coloring。判定は model_key の正規形に対する**完全一致**で、残る順序ルールは
+# 「generic tier の arm を最後に置く」の 1 つだけ。新モデルはパレット 1 行 + arm 1 行で足せる。
+# Fable/Sonnet 5/Opus 5 は公式単色が無いので多色描画 (rainbow/gradient)。
+model_color() {
+  local _ms="$2" _key
+  model_key _key "$2" "${3:-}"
+  case "$_key" in
+    fable*)                     rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
+    "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
+    "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
+    "sonnet 4.5"|"sonnet 3.5")  printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
+    opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
+    sonnet*)                    printf -v "$1" '%s' "${TEAL}${_ms}${RST}" ;;
+    haiku*)                     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}" ;;
+    *)                          printf -v "$1" '%s' "$_ms" ;;
+  esac
 }
 
 # fmt_elapsed SECONDS VARNAME — 経過秒を "3m" / "1h03m" / "27h" にする (no subshell)。

@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.58.0] - 2026-07-27
+
+### Changed
+
+- **モデル tier の判定を `model_key` による正規化に置き換えた**。`model_key VARNAME MODEL_SHOW [MODEL_ID]` が display_name / model id / Bedrock inference-profile / 旧形式（版が tier より前）を `opus 5` / `sonnet 4.5` / `fable` / `""` の正規形に畳み、`model_color` は**その完全一致**で分岐する。旧実装は 4 tier に **15 個の glob** と「5 世代を generic より前に置く」暗黙の順序で成り立っており、次に `Haiku 5` や `Opus 6` を足すときスペース形（`"opus 6"`）とダッシュ形（`"opus-6"`）の両方を正しい位置に挿さないと**エラーではなく静かに前世代の色**になる作りだった（しかも display_name が空の Bedrock でだけ再現するので最も見つけにくい）。今は残る順序ルールが「generic tier の arm を最後に置く」1 つだけで、**新モデルはパレット 1 行 + arm 1 行**で足せる
+- 正規形は必ず小文字になる（tier 名をループのリテラルから取るので bash 4+ の `${var,,}` が不要）
+
+### Fixed
+
+- **旧形式の model id を単独で渡すと色が間違っていた**のを修正。`claude-3-5-sonnet-20241022` を `display_name` 側だけで受けると `*sonnet*3-5*` に当たらず **teal（Sonnet 4.6 の色）**になっていた。従来 amber で出ていたのは、判定キーが `display_name|model_id` の連結で**同じ文字列が 2 回並ぶ**ため「片方の `sonnet` と他方の `3-5`」が偶然マッチしていたからで、意図した動作ではなかった。正規化により `sonnet 3.5` → amber と確定する
+- **1 文字のモデル名で statusline が丸ごと空白になるバグを修正**（v1.54.0 以降。bash 3.2 限定）。`_paint` のスイープ添字を三項演算子で書いていたが、**bash 3.2 は未選択の分岐も評価する**ため 1 文字（分母 0）で "division by 0" を出し、呼び出し側の変数が未設定のまま `set -u` に当たっていた。`if` で書き直した（bash 4+ では再現しないクラス）
+
+### Added
+
+- **`install.sh --uninstall`** — `statusLine` / `subagentStatusLine` の 2 キーだけを外す（`padding` 等の個人設定や他のキーには触らない）。登録時と同じ安全策（差分表示 + y/N 確認、タイムスタンプ付きバックアップ、冪等）が効き、**clone を消した後でも動く**（スクリプトの存在確認と試走をスキップするため、孤児設定の掃除に使える）
+- `format_reset_remaining` / `format_reset_absolute` のテスト（従来 0 件だった唯一の未検証領域）。5h 残りの `H:MM`・0 埋め・期限切れの `now`・欠落/null、週間の `date -j` 整形を pin
+- `/render` の fixture 6 個を現行モデル（Opus 5 / Sonnet 5・Claude Code 2.1.220）に更新。プレビュー道具が実運用の表示を映すようにした
+
+### Removed
+
+- **`TODO.md` を削除**。残っていた 2 件を消化した: `build_git()` のデータ/表示分離は v1.53.0 で実施済み、**Go/Rust リライトは「やらない」判断**を CLAUDE.md の Key Constraints に移した（実測 50-60ms はタイムアウトから十分遠く、warm cache の fork は 4 個で床。バイナリ配布になれば `git pull` だけで更新できる今の運用を失う）
+
 ## [1.57.0] - 2026-07-27
 
 ### Changed

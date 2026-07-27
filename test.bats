@@ -1275,3 +1275,101 @@ _wait_for_cache() {
     | /bin/bash statusline-command.sh 2>/dev/null | head -1 | sed $'s/\033\\[[0-9;]*m//g')
   [[ "$result" == *"Opus 5 (preview)"* ]]
 }
+
+# ============================================================================
+# リセット時刻の整形 (format_reset_remaining / format_reset_absolute)
+# main script 内の関数なので統合テストで pin する
+# ============================================================================
+@test "リセット残: 5h制限の残り時間が H:MM で出ること" {
+  now=$(date +%s)
+  _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45,"resets_at":'"$1"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
+  [[ "$(_l4 $((now + 3720)))" == *"1:02"* ]]    # 1時間2分後
+  [[ "$(_l4 $((now + 300)))"  == *"0:05"* ]]    # 5分後 → 0 埋め
+  [[ "$(_l4 $((now - 60)))"   == *"now"* ]]     # 過ぎていたら now
+}
+
+@test "リセット残: resets_at が無い/不正なら何も出さないこと" {
+  _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45'"$1"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
+  [[ "$(_l4 '')" == *"45%"* ]]; [[ "$(_l4 '')" != *":"* ]]            # resets_at 欠落
+  [[ "$(_l4 ',"resets_at":null')" != *":"* ]]                          # null
+}
+
+@test "週間リセット: 曜日+時刻 (date -j) で出ること" {
+  ep=$(( $(date +%s) + 200000 ))
+  want=$(date -j -r "$ep" +"%a %H:%M")
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":9,"resets_at":'"$ep"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$l4" == *"week:9%"* ]]
+  [[ "$l4" == *"$want"* ]]
+}
+
+@test "install: --uninstall で2キーだけ外し、他のキーは残すこと" {
+  s="$BATS_TEST_TMPDIR/uninst.json"
+  printf '%s' '{"model":"opus","statusLine":{"type":"command","command":"/x/sl.sh","padding":2},"subagentStatusLine":{"type":"command","command":"/x/sub.sh"},"permissions":{"defaultMode":"auto"}}' > "$s"
+  CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --uninstall --yes >/dev/null
+  [[ "$(jq -r '.statusLine // "absent"' "$s")" == "absent" ]]
+  [[ "$(jq -r '.subagentStatusLine // "absent"' "$s")" == "absent" ]]
+  [[ "$(jq -r .model "$s")" == "opus" ]]                        # 無関係キーは温存
+  [[ "$(jq -r .permissions.defaultMode "$s")" == "auto" ]]
+  [[ -n "$(echo "$s".bak.*)" ]]                                  # バックアップは取る
+  # 冪等: 2 回目は「登録されていません」で終わる
+  run env CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --uninstall --yes
+  [[ "$output" == *"登録されていません"* ]]
+  # 外した後に再登録できる
+  CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --yes >/dev/null
+  [[ "$(jq -r .statusLine.type "$s")" == "command" ]]
+}
+
+@test "install: --uninstall はスクリプトが無くても動くこと(clone を消した後の掃除)" {
+  d="$BATS_TEST_TMPDIR/empty-repo"; mkdir -p "$d"
+  cp "$BATS_TEST_DIRNAME/install.sh" "$d/"          # statusline 本体は置かない
+  s="$BATS_TEST_TMPDIR/orphan.json"
+  printf '%s' '{"statusLine":{"type":"command","command":"/gone/sl.sh"}}' > "$s"
+  CLAUDE_SETTINGS="$s" /bin/bash "$d/install.sh" --uninstall --yes >/dev/null
+  [[ "$(jq -r '.statusLine // "absent"' "$s")" == "absent" ]]
+}
+
+# ============================================================================
+# model_key — tier+版の正規化 (v1.58.0)。model_color は正規形の完全一致で分岐する
+# ============================================================================
+@test "model_key: 全入力形式が正規形に畳まれること" {
+  _k() { model_key k "$1" "${2:-}"; printf '%s' "$k"; }
+  [[ "$(_k 'Opus 5 (1M context)' 'claude-opus-5[1m]')" == "opus 5" ]]
+  [[ "$(_k 'Opus' 'claude-opus-5')"                    == "opus 5" ]]   # display_name に版が無くても id で拾う
+  [[ "$(_k 'OPUS 4.6' 'claude-opus-4-6')"              == "opus 4.6" ]] # 大文字でも正規形は小文字
+  [[ "$(_k 'Sonnet' 'claude-sonnet-4-5')"              == "sonnet 4.5" ]]
+  [[ "$(_k 'x' 'global.anthropic.claude-opus-5-v1:0')" == "opus 5" ]]   # Bedrock: -v1:0 を版と誤読しない
+  [[ "$(_k 'Fable 5' 'claude-fable-5')"                == "fable 5" ]]
+  [[ "$(_k 'gpt-5' '')"                                == "" ]]         # 未知は空 → 無色
+  [[ "$(_k '' '')"                                     == "" ]]
+}
+
+@test "model_key: 旧形式(版がtierより前)を単独でも正しく畳むこと" {
+  # 旧実装は show 単独だと *sonnet*3-5* に当たらず teal になっていた (連結の重複で偶然 amber だった)
+  model_key k 'claude-3-5-sonnet-20241022' ''
+  [[ "$k" == "sonnet 3.5" ]]
+  model_key k 'Claude 3.5 Sonnet' 'claude-3-5-sonnet-20241022'
+  [[ "$k" == "sonnet 3.5" ]]
+  # 日付 (20241022) が版スロットを奪わないこと
+  [[ "$k" != *"2024"* ]]
+  # 色は amber (Sonnet 3.5 は 4.5 と同じ扱い)
+  model_color c 'claude-3-5-sonnet-20241022' ''
+  [[ "$c" == *"38;5;214m"* ]]
+}
+
+@test "model_key: 版なし tier は generic 色に落ちること" {
+  model_key k 'Opus' ''; [[ "$k" == "opus" ]]
+  model_color c 'Opus' ''; [[ "$c" == *"38;5;173m"* ]]   # coral (4.x 扱い)
+  model_key k 'Sonnet' ''; [[ "$k" == "sonnet" ]]
+  model_color c 'Sonnet' ''; [[ "$c" == *"38;5;79m"* ]]  # teal
+}
+
+@test "多色描画: 1文字のモデル名でも落ちないこと(bash 3.2 の三項演算子)" {
+  # bash 3.2 は ((cond ? a/0 : 0)) で未選択の分岐も評価し division by 0 → set -u で全消えになる
+  run /bin/bash -c 'printf "%s" "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"O\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48}}" | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"'
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"38;5;130mO"* ]]
+  [[ "$output" != *"division by 0"* ]]
+}
