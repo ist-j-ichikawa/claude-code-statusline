@@ -116,6 +116,14 @@ fmt_elapsed() {
   else printf -v "$2" '%dh' $((s / 3600)); fi
 }
 
+# fmt_ctx_size TOKENS VARNAME — コンテキスト窓の分母表記 ("500k" / "1M" / "1.5M")。
+# format_tokens は必ず小数 1 桁を出す ("1.0M") が、分母では ".0" が邪魔なので落とす。
+fmt_ctx_size() {
+  format_tokens "$1" "$2"
+  local _v="${!2}"
+  printf -v "$2" '%s' "${_v/.0/}"
+}
+
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
 # 8 braille levels per char × 5 chars = 40 steps of precision
 braille_bar() {

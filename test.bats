@@ -1243,12 +1243,24 @@ _wait_for_cache() {
   done
 }
 
-@test "コンテキスト分母: 1M のときだけ %の直後に /1M を出すこと" {
+@test "コンテキスト分母: 既定200k以外なら%の直後に分母を出すこと" {
   _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"context_window_size":'"$1"'}}' \
     | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
-  [[ "$(_l4 1000000)" == *"48%/1M"* ]]
+  [[ "$(_l4 1000000)" == *"48%/1M"* ]]      # ".0" を落として 1M (1.0M ではない)
   [[ "$(_l4 200000)"  == *"48%"* ]]; [[ "$(_l4 200000)" != *"/"* ]]   # 既定 200k は無印
   [[ "$(_l4 0)"       != *"/"* ]]                                     # 欠落 (旧 CC) も無印
+  # 将来 1M 以外の拡張値が来ても黙って間違えないこと (旧実装は 500k=非表示 / 1.5M=/1M の誤表示)
+  [[ "$(_l4 500000)"  == *"48%/500k"* ]]
+  [[ "$(_l4 1500000)" == *"48%/1.5M"* ]]
+  [[ "$(_l4 2000000)" == *"48%/2M"* ]]
+}
+
+@test "コンテキスト分母: 分母が%と同じ色になること(dimではない)" {
+  # dim だと「% を修飾する分母」ではなく「別の補助情報」に見えるため一体化させている
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"context_window_size":1000000}}' \
+    | /bin/bash statusline-command.sh | tail -1)
+  [[ "$l4" == *"38;5;82m"*"48%/1M"* ]]   # 使用率の色 (<80% = lime green) が %/分母を一括で包む
+  [[ "$l4" != *$'\033[2m/1M'* ]]
 }
 
 @test "コンテキスト分母: display_name空(Bedrock)でも1Mが出ること(provider差の解消)" {

@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.55.0-blue)
+![Version](https://img.shields.io/badge/version-1.56.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -15,7 +15,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 Line 1: [vim mode] + プロバイダー + Model + effort + think + fast + Agent名 + Version + branch
 Line 2: ディレクトリパス + 🌲worktree名 from:branch + added_dirs (+N dirs)
 Line 3: Git ([gh:owner/repo] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state + base:親ブランチ + dirty state + ahead/behind + last commit)
-Line 4: 5hレート制限 + コンテキストバー (1M時は /1M) + weeklyレート制限 + extra-usage実課金 ($) + セッション経過時間 + セッションコスト ($)
+Line 4: 5hレート制限 + コンテキストバー (既定200k以外は /1M 等の分母付き) + weeklyレート制限 + extra-usage実課金 ($) + セッション経過時間 + セッションコスト ($)
 ```
 
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。`/branch` セッション時は `branch` (黄) を表示します。

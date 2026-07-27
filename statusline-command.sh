@@ -542,11 +542,16 @@ if has_val "$used_pct"; then
   pct_int=${used_pct%.*}
   color_by_threshold "$pct_int" 90 80 ctx_color
   braille_bar "$pct_int" _bbar
-  # 拡張コンテキスト時だけ分母を添える (`48%/1M`)。既定の 200k は無印 — 大多数がそれなのでノイズになる。
+  # 既定の 200k 以外は分母を添える (`48%/1M`)。200k は大多数なので無印にしてノイズを避ける。
   # % だけでは 1M と 200k の絶対量が 5 倍違うことが読めない。**分母は % と同じ色**にして一体で読ませる
   # (dim で弱めると「% を修飾する値」ではなく「別の補助情報」に見えるため。2026-07-27 のヒアリング)。
+  # 1M 決め打ちの整数除算をやめて fmt_ctx_size に委ねる — 将来 500k/1.5M が来た時に
+  # 「出ない」「/1M と誤表示」で黙って間違えるのを防ぐ (docs は 200k/1M の 2 値しか定めていない)。
   _ctx_den=""
-  ((ctx_window_size >= 1000000)) && _ctx_den="/$((ctx_window_size / 1000000))M"
+  if ((ctx_window_size > 0 && ctx_window_size != 200000)); then
+    fmt_ctx_size "$ctx_window_size" _ctx_size
+    _ctx_den="/${_ctx_size}"
+  fi
   ctx_text="${ctx_color}${_bbar} ${pct_int}%${_ctx_den}${RST}"
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
