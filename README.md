@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.53.0-blue)
+![Version](https://img.shields.io/badge/version-1.54.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -15,7 +15,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 Line 1: [vim mode] + プロバイダー + Model + effort + think + fast + Agent名 + Version + branch
 Line 2: ディレクトリパス + 🌲worktree名 from:branch + added_dirs (+N dirs)
 Line 3: Git ([gh:owner/repo] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state + base:親ブランチ + dirty state + ahead/behind + last commit)
-Line 4: 5hレート制限 + コンテキストバー + weeklyレート制限 + extra-usage実課金 ($) + セッション経過時間 + セッションコスト ($)
+Line 4: 5hレート制限 + コンテキストバー (1M時は /1M) + weeklyレート制限 + extra-usage実課金 ($) + セッション経過時間 + セッションコスト ($)
 ```
 
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。`/branch` セッション時は `branch` (黄) を表示します。
@@ -24,10 +24,10 @@ Line 4: 5hレート制限 + コンテキストバー + weeklyレート制限 + e
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 5 (1M context)  high  think  fast  v2.1.220
+Anthropic(enterprise)  Opus 5  high  think  fast  v2.1.220
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  base:main  A3 M2 ?1 ↑2 1h fix: update logic..
-⣿⣀    16%  2:20  ⣿⣿⣄   48%  week:9%  金 12:00  extra:$2.14  3h24m  $4.83
+⣿⣀    16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h24m  $4.83
 ```
 
 origin 未設定 / 非 GitHub remote (GitLab 等) では `gh:` 部分が省略され、Line 3 はブランチ名から始まります — 「まだ GitHub に上げてないリポ」がひと目でわかります。`gh:` プレフィックスは dim、`owner/repo` は通常輝度です — ローカルのディレクトリ名と origin のリポジトリ名が食い違っていても、どこの repo かがここで判別できます。
@@ -41,7 +41,7 @@ master  0m initial commit
 
 プロバイダー別の表示:
 ```
-Anthropic(enterprise)  Opus 5 (1M context)  ...   ← Anthropic直接 (サンドベージュ + サブスク種別)
+Anthropic(enterprise)  Opus 5  ...                ← Anthropic直接 (サンドベージュ + サブスク種別)
 Bedrock  global.anthropic.claude-opus-5-v1  ...   ← AWS Bedrock (ティールグリーン)
 Vertex  Opus 5  ...                      ← Google Vertex AI (ブルー)
 Foundry  Opus 5  ...                     ← Microsoft Foundry (Azureブルー)

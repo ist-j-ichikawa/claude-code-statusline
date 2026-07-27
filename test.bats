@@ -147,12 +147,18 @@ _wait_for_cache() {
   [[ "$result" == *"38;5;215m5"* ]]
 }
 
-@test "モデル色: Opus 5の実display_name(1M context付き)でもスイープが端から端まで載ること" {
-  result=$(echo '{"model":{"id":"claude-opus-5[1m]","display_name":"Opus 5 (1M context)"},"version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  # 実運用の display_name は括弧付きで長い。先頭文字=パレット先頭、末尾文字=パレット末尾
-  [[ "$result" == *"38;5;130mO"* ]]
-  [[ "$result" == *"38;5;215m)"* ]]
+@test "モデル色: 実display_nameの(1M context)を名前から剥がし、スイープが端から端まで載ること" {
+  result=$(echo '{"model":{"id":"claude-opus-5[1m]","display_name":"Opus 5 (1M context)"},"version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"context_window_size":1000000}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null)
+  local l1; l1=$(printf '%s' "$result" | head -1)
+  # コンテキスト量は Line 4 の分母に回すので、名前からは括弧を剥がす
+  [[ "$l1" != *"1M context"* ]]
+  [[ "$(printf '%s' "$l1" | sed $'s/\033\\[[0-9;]*m//g')" == *"Opus 5"* ]]
+  # 先頭文字=パレット先頭 (130)、末尾文字=パレット末尾 (215)
+  [[ "$l1" == *"38;5;130mO"* ]]
+  [[ "$l1" == *"38;5;215m5"* ]]
+  # 分母は Line 4 の % の直後に出る
+  [[ "$(printf '%s' "$result" | tail -1 | sed $'s/\033\\[[0-9;]*m//g')" == *"48%/1M"* ]]
 }
 
 @test "モデル色: display_nameに版が無くてもmodel_idで Opus 5 と判定されること" {
@@ -779,10 +785,11 @@ _wait_for_cache() {
   [[ "$result" == *"38;5;173"*"Opus 4.7"* ]]
 }
 
-@test "モデル色: Opus 4.7 (1M context) でもコーラルで表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-7[1m]","display_name":"Opus 4.7 (1M context)"},"version":"2.1.112","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+@test "モデル色: Opus 4.7 は括弧を剥がしてコーラルで表示されること" {
+  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7 (1M context)"},"version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *"38;5;173"*"Opus 4.7 (1M context)"* ]]
+  [[ "$result" == *"38;5;173"*"Opus 4.7"* ]]
+  [[ "$result" != *"1M context"* ]]
 }
 
 # ============================================================================
@@ -1234,4 +1241,24 @@ _wait_for_cache() {
     [[ "$o" == *"gh:"*"ist-j-ichikawa/claude-code-statusline"* ]]
     [[ "$o" == *"approved"* ]]
   done
+}
+
+@test "コンテキスト分母: 1M のときだけ %の直後に /1M を出すこと" {
+  _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"context_window_size":'"$1"'}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
+  [[ "$(_l4 1000000)" == *"48%/1M"* ]]
+  [[ "$(_l4 200000)"  == *"48%"* ]]; [[ "$(_l4 200000)" != *"/"* ]]   # 既定 200k は無印
+  [[ "$(_l4 0)"       != *"/"* ]]                                     # 欠落 (旧 CC) も無印
+}
+
+@test "コンテキスト分母: display_name空(Bedrock)でも1Mが出ること(provider差の解消)" {
+  l4=$(printf '%s' '{"model":{"id":"global.anthropic.claude-opus-5-v1:0","display_name":""},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48,"context_window_size":1000000}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$l4" == *"48%/1M"* ]]
+}
+
+@test "モデル色: contextを含まない括弧付きdisplay_nameは剥がさないこと" {
+  result=$(echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5 (preview)"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1 | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$result" == *"Opus 5 (preview)"* ]]
 }

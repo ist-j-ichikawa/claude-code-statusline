@@ -18,12 +18,14 @@ readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[3
 # 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
 # 公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
 readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
-readonly SONNET5_PAL=(28 34 70 106 148 154)       # Sonnet 5: 植物モチーフ — 濃緑→黄緑
+readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ — 濃緑→黄緑
 # Opus 5: 鳥卵標本図版 (支配色が無いので単色を選べない)。Sonnet 5 と同じ「単色相を暗→明にスイープ」構造で、
-# 色相を Opus の coral 一族に取る: dark rust→rust→CORAL→salmon→gold。彩度と明度レンジを稼ぐのが要点 —
+# 色相を Opus の coral 一族に取る: dark orange→CORAL→gold。彩度と明度レンジを稼ぐのが要点 —
 # 実測に忠実な低彩度の tan/olive はターミナルでくすんで「グラデーション」に見えなかった (v1.50.0 で差し替え)。
 # 両端とも mid/high 彩度なので light テーマでも飛ばない (near-white の 216/223 は不可)。
-readonly OPUS5_PAL=(130 166 $CORAL_N 209 215)
+# **ストップは知覚明度で 30 以上離す** — 隣接ストップの明度差が 10 未満だと見分けられず、スロットの無駄に
+# なる (v1.53.0 までの 5 ストップ版は 130/166 と 173/209 が各 8.5 差でほぼ同色。実質 3 段だった)。
+readonly OPUS5_PAL=(130 $CORAL_N 215)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
@@ -62,7 +64,9 @@ _paint() {
   local _pal=("$@") _n=$#
   (( _n == 0 )) && { printf -v "$_vn" '%s' "$_txt"; return; }
   for ((_i=0; _i<_len; _i++)); do
-    _idx=$(( _sweep ? (_len > 1 ? _i * (_n - 1) / (_len - 1) : 0) : _i % _n ))
+    # sweep の添字は四捨五入。切り捨てだと最終ストップが末尾 1 文字にしか載らず
+    # (35 字の Bedrock id で 17/17/1 字)、一番明るい色がほぼ見えなくなる
+    _idx=$(( _sweep ? (_len > 1 ? (2 * _i * (_n - 1) + _len - 1) / (2 * (_len - 1)) : 0) : _i % _n ))
     _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
   done
   printf -v "$_vn" '%s%s' "$_out" "$RST"

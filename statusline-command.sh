@@ -353,6 +353,13 @@ esac
 
 # Model (colored by tier): prefer display_name, fall back to id
 model_show="${model:-$model_id}"
+# display_name の "(1M context)" は名前から剥がす — コンテキスト量は Line 4 の % の分母として
+# `48%/1M` で出すほうが (a) % を修飾する情報が % の隣に来る (b) display_name が空の Bedrock でも
+# 同じ表示になる (c) Line 1 が 14 文字短くなり subagent 行の表記と揃う。
+# "context" を含む末尾の括弧だけを対象にし、他の括弧付き display_name は触らない。
+case "$model_show" in
+  *" ("*"context)") model_show="${model_show% (*}" ;;
+esac
 
 # Cloud provider detection (check model_id for Bedrock prefix, not display_name)
 provider=""
@@ -536,6 +543,9 @@ if has_val "$used_pct"; then
   color_by_threshold "$pct_int" 90 80 ctx_color
   braille_bar "$pct_int" _bbar
   ctx_text="${ctx_color}${_bbar} ${pct_int}%${RST}"
+  # 拡張コンテキスト時だけ分母を添える (`48%/1M`)。既定の 200k は無印 — 大多数がそれなのでノイズになる。
+  # % だけでは 1M と 200k の絶対量が 5 倍違うことが読めないため、% の直後に dim で置く。
+  ((ctx_window_size >= 1000000)) && ctx_text+="${DIM}/$((ctx_window_size / 1000000))M${RST}"
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
 else
