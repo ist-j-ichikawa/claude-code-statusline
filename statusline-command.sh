@@ -542,10 +542,12 @@ if has_val "$used_pct"; then
   pct_int=${used_pct%.*}
   color_by_threshold "$pct_int" 90 80 ctx_color
   braille_bar "$pct_int" _bbar
-  ctx_text="${ctx_color}${_bbar} ${pct_int}%${RST}"
   # 拡張コンテキスト時だけ分母を添える (`48%/1M`)。既定の 200k は無印 — 大多数がそれなのでノイズになる。
-  # % だけでは 1M と 200k の絶対量が 5 倍違うことが読めないため、% の直後に dim で置く。
-  ((ctx_window_size >= 1000000)) && ctx_text+="${DIM}/$((ctx_window_size / 1000000))M${RST}"
+  # % だけでは 1M と 200k の絶対量が 5 倍違うことが読めない。**分母は % と同じ色**にして一体で読ませる
+  # (dim で弱めると「% を修飾する値」ではなく「別の補助情報」に見えるため。2026-07-27 のヒアリング)。
+  _ctx_den=""
+  ((ctx_window_size >= 1000000)) && _ctx_den="/$((ctx_window_size / 1000000))M"
+  ctx_text="${ctx_color}${_bbar} ${pct_int}%${_ctx_den}${RST}"
   [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
   line3+=("$ctx_text")
 else
@@ -581,7 +583,9 @@ fi
 # cost_cents > 0 が「フィールド欠落 (旧 Claude Code)」と「$0.00」の両方を非表示に倒す
 if ((cost_cents > 0)); then
   printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
-  line3+=("${DIM}${_cost}${RST}")
+  # 金額は通常輝度 — 弱め要素が並ぶ Line 4 右端で「いくら使ったか」は目に入れたい値
+  # (経過時間は薄いままにして、コストだけを立てる。2026-07-27 のヒアリング)
+  line3+=("$_cost")
 fi
 
 # ============================================================================

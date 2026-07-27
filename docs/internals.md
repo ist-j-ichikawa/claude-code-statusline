@@ -93,7 +93,9 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | Git untracked `?` | グレー | 38;5;248 |
 | Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
-| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git branch parent (`base:`)、Git origin プレフィックス (`gh:`) / weekly rate limit / セッションコスト (`$X.XX`) | dim | 2 |
+| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git branch parent (`base:`)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
+| セッションコスト (`$X.XX`) | 通常輝度 (色を付けない — Line 4 の 3 系統の色に 4 つ目を足さない。金色は extra-usage の実課金と混同するため不可) | - |
+| コンテキストの分母 (`/1M`) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |
 | Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
 ## パフォーマンス

@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.54.0-blue)
+![Version](https://img.shields.io/badge/version-1.55.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -59,6 +59,7 @@ Claude Code 運用で特に便利な機能:
 - **Quick Terminal** — `toggle_quick_terminal` を任意のキーバインドに割り当てるとドロップダウン式の即時セッションが使える (デフォルトキーは未設定。macOS / Linux GTK 対応)
 - **Config Hot-reload** — `⌘⇧,` (macOS) で設定即時反映、ステータスラインのテーマ調整が高速
 - **Metal GPU レンダリング** — `refreshInterval` (30s) ごとの再描画でもフリッカーなし
+- **SGR 2 (faint) 対応** — 二次情報を弱めて出す表示（`base:`・`week:`・コミットメッセージ等、全体の約 4 分の 1）がそのまま効く。faint 未対応の端末ではこれらが通常輝度に潰れ、情報の階層が失われます
 
 設定ファイル (macOS): `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`
 
