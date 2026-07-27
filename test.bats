@@ -1186,3 +1186,52 @@ _wait_for_cache() {
   [[ "$(stat -f '%Lp' "$d")" == "700" ]]
   [[ "$(stat -f '%Lp' "$d/git")" == "700" ]]
 }
+
+# ============================================================================
+# build_git のデータ/表示分離 (v1.53.0) — 3 パス問題と cross-session 汚染の構造的解消
+# ============================================================================
+@test "Git facts: キャッシュにANSIもstdin由来値も入らないこと" {
+  d="$BATS_TEST_TMPDIR/factcache"
+  p='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'
+  CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'$p'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+  _wait_for_cache "$d/git"
+  local facts; facts=$(cat "$d"/git/*-v2)
+  [[ "$facts" != *$'\033'* ]]        # レンダリング済み ANSI を置かない
+  [[ "$facts" != *"approved"* ]]     # stdin 由来値 (PR state) を置かない = 別セッションに漏れない
+  [[ "$facts" == *$'\037'* ]]        # US 区切りの facts である
+}
+
+@test "Git facts: 同一dirの別セッションが相手のPR stateを表示しないこと(cross-session汚染)" {
+  d="$BATS_TEST_TMPDIR/xsess"
+  _run_pr() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"}'"$1"',"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p; }
+  _run_pr ',"pr":{"review_state":"approved"}' >/dev/null
+  _wait_for_cache "$d/git"
+  [[ "$(_run_pr ',"pr":{"review_state":"changes_requested"}')" == *"changes_requested"* ]]
+  [[ "$(_run_pr ',"pr":{"review_state":"changes_requested"}')" != *"approved"* ]]
+  [[ "$(_run_pr '')" != *"approved"* ]]            # PR 無しセッションに前セッションの値が出ない
+  [[ "$(_run_pr '')" != *"changes_requested"* ]]
+}
+
+@test "Git facts: detached HEADでcold/warmのgateが一致すること(3パス問題)" {
+  w="$BATS_TEST_TMPDIR/detached"; mkdir -p "$w"
+  git -C "$w" init -q
+  git -C "$w" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$w" checkout -q --detach
+  d="$BATS_TEST_TMPDIR/detcache"
+  _run() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'","repo":{"host":"github.com","owner":"o","name":"r"}},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g'; }
+  cold=$(_run); _wait_for_cache "$d/git"; warm=$(_run)
+  # detached ではどちらの経路でも gh: / PR state を出さない (gate が presenter 1 箇所にある)
+  [[ "$cold" == *"HEAD@"* ]]; [[ "$warm" == *"HEAD@"* ]]
+  [[ "$cold" != *"gh:"* ]];   [[ "$warm" != *"gh:"* ]]
+  [[ "$cold" != *"approved"* ]]; [[ "$warm" != *"approved"* ]]
+}
+
+@test "Git facts: 非detachedならcold/warmどちらもgh:とPR stateを出すこと" {
+  d="$BATS_TEST_TMPDIR/nondet"
+  _run() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'","repo":{"host":"github.com","owner":"ist-j-ichikawa","name":"claude-code-statusline"}},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p; }
+  cold=$(_run); _wait_for_cache "$d/git"; warm=$(_run)
+  for o in "$cold" "$warm"; do
+    [[ "$o" == *"gh:"*"ist-j-ichikawa/claude-code-statusline"* ]]
+    [[ "$o" == *"approved"* ]]
+  done
+}

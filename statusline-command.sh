@@ -42,7 +42,9 @@ cache_stale() {
 # git_cache_file DIR — sets _gc (no subshell)
 git_cache_file() {
   [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
-  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
+  # -v2: キャッシュ内容が「レンダリング済み ANSI」から「US 区切りの facts」に変わったので、
+  # 旧キャッシュを facts として誤読しないようファイル名に版を入れる (移行処理は不要)
+  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")-v2"
 }
 
 # --- Credentials blob (Keychain → file fallback) ---
@@ -196,117 +198,134 @@ if [[ -n "$wt_path" ]]; then
 fi
 
 # --- Git info (5s cached) ---
+# build_git DIR — git の「事実」だけを US(0x1f) 区切りで 1 行に出す (ANSI も stdin 由来値も混ぜない)。
+# 表示は render_git() が一手に引き受ける。事実だけをキャッシュするのが要点:
+#  - 3 経路 (非 detached / detached / cold-start) で gate を揃える必要が消える
+#    — cold-start は「多くのフィールドが空の facts」に退化するだけで、判断は presenter に 1 箇所化される
+#  - cache key は md5(dir) だけなので、stdin 由来値 (pr.review_state 等) を混ぜると同一 dir の
+#    別セッションが最大 5s 相手の値を出す。facts しか置かなければ構造的に起こらない
+# フィールド順: branch detached repo_id remote base staged modified untracked conflicts ahead behind age msg
 build_git() {
-  local dir=$1 text="" branch
+  local dir=$1 branch detached=0
 
   branch=$(git -C "$dir" branch --show-current 2>/dev/null)
-
-  # Detached HEAD
   if [[ -z "$branch" ]]; then
-    local short_sha
-    short_sha=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
-    [[ -n "$short_sha" ]] && branch="HEAD@${short_sha}"
+    branch=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
+    [[ -n "$branch" ]] && detached=1
   fi
-
-  # Not a git repo (or fresh repo with no commits): nothing to show
+  # Not a git repo (or fresh repo with no commits): nothing to cache
   [[ -z "$branch" ]] && return
 
-  if [[ "$branch" == HEAD@* ]]; then
-    text+="${RED}${branch}${RST}"
-  else
-    # Repo identity: prefer precomputed $ws_repo_id (Claude Code 2.1.145+) — zero fork, available at cold start.
-    # Fallback: parse origin URL (SSH/HTTPS → canonical https://github.com/owner/repo) for older Claude Code.
-    local remote repo_id="$ws_repo_id" link_url="" branch_show="$branch"
-    if [[ -n "$repo_id" ]]; then
-      remote="https://github.com/${repo_id}"
-    else
-      remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
-      case "$remote" in
-        git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
-        ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
-        https://github.com/*)    ;;
-        *)                       remote="" ;;
-      esac
-      remote="${remote%.git}"
-      [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
-    fi
+  local repo_id="" remote="" base="" staged=0 modified=0 untracked=0 conflicts=0
+  local ahead=0 behind=0 age="" msg=""
 
-    # Origin identifier (before branch) — repo 識別の一次情報。ローカル dir 名と origin repo 名が
-    # 食い違うケースはここでしか判別できないため owner/repo は通常輝度、gh: プレフィックスのみ dim。
-    [[ -n "$repo_id" ]] && text+="${DIM}gh:${RST}${repo_id} "
+  # origin (dir の事実)。stdin の workspace.repo は使わない — cache に stdin 由来値を混ぜないため。
+  # background 実行なのでこの 1 fork は hot path に乗らない (presenter 側で stdin 値を優先する)。
+  remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
+  case "$remote" in
+    git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
+    ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
+    https://github.com/*)    ;;
+    *)                       remote="" ;;
+  esac
+  remote="${remote%.git}"
+  [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
 
-    # GitHub tree URL — PR は Claude Code 組み込みフッターの PR badge に任せ、ここは tree URL のみ
-    [[ -n "$remote" ]] && link_url="${remote}/tree/${branch}"
-    [[ -n "$link_url" ]] && osc8 "$link_url" "$branch" branch_show
-    text+="${GIT}${branch_show}${RST}"
-
-    # PR review state (Claude Code 2.1.145+ pr.review_state) — text colored by state.
-    # Claude Code's built-in footer already shows "PR #<num>" with link, so we only surface the
-    # review_state (which the footer omits) to keep the two displays complementary.
-    if has_val "$pr_review_state"; then
-      local pr_color
-      pr_state_color "$pr_review_state" pr_color
-      text+=" ${pr_color}${pr_review_state}${RST}"
-    fi
-
-    # Branch parent — reflog は ~90 日で GC; 古いブランチや clone 直後は出ない (graceful degradation)
-    local last_reflog from_ref=""
+  # Branch parent — reflog は ~90 日で GC; 古いブランチや clone 直後は出ない (graceful degradation)
+  if ((detached == 0)); then
+    local last_reflog
     last_reflog=$(git -C "$dir" reflog show "$branch" 2>/dev/null | tail -1)
-    if [[ "$last_reflog" == *": branch: Created from "* ]]; then
-      from_ref="${last_reflog##*: branch: Created from }"
-    fi
-    if [[ -n "$from_ref" && "$from_ref" != "HEAD" ]]; then
-      text+=" ${DIM}base:${from_ref}${RST}"
-    fi
+    [[ "$last_reflog" == *": branch: Created from "* ]] && base="${last_reflog##*: branch: Created from }"
   fi
 
-  # Dirty state: staged(green) / modified(yellow) / untracked(gray) / conflicts(red)
+  # Dirty state counts
   # NOTE: `grep -c .` は no-match でも "0" を出力してから exit 1 する。`|| echo 0` を付けると
   # pipefail 環境下で stdout が "0\n0" になり ((var > 0)) が syntax error を吐く。grep -c 単体で十分。
-  local staged modified untracked conflicts
   staged=$(git -C "$dir" diff --cached --name-only 2>/dev/null | grep -c .)
   modified=$(git -C "$dir" diff --name-only 2>/dev/null | grep -c .)
   untracked=$(git -C "$dir" ls-files --others --exclude-standard 2>/dev/null | grep -c .)
   conflicts=$(git -C "$dir" diff --name-only --diff-filter=U 2>/dev/null | grep -c .)
-  ((conflicts > 0)) && text+=" ${RED}U${conflicts}${RST}"
-  ((staged > 0))    && text+=" ${GRN}A${staged}${RST}"
-  ((modified > 0))  && text+=" ${YLW}M${modified}${RST}"
-  ((untracked > 0)) && text+=" ${DIMVER}?${untracked}${RST}"
 
-  # Ahead/behind
   if git -C "$dir" rev-parse --abbrev-ref '@{upstream}' &>/dev/null; then
-    local ahead behind
     ahead=$(git -C "$dir" rev-list --count '@{upstream}..HEAD' 2>/dev/null)
     behind=$(git -C "$dir" rev-list --count 'HEAD..@{upstream}' 2>/dev/null)
-    ((ahead > 0)) && text+=" ${GRN}↑${ahead}${RST}"
-    ((behind > 0)) && text+=" ${RED}↓${behind}${RST}"
   fi
 
   # Last commit age + message (single git log call)
-  local last_epoch last_msg log_output
+  local last_epoch log_output
   log_output=$(git -C "$dir" log -1 --pretty=$'%ct\n%s' 2>/dev/null)
   last_epoch="${log_output%%$'\n'*}"
-  last_msg="${log_output#*$'\n'}"
-  if [[ -n "$last_epoch" ]]; then
-    local age=$((_NOW - last_epoch))
-    local age_str=""
-    if ((age < 3600)); then
-      age_str="$((age / 60))m"
-    elif ((age < 86400)); then
-      age_str="$((age / 3600))h"
-    elif ((age < 604800)); then
-      age_str="$((age / 86400))d"
+  msg="${log_output#*$'\n'}"
+  if [[ "$last_epoch" =~ ^[0-9]+$ ]]; then
+    local diff=$((_NOW - last_epoch))
+    if   ((diff < 3600));   then age="$((diff / 60))m"
+    elif ((diff < 86400));  then age="$((diff / 3600))h"
+    elif ((diff < 604800)); then age="$((diff / 86400))d"
     fi
-    # Truncate message to 20 chars
-    [[ ${#last_msg} -gt 20 ]] && last_msg="${last_msg:0:20}.."
-    if [[ -n "$age_str" && -n "$last_msg" ]]; then
-      text+=" ${DIM}${age_str} ${last_msg}${RST}"
-    elif [[ -n "$age_str" ]]; then
-      text+=" ${DIM}${age_str}${RST}"
-    fi
+  else
+    msg=""
+  fi
+  [[ ${#msg} -gt 20 ]] && msg="${msg:0:20}.."
+  # 事実の中に区切り文字や改行が混ざると桁がずれる (branch 名は改行を持てないが msg は持てる)
+  msg="${msg//$'\n'/ }"; msg="${msg//$'\037'/ }"
+
+  local US=$'\037'
+  printf '%s\n' "${branch}${US}${detached}${US}${repo_id}${US}${remote}${US}${base}${US}${staged}${US}${modified}${US}${untracked}${US}${conflicts}${US}${ahead}${US}${behind}${US}${age}${US}${msg}"
+}
+
+# render_git FACTS — facts (build_git の出力 / cold-start の合成) + stdin 由来値から line_git を組む。
+# 表示判断はここだけにある。stdin 由来値 ($ws_repo_id / $pr_review_state) は cache に入れず毎回ここで足す。
+render_git() {
+  local branch detached repo_id remote base staged modified untracked conflicts ahead behind age msg
+  IFS=$'\037' read -r branch detached repo_id remote base staged modified untracked conflicts ahead behind age msg <<< "$1"
+  [[ -z "$branch" ]] && return
+
+  # .invalid: Git が空リポ (git init 直後 / clone 失敗残骸) の HEAD に使う placeholder
+  if [[ "$branch" == ".invalid" ]]; then
+    line_git+=("${DIM}(empty)${RST}")
+    return
   fi
 
-  echo "$text"
+  if [[ "$detached" == 1 ]]; then
+    # detached では repo 識別も base も PR も出さない (どの branch の話でもないため)
+    line_git+=("${RED}HEAD@${branch}${RST}")
+  else
+    # repo 識別は stdin の workspace.repo (Claude Code 2.1.145+、fork ゼロ) を優先し、無ければ facts の origin。
+    # gh: プレフィックスのみ dim、owner/repo は通常輝度 — ローカル dir 名と origin repo 名の食い違いは
+    # ここでしか判別できない一次情報なので。
+    local id="${ws_repo_id:-$repo_id}"
+    [[ -n "$id" ]] && line_git+=("${DIM}gh:${RST}${id}")
+
+    # GitHub tree URL — PR への遷移は Claude Code 組み込みフッターの PR badge に任せる
+    local branch_show="$branch"
+    [[ -n "$remote" ]] && osc8 "${remote}/tree/${branch}" "$branch" branch_show
+    line_git+=("${GIT}${branch_show}${RST}")
+
+    # PR review state (Claude Code 2.1.145+) — フッターが出さない state のみを補う
+    if has_val "$pr_review_state"; then
+      local pr_color
+      pr_state_color "$pr_review_state" pr_color
+      line_git+=("${pr_color}${pr_review_state}${RST}")
+    fi
+
+    # base:HEAD (匿名 HEAD から作成) は情報にならないので出さない
+    [[ -n "$base" && "$base" != "HEAD" ]] && line_git+=("${DIM}base:${base}${RST}")
+  fi
+
+  # Dirty state: conflicts(red) / staged(green) / modified(yellow) / untracked(gray)
+  [[ "$conflicts" =~ ^[0-9]+$ ]] && ((conflicts > 0)) && line_git+=("${RED}U${conflicts}${RST}")
+  [[ "$staged"    =~ ^[0-9]+$ ]] && ((staged > 0))    && line_git+=("${GRN}A${staged}${RST}")
+  [[ "$modified"  =~ ^[0-9]+$ ]] && ((modified > 0))  && line_git+=("${YLW}M${modified}${RST}")
+  [[ "$untracked" =~ ^[0-9]+$ ]] && ((untracked > 0)) && line_git+=("${DIMVER}?${untracked}${RST}")
+  [[ "$ahead"     =~ ^[0-9]+$ ]] && ((ahead > 0))     && line_git+=("${GRN}↑${ahead}${RST}")
+  [[ "$behind"    =~ ^[0-9]+$ ]] && ((behind > 0))    && line_git+=("${RED}↓${behind}${RST}")
+
+  # Last commit: age + 20 字に切った message
+  if [[ -n "$age" && -n "$msg" ]]; then
+    line_git+=("${DIM}${age} ${msg}${RST}")
+  elif [[ -n "$age" ]]; then
+    line_git+=("${DIM}${age}${RST}")
+  fi
 }
 
 
@@ -467,51 +486,35 @@ if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
-[[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
+[[ -f "$_gc" ]] && _git_facts=$(<"$_gc") || _git_facts=""
 
-if [[ -n "$git_cached" ]]; then
-  line_git+=("$git_cached")
-else
-  # No cached git info — check if truly non-git using pure bash (no fork)
+if [[ -z "$_git_facts" ]]; then
+  # キャッシュ未populate — non-git かどうかは pure bash で判定 (fork ゼロ)
   if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
     line_git+=("${DIM}no git${RST}")
   else
-    # Cold start: read branch from .git/HEAD (pure bash, no fork)
+    # Cold start: .git/HEAD から branch だけを読み、build_git と同じ facts レイアウトに合成する
+    # (残りのフィールドは空)。表示は同じ render_git を通るので、3 経路で gate を揃える問題が起きない。
     _head_file="${_display_dir}/.git"
     if [[ -f "$_head_file" ]]; then
-      # Worktree: .git is a file → follow gitdir pointer
-      _gitdir_line=$(<"$_head_file")
-      _gitdir="${_gitdir_line#gitdir: }"
-      if [[ "$_gitdir" != /* ]]; then
-        _head_file="${_display_dir}/${_gitdir}/HEAD"
-      else
-        _head_file="${_gitdir}/HEAD"
-      fi
+      # Worktree: .git はファイル → gitdir ポインタを追う
+      _gitdir="$(<"$_head_file")"; _gitdir="${_gitdir#gitdir: }"
+      [[ "$_gitdir" != /* ]] && _head_file="${_display_dir}/${_gitdir}/HEAD" || _head_file="${_gitdir}/HEAD"
     else
       _head_file="${_head_file}/HEAD"
     fi
     if [[ -f "$_head_file" ]]; then
       _head=$(<"$_head_file")
-      # Cold-start emits a stdin-only subset of build_git's layout, in the same left-to-right order
-      # (gh: → branch → PR state). build_git wins once the 5s background cache populates.
-      # gh: は detached (raw sha) では出さない — build_git の detached パスと gate を揃えないと
-      # cache populate 時に gh: が消えるフリッカーになる (3 パス問題)。
-      [[ -n "$ws_repo_id" && "$_head" == ref:* ]] && line_git+=("${DIM}gh:${RST}${ws_repo_id}")
-      # .invalid: Git's placeholder ref for empty/uninitialized repos (git init, clone aborted, ghq get失敗残骸)
-      if [[ "$_head" == "ref: refs/heads/.invalid" ]]; then
-        line_git+=("${DIM}(empty)${RST}")
-      elif [[ "$_head" == ref:* ]]; then
-        line_git+=("${GIT}${_head#ref: refs/heads/}${RST}")
+      if [[ "$_head" == ref:* ]]; then
+        _git_facts="${_head#ref: refs/heads/}"$'\037'"0"
       else
-        line_git+=("${RED}HEAD@${_head:0:7}${RST}")
-      fi
-      if has_val "$pr_review_state"; then
-        pr_state_color "$pr_review_state" _pr_color
-        line_git+=("${_pr_color}${pr_review_state}${RST}")
+        _git_facts="${_head:0:7}"$'\037'"1"     # detached (raw sha)
       fi
     fi
   fi
 fi
+# facts があれば (キャッシュでも cold-start 合成でも) 同じ presenter を通す
+[[ -n "$_git_facts" ]] && render_git "$_git_facts"
 
 
 # ============================================================================

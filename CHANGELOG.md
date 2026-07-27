@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.53.0] - 2026-07-27
+
+### Changed
+
+- **`build_git()` が「事実」だけをキャッシュし、表示は `render_git()` に一元化した**（内部構造の変更で、表示は変わらない）。従来は**レンダリング済みの ANSI 文字列**をキャッシュしており、それが 2 つの Gotcha の共通の根だった:
+  - **「Line 3 の 3 パス問題」** — 表示要素を足すたびに (1) `build_git` 非 detached (2) `build_git` detached (3) cold-start の 3 経路すべてで同じ条件で gate しないと、5 秒のキャッシュ populate 前後で表示が変わるフリッカーになっていた。専用の `line3-three-path-auditor` agent まで用意して人力で守っていた
+  - **cross-session 汚染** — cache key が `md5(dir)` だけなので、stdin 由来値（`pr.review_state` 等）を `build_git` 内で描くと、同一 dir で動く別セッションが最大 5 秒間**相手の値**を表示しうる
+- 新構造では `build_git()` が US(`0x1f`) 区切りの 13 フィールド（branch / detached / repo_id / remote / base / dirty 4 種 / ahead / behind / age / msg）を返し、`render_git()` が facts + stdin 由来値から `line_git` を組む。**cold-start は「多くのフィールドが空の facts」を合成して同じ presenter に通す**だけになり、gate を揃えるという概念自体が消えた。stdin 値は cache に一切入らないので汚染も構造的に起こらない
+- 副作用として `line3-three-path-auditor` agent と CLAUDE.md の Gotcha 2 項が不要になった。キャッシュのファイル名に `-v2` を付けたので、旧キャッシュを facts として誤読することはない（移行処理は不要、初回だけ 5 秒遅れる）
+- `repo_id` は cache には origin 由来の事実を持たせ、**表示時に stdin の `workspace.repo`（fork ゼロ）を優先**する。`build_git` は background 実行なので、事実確定のための `git remote get-url` 1 fork は hot path に乗らない
+
 ## [1.52.0] - 2026-07-27
 
 ### Added
