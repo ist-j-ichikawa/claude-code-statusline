@@ -9,7 +9,11 @@ _selfdir="${BASH_SOURCE%/*}"; [[ "$_selfdir" == "$BASH_SOURCE" ]] && _selfdir=".
 source "$_selfdir/lib.sh"
 
 # --- Main-only constants ---
-readonly CACHE_BASE="/tmp/ist-j-ichikawa-claude-statusline"
+# キャッシュはユーザー単位に隔離する。固定の共有パスだと (1) 共有 Mac の別ユーザーが 700 の
+# ディレクトリに書けず git 行が永久 cold-start + usage_spend も書けず毎レンダー refetch (curl storm)、
+# (2) テストが本物のキャッシュを触ってライブ statusline に偽の値を出す。macOS の TMPDIR は既に
+# ユーザー単位。CLAUDE_STATUSLINE_CACHE_DIR はテスト/install の密閉 seam。
+readonly CACHE_BASE="${CLAUDE_STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statusline-$UID}"
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
 readonly _NOW=$(date +%s)
@@ -37,7 +41,7 @@ cache_stale() {
 
 # git_cache_file DIR — sets _gc (no subshell)
 git_cache_file() {
-  [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$GIT_CACHE_DIR"
+  [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
   _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
 }
 
@@ -57,7 +61,11 @@ readonly SUB_CACHE="${CACHE_BASE}/subscription"
 readonly SUB_CACHE_MAX_AGE=3600
 
 # fetch_subscription — sets _sub_type (no subshell)
+# `CLAUDE_STATUSLINE_NO_NET` は「外部への問い合わせをしない」seam なので Keychain 読みもここで止める
+# (ネットワークではないが、macOS のアクセス許可ダイアログを出しうる外部参照。install.sh の試走・テストが
+# ユーザーの Keychain に触らないための入口でもある)
 fetch_subscription() {
+  [[ -n "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && { _sub_type=""; return; }
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
   if cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
     (
@@ -142,7 +150,7 @@ ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
 pr_review_state=""
 vim_mode=""
 effort_level="" thinking_enabled="false" fast_mode="false"
-cost_cents=0
+cost_cents=0 dur_sec=0
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -171,7 +179,8 @@ _jq_out=$(jq -r '
   @sh "effort_level=\(.effort.level // "")",
   @sh "thinking_enabled=\(.thinking.enabled // false)",
   @sh "fast_mode=\(.fast_mode // false)",
-  @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)"
+  @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)",
+  @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)"
 ' <<< "$input" 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
@@ -308,9 +317,9 @@ line1=()
 
 if ((_jq_ok == 0)); then
   line1+=("${RED}jq error${RST}")
-  line2=() line3=()
-  _out="${line1[*]}"$'\n'"${line2[*]}"$'\n'"${line3[*]}"
-  printf '%s\n' "$_out"
+  # 空行は literal で出す — bash 3.2 の set -u は空配列の [*] 展開で即死し、
+  # "jq error" を出すはずが statusline 全体が空白になる (macOS の /bin/bash は 3.2 固定)
+  printf '%s\n\n\n' "${line1[*]}"
   exit 0
 fi
 
@@ -354,7 +363,7 @@ case "$provider" in
 esac
 
 # Model (colored by tier) — 共有 model_color が nocasematch スコープを内部管理する
-model_color _model_col "$model_show"
+model_color _model_col "$model_show" "$model_id"
 line1+=("$_model_col")
 
 has_val "$effort_level" && line1+=("${EFFORT}${effort_level}${RST}")
@@ -455,7 +464,7 @@ line_git=()
 # Git info (background refresh)
 git_cache_file "$current_dir"
 if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
-  ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$GIT_CACHE_DIR"
+  ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
     build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
 fi
 [[ -f "$_gc" ]] && git_cached=$(<"$_gc") || git_cached=""
@@ -548,6 +557,14 @@ if [[ -z "$provider" ]]; then
 fi
 
 # Session cost (全プロバイダー共通。Claude Code 計算済みの API 換算 USD; subscription では実請求なしの参考値)
+# Session elapsed (cost.total_duration_ms) — 長時間 agentic セッション / 並走運用で「何時間回してる?」
+# を即答するため。Claude Code に常駐表示が無く、stdin に既にあるので fork ゼロ。
+# 60 秒未満は出さない (開始直後の "0m" はノイズ)。フィールド欠落 (旧 Claude Code) も 0 で非表示に倒れる
+if ((dur_sec >= 60)); then
+  fmt_elapsed "$dur_sec" _dur
+  line3+=("${DIM}${_dur}${RST}")
+fi
+
 # cost_cents > 0 が「フィールド欠落 (旧 Claude Code)」と「$0.00」の両方を非表示に倒す
 if ((cost_cents > 0)); then
   printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
@@ -557,7 +574,10 @@ fi
 # ============================================================================
 # Output — single write() for atomic pipe delivery
 # ============================================================================
-_l1="${line1[*]}" _l2="${line2[*]}" _lg="${line_git[*]}" _l3="${line3[*]}"
+# `:-` が必須 — bash 3.2 の set -u は空配列の [*] 展開で即死する。line_git は「.git はあるが HEAD が
+# 読めない」(親リポが消えた stale worktree 等) で空になり、line3 も全要素が条件付きなので空になりうる。
+# 付け忘れると exit 1 で statusline が丸ごと空白になる (bash 4+ では再現しないので手元では気付けない)。
+_l1="${line1[*]:-}" _l2="${line2[*]:-}" _lg="${line_git[*]:-}" _l3="${line3[*]:-}"
 if [[ -n "$_lg" ]]; then
   _out="${_l1}"$'\n'"${_l2}"$'\n'"${_lg}"$'\n'"${_l3}"
 else

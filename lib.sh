@@ -13,7 +13,17 @@ readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
-readonly CORAL=$'\033[38;5;173m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
+readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL の両方がここから派生する
+readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
+# 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
+# 公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
+readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
+readonly SONNET5_PAL=(28 34 70 106 148 154)       # Sonnet 5: 植物モチーフ — 濃緑→黄緑
+# Opus 5: 鳥卵標本図版 (支配色が無いので単色を選べない)。Sonnet 5 と同じ「単色相を暗→明にスイープ」構造で、
+# 色相を Opus の coral 一族に取る: dark rust→rust→CORAL→salmon→gold。彩度と明度レンジを稼ぐのが要点 —
+# 実測に忠実な低彩度の tan/olive はターミナルでくすんで「グラデーション」に見えなかった (v1.50.0 で差し替え)。
+# 両端とも mid/high 彩度なので light テーマでも飛ばない (near-white の 216/223 は不可)。
+readonly OPUS5_PAL=(130 166 $CORAL_N 209 215)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
 readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
@@ -36,58 +46,70 @@ osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
 # editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
 editor_url() { printf -v "$2" 'file://%s' "$1"; }
 
-# rainbow VARNAME TEXT — sets VARNAME to TEXT with each char cycling through a
-# multi-color palette (no subshell). Used for Fable: no official brand color, so the
-# palette is sampled from its announcement artwork (a vintage butterfly-specimen plate)
-# — a warm gold→rust→red→olive→green→teal cycle — to make it recognizable on Line 1.
-rainbow() {
-  local _txt="$2" _out="" _i _len=${#2}
-  local _pal=(178 172 130 167 143 107 66) _n=7
+# rainbow  VARNAME TEXT COLOR... — 文字ごとにパレットを循環。順序に意味が無いパレット向け
+#   (Fable: 蝶標本の多色を均等に出したい)。
+# gradient VARNAME TEXT COLOR... — パレットを1回スイープ。順序に意味があるパレット向け
+#   (Sonnet 5 / Opus 5: 暗→明の方向が絵になる)。先頭文字は必ずパレット先頭色になるが、
+#   それ以外の色位置は文字数依存なので特定の語には固定できない。
+# どちらも fork ゼロ (printf -v)。パレット未指定なら無色テキストへ degrade —
+# 呼び出しは ${PAL[@]+"${PAL[@]}"} で展開すること (bash 3.2 の set -u は空配列の "${a[@]}" で即死し、
+# _paint の空パレットガードに到達する前に statusline 全体が空白になる)。
+rainbow()  { _paint 0 "$@"; }
+gradient() { _paint 1 "$@"; }
+_paint() {
+  local _sweep=$1 _vn="$2" _txt="$3" _out="" _i _len=${#3} _idx
+  shift 3                          # 以降 "$@" = パレット (変数名は先に _vn へ退避済み)
+  local _pal=("$@") _n=$#
+  (( _n == 0 )) && { printf -v "$_vn" '%s' "$_txt"; return; }
   for ((_i=0; _i<_len; _i++)); do
-    _out+=$'\033[38;5;'"${_pal[_i % _n]}"'m'"${_txt:_i:1}"
-  done
-  printf -v "$1" '%s%s' "$_out" "$RST"
-}
-
-# gradient VARNAME TEXT — sets VARNAME to TEXT with a single sweep across a green
-# palette (no subshell). Sonnet 5: no official brand color, so a green gradient
-# (from its botanical announcement artwork) distinguishes it from Sonnet 4.6's flat teal.
-gradient() {
-  local _txt="$2" _out="" _i _len=${#2}
-  local _pal=(28 34 70 106 148 154) _n=6 _idx
-  for ((_i=0; _i<_len; _i++)); do
-    _idx=$(( _len > 1 ? _i * (_n - 1) / (_len - 1) : 0 ))
+    _idx=$(( _sweep ? (_len > 1 ? _i * (_n - 1) / (_len - 1) : 0) : _i % _n ))
     _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
   done
-  printf -v "$1" '%s%s' "$_out" "$RST"
+  printf -v "$_vn" '%s%s' "$_out" "$RST"
 }
 
-# model_color VARNAME MODEL_SHOW — sets VARNAME to MODEL_SHOW fully rendered in its
+# model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
 # tier color (no subshell). Shared by Line 1 (main) and the subagent rows so both
 # use identical model coloring. Handles its own nocasematch scope (bash 3.2-safe).
-# Fable/Sonnet 5 have no official flat color → multi-color rainbow/gradient render.
-# Sonnet 5 match uses "sonnet 5"/"sonnet-5" (not *sonnet*5* which also hits "4.5").
+# Fable/Sonnet 5/Opus 5 have no official flat color → multi-color rainbow/gradient render.
+# 5-tier match uses "opus 5"/"opus-5" (not *opus*5* which also hits "Opus 4.5"), same for
+# Sonnet 5. Both must be tested BEFORE the generic *opus*/*sonnet* flat-color branches.
+# Tier 判定は MODEL_SHOW + MODEL_ID の連結で行い、描画は MODEL_SHOW のみ — display_name が版を
+# 含まない形 ("Opus"/"Sonnet") で来ても id 側の "claude-opus-5" で拾い、Line 1 と subagent 行が
+# 同じ tier 色に収まる (subagent 側は id しか持たないため、片側だけ版を見ると色が食い違う)。
 model_color() {
-  local _ms="$2"
+  local _ms="$2" _key="$2|${3:-}"   # 区切りは非空白 — 空白だと "Opus"+"5-…" が跨って "opus 5" に化ける
   shopt -s nocasematch
-  if [[ "$_ms" == *fable* ]]; then
-    rainbow "$1" "$_ms"
-  elif [[ "$_ms" == *opus* ]]; then
+  if [[ "$_key" == *fable* ]]; then
+    rainbow "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"}
+  elif [[ "$_key" == *"opus 5"* || "$_key" == *"opus-5"* ]]; then
+    gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"}
+  elif [[ "$_key" == *opus* ]]; then
     printf -v "$1" '%s' "${CORAL}${_ms}${RST}"
-  elif [[ "$_ms" == *"sonnet 5"* || "$_ms" == *"sonnet-5"* ]]; then
-    gradient "$1" "$_ms"
-  elif [[ "$_ms" == *sonnet*4.5* || "$_ms" == *sonnet*3.5* || "$_ms" == *sonnet*4-5* || "$_ms" == *sonnet*3-5* ]]; then
+  elif [[ "$_key" == *"sonnet 5"* || "$_key" == *"sonnet-5"* ]]; then
+    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"}
+  elif [[ "$_key" == *sonnet*4.5* || "$_key" == *sonnet*3.5* || "$_key" == *sonnet*4-5* || "$_key" == *sonnet*3-5* ]]; then
     # display_name ("Sonnet 4.5") と model id ("claude-sonnet-4-5") の両形を拾う
     # (主 statusline は display_name 空時に model_id=dash 形へ fallback するため両形が来る)
     printf -v "$1" '%s' "${AMBER}${_ms}${RST}"
-  elif [[ "$_ms" == *sonnet* ]]; then
+  elif [[ "$_key" == *sonnet* ]]; then
     printf -v "$1" '%s' "${TEAL}${_ms}${RST}"
-  elif [[ "$_ms" == *haiku* ]]; then
+  elif [[ "$_key" == *haiku* ]]; then
     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}"
   else
     printf -v "$1" '%s' "$_ms"
   fi
   shopt -u nocasematch
+}
+
+# fmt_elapsed SECONDS VARNAME — 経過秒を "3m" / "1h03m" / "27h" にする (no subshell)。
+# Line 3 の commit age と同じコンパクト表記。1 時間未満は分のみ、以降は時+分。
+fmt_elapsed() {
+  local s=$1
+  [[ "$s" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' ''; return; }
+  if   ((s < 3600));  then printf -v "$2" '%dm' $((s / 60))
+  elif ((s < 86400)); then printf -v "$2" '%dh%02dm' $((s / 3600)) $(((s % 3600) / 60))
+  else printf -v "$2" '%dh' $((s / 3600)); fi
 }
 
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)

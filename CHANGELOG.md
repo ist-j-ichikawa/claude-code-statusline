@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.52.0] - 2026-07-27
+
+### Added
+
+- **セッション経過時間を Line 4 に追加**（`cost.total_duration_ms`、dim、セッションコストの直前）。長時間の agentic セッションや複数セッション並走で「これ何時間回してる?」は瞬間的に見たい情報だが、Claude Code に常駐表示がない。stdin に既にある値なので **fork ゼロ**。表記は `3m` / `1h01m` / `27h`（24 時間超は分を落とす）。**60 秒未満は非表示** — 開始直後の `0m` はノイズなので出さない。フィールド欠落（旧 Claude Code）も jq default 0 で同じく非表示に倒れる
+
+### Changed
+
+- **キャッシュ置き場をユーザー単位にした** — `/tmp/ist-j-ichikawa-claude-statusline` 固定から `${TMPDIR:-/tmp}/claude-statusline-$UID` へ（`CLAUDE_STATUSLINE_CACHE_DIR` で差し替え可）。固定の共有パスには 3 つの実害があった: (1) **共有 Mac の別ユーザーは 700 のディレクトリに書けず**、git 行が永久 cold-start になるうえ `usage_spend` も書けないので毎レンダー refetch = コード内コメントが「致命的」と呼ぶ curl storm、(2) **テストが本物のキャッシュを触っていた** — `bats` 実行中に作者のライブ statusline へ偽の値（`extra:$5.00`）が一瞬出得た、(3) 公開ツールなのに他人の `/tmp` に個人名のディレクトリが生える。macOS の `TMPDIR` は既にユーザー単位なので (1)(3) が消え、env override がテスト密閉の seam になる（テストは `$BATS_TEST_TMPDIR/cache` を使うよう変更）
+- **既存ユーザーの移行作業は不要**（初回だけ Git 情報が 5 秒遅れて出る）。旧ディレクトリは放置しても macOS が定期的に掃除する
+
+### Fixed
+
+- **キャッシュディレクトリの親が 755 で作られていた**（Security ルール「cache dirs は `mkdir -p -m 700`」の違反）。BSD の `mkdir -p -m` は**最後に作るディレクトリにしか mode を当てない**ため、`mkdir -p -m 700 <base>/git` では `<base>` が umask の 755 で残っていた（実測: 旧キャッシュは base 755 / `subscription` ファイルが 644）。親も operand に並べて両方 700 にした
+- `dur_sec` の事前初期化漏れを修正 — `eval` が `|| true` で失敗した時に `set -u` で即死する規約違反だった（jq 抽出変数は必ず事前初期化する）
+
+## [1.51.0] - 2026-07-27
+
+### Added
+
+- **`install.sh` を追加**。`git clone` して `./install.sh` を叩けば `~/.claude/settings.json` に `statusLine` / `subagentStatusLine` が登録される。従来はユーザーが clone 先の絶対パスを自分で JSON に書き写す必要があり（`~` が展開されないため相対で書けない）、既存 settings.json への手動マージも要るのが導入の壁になっていた。既存キーは保ったままマージし、`refreshInterval` / `hideVimModeIndicator` は**ユーザーが既に決めていればその値を尊重**（未設定時だけ推奨値 `30` / `true` を入れる）。登録前にスクリプトを試走して動かなければ何も書かずに中止。`--main-only` / `-n, --dry-run` / `-y, --yes` と、書き込み先を差し替える `CLAUDE_SETTINGS=<path>`（テストもこの seam を使う）
+- **install.sh はグローバル設定を触るので、既定で「差分を見せて y/N 確認」するまで一切書き込まない**。加えて次の 3 つを設計に入れた: (1) **バックアップはタイムスタンプ付きの別名** — 固定 `.bak` だと 2 回目の実行で「変更後の状態」を上書きし元の設定が失われる、(2) **`settings.json` が symlink（dotfiles 管理）ならリンクを壊さず実体に書く** — リンクへ `mv` すると実体との繋がりが切れ「設定したのに反映されない」になる、(3) **既存 `statusLine` が別ツール（ccstatusline 等）を指す場合は名指しで警告**してから確認を求める（無警告で奪わない）。非対話環境で `--yes` 無しの時は確認を飛ばさず中止する。冪等で、既に同内容ならバックアップも作らず「変更なし」で終わる
+- `CLAUDE_STATUSLINE_NO_NET` が `fetch_subscription()` の **Keychain 読みも止める**ようにした。ネットワークではないが macOS のアクセス許可ダイアログを出しうる外部参照であり、install.sh の試走やテストがユーザーの Keychain に触るのは意図しない副作用だった（この seam を「外部への問い合わせをしない」の意味に統一）
+- install.sh に **macOS 以外での門前払い**を追加（`stat -f` / `md5 -q -s` 依存なので Linux では動かない。公開の玄関になった以上、失敗するより先に一言で断る）
+- install.sh の追加の防御（レビューで検出）: **元のファイルパーミッションを引き継ぐ**（`settings.json` は `env` の API キーを持ちうるため、`600` で固めた設定が umask の `644` に緩むのを防ぐ）、**登録するスクリプトの存在確認と試走を subagent 版にも広げる**（欠けていても登録され「存在しないコマンドを毎行実行」になっていた）、**試走を `CLAUDE_STATUSLINE_NO_NET=1` で回す**（インストールが OAuth 通信・Keychain 読み・共有キャッシュ書き込みを副作用で起こさない）+ 出力が空でないことも確認、**clone 先パスに空白があれば登録を断る**（設定値が分割されて「入れたのに真っ白」になる）、`${BASH_SOURCE%/*}` と `${settings%/*}` の**スラッシュ無し fallback**（`bash install.sh` 起動や `CLAUDE_SETTINGS=settings.json` でディレクトリを誤作成していた）、**空ファイルの settings.json は初期化**（「不正な JSON」で突き返していた）、**末尾に改行を付ける**（dotfiles の git diff を汚さない）、Ctrl-D での中止を `set -e` の即死ではなく中止メッセージ経路に流す
+
+### Fixed
+
+- **stale worktree（親リポが消えた `.git` ファイルが残った状態）で statusline が完全に空白になっていた**のを修正。`line_git` が空配列になり `"${line_git[*]}"` の展開が bash 3.2 の `set -u` で即死して exit 1 していた。同じ経路で**壊れた JSON を渡した時の `jq error` 表示も出ずに空白**になっていた（`line2=()`/`line3=()` の空配列展開）。macOS の `/bin/bash` は 3.2 固定なので**本番だけで起きる**バグで、bash 4+ では再現しない
+- **テストが本番と違う bash で走っていたのを修正** — `test.bats` の全 120 箇所超が PATH の `bash`（homebrew 5.x）でスクリプトを起動していたため、このリポの最重要制約「bash 3.2 互換」を 140 件のテストが一切検証していなかった。`/bin/bash` 起動に統一したところ**上記の空白バグが即座に露出**した（v1.51.0 の空パレット即死も同じ穴を通り抜けてリリースされ、レビューでしか見つかっていない）。字句レベルの bash4-ism grep（PostToolUse hook）は空配列展開のような**意味論の差**を掬えないので、実 3.2 での実行が唯一の網になる
+- **Bedrock の実 model id (`-v1:0`) から版接尾辞を剥がせておらず、サブエージェント行が `Opus 5.v1:0` と表示されていた**のを修正。実際の AWS の id は常に `:N` を伴う（`global.anthropic.claude-opus-5-v1:0`）が、`${m%-v[0-9]}` は `:0` 付きにマッチせず素通りしていた。README / CLAUDE.md の「`-vN` 接尾辞も剥がす」という記述と実挙動が食い違っていた（v1.49.0 からの潜在バグ）
+- **空パレットで色ヘルパーを呼ぶと statusline 全体が空白になりうる**のを修正。bash 3.2 の `set -u` は空配列の `"${a[@]}"` 展開で即死するため、`_paint` の「パレット未指定なら無色 degrade」ガードに到達する前にスクリプトが落ちていた（ガードが謳う保護が実際には効いていなかった）。呼び出しを `${PAL[@]+"${PAL[@]}"}` に変更
+
+### Removed
+
+- **サブエージェント行から context% バーと経過時間を撤去**。行本文は **説明 + モデル(tier 色) + [注意状態] + [🌲worktree]** だけになった。実運用で並走させると 3 行が `9% 5m` / `5% 5m` / `8% 6m` のように**どれも似た値**になり（同じタスクを分担するので当然）、行が伸びるだけで「どれを見るべきか」の判断に効いていなかった。差を見たい時は Claude Code 既定描画のトークン数か `/context` の方が精度が高い
+- 撤去に伴い `tokenCount` / `contextWindowSize` / `startTime` の jq 抽出、`fmt_elapsed()`、**経過時間用の `date` fork** がまとめて落ちた（スクリプトは実質 21 行減。残る fork は入出力の jq 2 回のみ）
+
+## [1.50.0] - 2026-07-27
+
+### Changed
+
+- **Opus 5 を多色スイープ描画に変更**（`130` dark rust → `166` rust → `173` CORAL → `209` salmon → `215` gold）。Fable（蝶標本の多色循環）と Sonnet 5（植物モチーフの緑スイープ）が多色なのに Opus 5 だけ flat という不統一を解消。発表アートワークは**鳥卵標本図版のコラージュで数字「5」を組む**構図で、Opus 4.x の「粘土コーラル」のような支配色がなく artwork 由来の単色を選べないため多色にした。**構造は Sonnet 5 と同じ「単色相を暗→明にスイープ」で、色相を Opus の coral 一族に取る** — アートワーク実測に忠実な低彩度の tan/olive で組んだ初版は、ターミナル上でくすんで「グラデーション」に見えず地味だった（Sonnet 5 の見栄えは `28`→`154` の広い明度レンジ由来）。彩度と明度レンジを稼ぐ方を優先し、両端とも mid/high 彩度に留めて light テーマでも飛ばないようにした。Opus 4.x は flat coral のまま。判定は `*"opus 5"*` / `*"opus-5"*`（`*opus*5*` は "Opus 4.5" にも誤マッチするため使わない）で、generic `*opus*` より前に置く
+- `CORAL` を `CORAL_N=173` から組み立てるようにし、`OPUS5_PAL` も同じ定数を参照するようにした（coral の再調整が片方だけに効く手動同期を廃止）
+- **`model_color` が tier 判定に `display_name` と `model_id` の両方を使うように変更**（`model_color VARNAME MODEL_SHOW [MODEL_ID]`、描画は MODEL_SHOW のみ）。`display_name` が版を含まない形（`Opus (1M context)` 等。公式 docs の JSON 例も `id: claude-opus-5` に対し `display_name: "Opus"`）で来ると Line 1 は flat coral に落ちるのに、id しか持たない subagent 行はスイープになる — モデル色を一元化した目的そのものが崩れる食い違いだったので、id を副次ヒントとして渡すようにした。副産物として `display_name: "Sonnet"` + `id: claude-sonnet-4-5` のような取りこぼしも拾えるようになった
+- **`rainbow()` / `gradient()` がパレットを引数で受けるように変更**し、共通の `_paint` に統合した（`rainbow`=循環 / `gradient`=スイープ の 1 行ラッパー）。パレットは `FABLE_PAL` / `SONNET5_PAL` / `OPUS5_PAL` として色定数の隣に集約 — 多色モデルが増えても描画ヘルパーは増やさずパレット配列だけ足す形にした。パレット未指定時は無色テキストに degrade する（`braille_bar` 等 lib.sh の他ヘルパーと同じ入力検証方針。ゼロ除算・負添字で statusline 全体が空白になるのを防ぐ）
+- Built against Claude Code 2.1.220。2.1.219 で `claude-opus-5` が追加され Opus の既定モデルになったが、色分けの `*opus*` ワイルドカードと `prettify_model` の「先頭セグメント = tier 名」規則により**無改修で `Opus 5` 表示になっていた**ことを確認済み（上記の色変更は不統一の解消であり、追従の必須対応ではない）。`/fast` の対象が Opus 5・4.8 に変わった点も既存の `fast_mode` 表示でそのまま追従。サブエージェント行のネスト深度が 1 → 3 になった件は `tasks[]` のフィールド構成が不変のため影響なし
+
 ## [1.49.0] - 2026-07-23
 
 ### Changed
