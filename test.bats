@@ -1157,12 +1157,15 @@ _wait_for_cache() {
 # ============================================================================
 # セッション経過時間 (cost.total_duration_ms) — Line 4
 # ============================================================================
-@test "経過時間: 1時間未満は分、超えたら時+分、24時間超は時のみで出ること" {
-  _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_duration_ms":'"$1"'}}' \
-    | /bin/bash statusline-command.sh | tail -1; }
-  [[ "$(_l4 90000)"    == *"1m"* ]]
-  [[ "$(_l4 3660000)"  == *"1h01m"* ]]
-  [[ "$(_l4 97200000)" == *"27h"* ]]
+@test "fmt_elapsed: 単位が常に1つで m/h 帯は commit age と同表記になること" {
+  # 完全一致で pin する — 部分一致 (*"1h"*) だと旧実装の "1h01m" も通ってしまう
+  fmt_elapsed 90    r; [[ "$r" == "1m" ]]     # 1分30秒 → 秒は切り捨て
+  fmt_elapsed 3599  r; [[ "$r" == "59m" ]]    # 境界の直下 — この変更の本体は s<3600 の 1 条件
+  fmt_elapsed 3600  r; [[ "$r" == "1h" ]]     # 境界ちょうど ((s<=3600) だと 60m に化ける)
+  fmt_elapsed 3660  r; [[ "$r" == "1h" ]]     # 1時間1分 → 時のみ (旧: 1h01m、H:MM でも 1:01 でない)
+  fmt_elapsed 16200 r; [[ "$r" == "4h" ]]     # 4時間30分 → 分は落とす
+  fmt_elapsed 97200 r; [[ "$r" == "27h" ]]    # 27時間 → 日には丸めない (commit age は 1d に丸めるのでここだけ分かれる)
+  fmt_elapsed x     r; [[ "$r" == "" ]]       # 非数値は空 (呼び出し側で非表示に倒れる)
 }
 
 @test "経過時間: 60秒未満とフィールド欠落では出さないこと" {
@@ -1180,7 +1183,16 @@ _wait_for_cache() {
 @test "経過時間: コストの直前に置かれること(順序)" {
   l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":18.07,"total_duration_ms":12240000}}' \
     | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g')
-  [[ "$l4" == *"3h24m"*'$18.07'* ]]
+  # 区切りごと pin する — *"3h"* だと 13h/23h/3h24m も通る緩い部分一致になる
+  [[ "$l4" == *" 3h "*'$18.07'* ]]
+}
+
+@test "経過時間: 1時間未満もLine 4に届くこと(60秒ゲートの統合確認)" {
+  # fmt_elapsed の単体テストだけだと、Line 4 側のゲートが >= 60 から >= 3600 に退行しても緑のまま。
+  # m 帯が実際に描画に乗ることはフルスクリプトで押さえる
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.42,"total_duration_ms":2460000}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$l4" == *" 41m "*'$0.42'* ]]
 }
 
 @test "キャッシュ: CLAUDE_STATUSLINE_CACHE_DIR で置き場を差し替えられること(テスト密閉の seam)" {

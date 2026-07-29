@@ -110,7 +110,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 **Anthropic** (rate_limits が届く場合)
 - Claude Code 2.1.80+ の stdin JSON `rate_limits` フィールドから直接取得
-- 表示: 5hバー + % + リセット残(H:MM) → コンテキストバー + % → week:% + リセット曜日時刻 → extra-usage実課金 → セッション経過時間 → セッションコスト
+- 表示: 5hバー + % + リセット残(H:MM `4:01`) → コンテキストバー + % → week:% + リセット曜日時刻 → extra-usage実課金 → セッション経過時間(単位1つ `41m`/`4h`。m/h 帯は Line 3 の commit age と同表記、24h 以降は経過が `27h` / age が `1d` で分かれる) → セッションコスト
 - Pre-2.1.80 ではレート制限部分が非表示（graceful degradation）
 
 **Bedrock / Vertex AI / Foundry**

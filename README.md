@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.59.0-blue)
+![Version](https://img.shields.io/badge/version-1.60.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -27,7 +27,7 @@ Line 4: 5hレート制限 + コンテキストバー (分母付き /200k /1M) + 
 Anthropic(enterprise)  Opus 5  high  think  fast  v2.1.220
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  base:main  A3 M2 ?1 ↑2 1h fix: update logic..
-⣿⣀    16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h24m  $4.83
+⣿⣀    16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h  $4.83
 （200k のモデルでは `48%/200k` と出ます。分母は使用率と同じ色で、`%` と一体で読めます）
 ```
 

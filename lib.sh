@@ -126,14 +126,16 @@ model_color() {
   esac
 }
 
-# fmt_elapsed SECONDS VARNAME — 経過秒を "3m" / "1h03m" / "27h" にする (no subshell)。
-# Line 3 の commit age と同じコンパクト表記。1 時間未満は分のみ、以降は時+分。
+# fmt_elapsed SECONDS VARNAME — 経過秒を "41m" / "4h" / "27h" にする (no subshell)。
+# 単位は常に 1 つ。**m/h 帯は Line 3 の commit age と同表記だが 24h 以降は分かれる** —
+# 経過は `27h` のまま (何時間回してるかが知りたい)、commit age は `1d` に丸める。
+# **H:MM にはしない** — 同じ Line 4 の 5h 残り (`format_reset_remaining` = `4:01`) と
+# 区別できなくなる。経緯は CHANGELOG 1.60.0。
 fmt_elapsed() {
   local s=$1
   [[ "$s" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' ''; return; }
-  if   ((s < 3600));  then printf -v "$2" '%dm' $((s / 60))
-  elif ((s < 86400)); then printf -v "$2" '%dh%02dm' $((s / 3600)) $(((s % 3600) / 60))
-  else printf -v "$2" '%dh' $((s / 3600)); fi
+  if ((s < 3600)); then printf -v "$2" '%dm' $((s / 60))
+  else                  printf -v "$2" '%dh' $((s / 3600)); fi
 }
 
 # fmt_ctx_size TOKENS VARNAME — コンテキスト窓の分母表記 ("500k" / "1M" / "1.5M")。
