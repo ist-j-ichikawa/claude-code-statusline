@@ -896,7 +896,8 @@ _wait_for_cache() {
 
 # ============================================================================
 # Subagent statusline — subagent-statusline-command.sh (agent panel の行描画, v1.51.0 デザイン)
-#   行 = 説明 + モデル(pretty・tier色) + [status語] + [🌲wt] (v1.51.0 で context%/経過を撤去)。
+#   行 = 説明 + モデル(pretty・tier色) + [effort] + [status語] + [🌲wt]
+#   (v1.51.0 で context%/経過を撤去、v1.61.0 で effort を追加)。
 #   「実行中」表示は Claude Code 側 chrome に委ね、独自グリフ(↑/▪/✓)は出さない。
 # ============================================================================
 @test "Subagent: id付きJSON行が説明先頭+モデルpretty(tier色)だけになること" {
@@ -928,6 +929,69 @@ _wait_for_cache() {
     | /bin/bash subagent-statusline-command.sh | jq -r .content)
   [[ "$c" == *"3-5-sonnet-20241022"* ]]   # cleaned id のまま
   [[ "$c" != *"3 5.sonnet"* ]]
+}
+
+@test "Subagent: effortはレベル文字列をEFFORT色でモデルの直後に出すこと" {
+  # 位置まで pin する — 部分一致だけだと effort の add を status/worktree の後ろに動かしても緑のままで、
+  # docs の「モデル → effort → 状態 → 🌲」の順序が固定されない
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-6","effort":"low","status":"needs_input","cwd":"/r/.claude/worktrees/wt"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$c" == "x  Sonnet 4.6  low  needs_input  🌲wt" ]]
+  # 色は Line 1 の effort と同じ light purple
+  c2=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-6","effort":"low"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c2" == *$'\033[38;5;105m'"low"* ]]
+}
+
+@test "Subagent: effortのゼロ埋め数値を8進数と誤解釈しないこと" {
+  # ((08)) は bash で "value too great for base" になり 0 が出る → 10# で明示基数にする
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-6","effort":"08000"}]}' \
+    | /bin/bash subagent-statusline-command.sh 2>/dev/null | jq -r .content)
+  [[ "$c" == *"8k"* ]]
+  [[ "$c" != *"0k"[^0-9]* ]]
+}
+
+@test "Subagent: effortだけの行は既定描画に委ねること(row を非空にしない)" {
+  # 説明も名前もモデルも無い task で effort だけ出すと「effort 語だけの行」になり、
+  # Claude Code 既定の「名前 · 説明 · トークン数」より情報が減る
+  out=$(echo '{"columns":120,"tasks":[{"id":"d","effort":"medium"}]}' \
+    | /bin/bash subagent-statusline-command.sh)
+  [[ -z "$out" ]]
+}
+
+@test "Subagent: effortの数値トークン予算は k 表記に畳むこと" {
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-opus-5","effort":8000}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[38;5;105m'"8k"* ]]    # docs: 値はレベル文字列か数値のトークン予算
+  [[ "$c" != *"8000"* ]]
+}
+
+@test "Subagent: effortはセッション継承時(absent)には出さないこと" {
+  # 継承時 absent = 出るのは「この subagent だけ effort が違う」時だけ (差分シグナル)
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-opus-5"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" != *"38;5;105"* ]]
+  # Opus 5 は gradient で 1 文字ずつ着色されるのでリテラル一致には ANSI 剥がしが要る
+  [[ "$(printf '%s' "$c" | sed $'s/\033\\[[0-9;]*m//g')" == *"Opus 5"* ]]   # モデルは出たまま
+}
+
+@test "Subagent: effortが非スカラーなら出さず全行も消えないこと(型ガード)" {
+  # 全 task を 1 個の jq で処理するので 1 task の型不正で abort すると全行が既定描画に戻る。
+  # 型ガードで非スカラーは空に倒す — 生 JSON を行に出さない (出すと "Sonnet 4.6" 一致では気付けない)
+  _c() { echo "{\"columns\":120,\"tasks\":[{\"id\":\"t\",\"label\":\"x\",\"model\":\"claude-sonnet-4-6\",\"effort\":$1}]}" \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content; }
+  for bad in '["a","b"]' 'true' 'false'; do
+    c=$(_c "$bad")
+    [[ "$c" == *"Sonnet 4.6"* ]]     # 行は生きている
+    [[ "$c" != *"38;5;105"* ]]       # effort 区間は出ていない
+    # 生 JSON が漏れていないこと。ANSI 自体が "[" を含むので剥がしてから見る
+    plain=$(printf '%s' "$c" | sed $'s/\033\\[[0-9;]*m//g')
+    [[ "$plain" == "x  Sonnet 4.6" ]]
+  done
+  # ネストした {"level":..} 形で来ても level を拾う (主 statusline の effort.level と同形)
+  c=$(_c '{"level":"low"}')
+  [[ "$c" == *$'\033[38;5;105m'"low"* ]]
+  [[ "$c" != *'{'* ]]
 }
 
 @test "Subagent: 未知status(入力待ち等)は黄で生の値を表示すること" {

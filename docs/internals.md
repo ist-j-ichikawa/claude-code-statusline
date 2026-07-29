@@ -47,7 +47,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 各行の描画 (既存 statusline の語彙に揃える。`⚡` 等の独自グリフは付けない — 場所で subagent と分かる):
 
 ```
-説明  モデル(pretty・tier色)  [状態]  [🌲worktree]
+説明  モデル(pretty・tier色)  [effort]  [状態]  [🌲worktree]
 ```
 
 - **説明** (先頭・通常輝度): `label // description // name`。**切り詰めなし**（主 statusline と同じく端末幅適応はしない。折り返し/切れは端末に委ねる）。
@@ -55,10 +55,10 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 - **状態** (`status`): **「実行中」表示は Claude Code のネイティブ chrome (行頭の `○`/スピナー) に委ね、行本文に独自グリフは出さない**（自前の tick 駆動アニメは CC の本物と重複・劣化するため）。`running` / `completed`(行はまもなく消える) / 無しは無表示、それ以外 (`needs_input` 等の注意状態) だけ**黄で status 語**を出す (PR review_state と同じ色付き単語作法)。
 - **worktree** (`cwd` が `.claude/worktrees` 配下の時だけ `🌲名`、Line 2 と協調)。
 - **context% と経過は出さない** (v1.51.0 で撤去)。並走する subagent は同じタスクを分担するのでどれも似た値になり (実測 5-9% / 5-6m)、行が伸びるだけで判断に効かなかった。撤去に伴い `tokenCount`/`contextWindowSize`/`startTime` の抽出、`fmt_elapsed`、`date` fork がまとめて落ちた (残る fork は jq 2 回のみ)。差を見たい時は Claude Code 既定描画のトークン数か `/context` を使う。
-- `effort` (2.1.214+) は per-task で明示された時のみ来る (継承時 absent・セッション effort は subagent payload に無い) スパースな値なので、現状は描画に採用していない。
+- **`effort`** (`EFFORT` light purple、2.1.214+): **セッションの effort を継承している行では absent** なので、出るのは「この subagent だけ effort が違う」時だけ = 差分そのものがシグナルになる (v1.61.0 で採用)。撤去した context%/経過とは性質が逆で、あちらは全行に出て値が揃っていた (だから情報量が無かった)。値はレベル文字列 (`low`/`medium`/`high`/`xhigh`/`max`) か**数値のトークン予算**で、数値は `fmt_ctx_size` で `8k` 形に畳む。docs は「設定された値をそのまま報告する」と明記しており、モデルが非対応レベルなら実際に適用される effort と異なりうる。
 
 実装の要点:
-- **単一 jq で抽出**: `tasks[]` を US (`0x1f`) 区切りで連結。`read` の `IFS=tab` は空フィールドを潰す (tab は IFS 空白扱い) ため桁ずれする → 非空白の US を区切りに使う。全 text フィールド (`id`/`label`/`model`/`status`/`cwd`) の改行・タブは jq `gsub` で空白化し 1 行 = 1 task を保つ。抽出は default 付きスカラーのみで配列 index をしないので、1 task のフィールド型不正でも jq が abort せず全行が消えることはない。
+- **単一 jq で抽出**: `tasks[]` を US (`0x1f`) 区切りで連結。`read` の `IFS=tab` は空フィールドを潰す (tab は IFS 空白扱い) ため桁ずれする → 非空白の US を区切りに使う。全 text フィールド (`id`/`label`/`model`/`status`/`cwd`/`effort`) の改行・タブは jq `gsub` で空白化し 1 行 = 1 task を保つ。抽出は配列 index をせず、`effort` のように非スカラーが来うるフィールドは `if type == "string" or type == "number"` の型ガードを通してから `tostring` するので、1 task のフィールド型不正でも jq が abort せず全行が消えることはない (ガード無しで新フィールドを足すと全パネルが既定描画に戻る)。
 - **単一 jq で JSON 化**: `jq -Rc 'split("\u001f") | {id,content}'` (US で分割)。content 内の ESC / 引用符 / バックスラッシュを安全にエスケープ (Claude Code 側で JSON パース後、ANSI/OSC 8 としてそのまま描画される)。
 - **graceful degradation**: `model`/`status` 欠落 (旧 Claude Code)、`tasks` 空、不正 JSON、空入力のいずれでも `exit 0`。`id` を出さない行は Claude Code 既定の `名前 · 説明 · トークン数` に委ねる。先頭の `❯ ◯`・選択・クリック展開は Claude Code 側の chrome で、本スクリプトは行本文のみ差し込む。
 
@@ -74,7 +74,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | Opus 4.x | コーラル (artwork実測) | 38;5;173 |
 | Sonnet 5 | 緑グラデーション (文字ごとにスイープ) | `gradient()` 28→70→148→154 |
 | Sonnet 4.6 | ティール | 38;5;79 |
-| Sonnet 4.5 / 3.5 | アンバー | 38;5;214 |
+| Sonnet 4.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
 | Anthropic / 5hレート制限 | サンドベージュ | 38;5;180 |
 | extra-usage 実課金額 | gold | 38;5;220 |

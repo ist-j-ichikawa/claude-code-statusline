@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.61.0] - 2026-07-29
+
+### Added
+
+- **サブエージェント行に effort を表示**（Claude Code 2.1.214+ の per-task `effort`、`EFFORT` light purple でモデルの直後）。**セッションの effort を継承している行では payload 側が absent** なので、出るのは「このサブエージェントだけ effort が違う」時だけ — 安いエージェントに `low` を割り当てた時などが一目で分かる
+- 値はレベル文字列（`low`/`medium`/`high`/`xhigh`/`max`）か**数値のトークン予算**の両方が来るので、数値は `fmt_ctx_size` で `8k` 形に畳む
+
+### Changed
+
+- **`effort` を「スパースだから不採用」としていた判断を撤回した**。撤去済みの context% / 経過（v1.51.0）は**全行に出て値が揃う**から情報量が無かったのに対し、`effort` は**違う時だけ出る**ので差分そのものがシグナルになる。同じ「スパース」という言葉で両者を却下していたのは、測るべき性質を間違えていた
+- `effort` 抽出に**型ガード**を入れた（`if type == "string" or type == "number"`）。非スカラーは空に倒すので、生 JSON が行に出ない。ネストした `{"level":..}` 形で来た場合も `level` を拾う（主 statusline の `effort.level` と同形のため）
+- `effort` の数値は `10#` で明示基数指定して畳む（`08000` のようなゼロ埋めを 8 進数と解釈して `0` を出していた）
+- **`effort` だけでは行を上書きしない** — 説明も名前もモデルも無い task で effort だけ出すと「effort 語だけの行」になり、Claude Code 既定描画（`名前 · 説明 · トークン数`）より情報が減るため
+
+### Fixed
+
+- `docs/internals.md` のセッションコストの輝度記述が 1 箇所だけ `dim` のまま残っていた（v1.55.0 で通常輝度に変えた分の取りこぼし）。3 箇所すべてをコードに合わせた
+- 行レイアウトの記述を `subagent-statusline-command.sh` と `test.bats` のヘッダコメントにも反映（README / `docs/internals.md` だけ直して in-repo のコメント 2 箇所を落としていた）
+
 ## [1.60.0] - 2026-07-29
 
 ### Changed

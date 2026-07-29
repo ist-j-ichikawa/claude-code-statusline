@@ -7,7 +7,7 @@
 # stdout = 上書きしたい行ごとに JSON 1 行 `{"id":..,"content":..}`。id を省いた行は既定描画のまま。
 # content は ANSI / OSC 8 をそのまま解釈。per-task の model は 2.1.205+ で来る。
 #
-# 行 = 説明 + モデル(pretty・tier色) + [status語] + [🌲worktree] だけ。
+# 行 = 説明 + モデル(pretty・tier色) + [effort] + [status語] + [🌲worktree] だけ。
 # 「実行中」表示は Claude Code のネイティブ chrome (行頭の ○/スピナー) に委ねる。
 # context% と経過時間は出さない — 並走する subagent はどれも似た値 (実測 5-9% / 5-6m) になり、
 # 行が伸びるだけで判断に効かなかった (v1.51.0 で撤去。tokenCount/contextWindowSize/startTime の
@@ -27,7 +27,8 @@ _rows=$(jq -r '.tasks[]? | [
   (.label // .description // .name // "" | gsub("[\n\r\t]"; " ")),
   (.model // "" | gsub("[\n\r\t]"; " ")),
   (.status // "" | gsub("[\n\r\t]"; " ")),
-  (.cwd // "" | gsub("[\n\r\t]"; " "))
+  (.cwd // "" | gsub("[\n\r\t]"; " ")),
+  ((((.effort.level? // .effort?) // "") | if type == "string" or type == "number" then tostring else "" end) | gsub("[\n\r\t]"; " "))
 ] | join("\u001f")' <<< "$input" 2>/dev/null) || exit 0
 [[ -z "$_rows" ]] && exit 0
 
@@ -53,7 +54,7 @@ add() { row+="${row:+  }$1"; }
 
 # here-string 供給なのでループは現シェル (サブシェル無し・_out に蓄積)。
 _out=""
-while IFS=$'\037' read -r id label model status cwd; do
+while IFS=$'\037' read -r id label model status cwd effort; do
   [[ -z "$id" ]] && continue
   row=""
   # 説明 (先頭・通常輝度・切り詰めなし)
@@ -61,6 +62,18 @@ while IFS=$'\037' read -r id label model status cwd; do
   # モデル (pretty-name + tier 色)
   if has_val "$model"; then
     prettify_model "$model" _pm; model_color _mc "$_pm" "$model"; add "$_mc"
+  fi
+  # effort (2.1.214+): **セッションの effort を継承している行では absent** なので、出るのは
+  # 「この subagent だけ effort が違う」時だけ = 差分そのものがシグナルになる (撤去した context%/経過は
+  # 逆に全行に出て値が揃っていた)。色は Line 1 の effort と同じ EFFORT で語彙を揃える。
+  # 値はレベル文字列 (low/medium/high/xhigh/max) か**数値のトークン予算**なので数値だけ 8k 形に畳む
+  # (`10#` で明示基数 — `08` のようなゼロ埋めを 8 進数と解釈させない)。
+  # docs: 「設定された値をそのまま報告する」ので、モデル非対応レベルでは実際の適用値と異なりうる。
+  # **row が空のうちは足さない** — effort だけで row を非空にすると、説明も名前も無い task の行を
+  # 「effort 語だけ」で上書きしてしまい、Claude Code 既定描画 (名前 · 説明 · トークン数) より情報が減る。
+  if [[ -n "$row" ]] && has_val "$effort"; then
+    if [[ "$effort" =~ ^[0-9]+$ ]]; then fmt_ctx_size "$((10#$effort))" _ef; else _ef="$effort"; fi
+    add "${EFFORT}${_ef}${RST}"
   fi
   # 「実行中」表示は Claude Code のネイティブ chrome (行頭 ○/スピナー) に委ね、行本文に独自グリフは出さない。
   # running / completed(行はまもなく消える) / 無し は無表示、それ以外(入力待ち等)だけ黄で status 語を出す。

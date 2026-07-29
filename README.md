@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.60.0-blue)
+![Version](https://img.shields.io/badge/version-1.61.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 
 ## Overview
@@ -148,15 +148,17 @@ rm -rf /tmp/ist-j-ichikawa-claude-statusline
 
 ### サブエージェント行
 
-`subagentStatusLine` は agent panel に並ぶサブエージェントの各行を、メインの statusline と協調した配色で描画します。各行は **説明 + モデル(tier 色) + [入力待ち等の状態] + [🌲worktree]** です（行頭の `❯ ◯` と「実行中」表示は Claude Code 側が描画）:
+`subagentStatusLine` は agent panel に並ぶサブエージェントの各行を、メインの statusline と協調した配色で描画します。各行は **説明 + モデル(tier 色) + [effort] + [入力待ち等の状態] + [🌲worktree]** です（行頭の `❯ ◯` と「実行中」表示は Claude Code 側が描画）:
 
 ```
 ❯ ◯ review the diff for correctness bugs   Sonnet 5
-❯ ◯ /code-review xhigh                     Opus 5     🌲issue-41
+❯ ◯ 大量ファイルの機械的な置換               Haiku 4.5  low
+❯ ◯ /code-review xhigh                     Opus 5     xhigh   🌲issue-41
 ❯ ◯ 承認待ちのデプロイ                       Opus 5     needs_input
 ```
 
 - **モデル**は Line 1 と同じ表記・tier 色（Bedrock の `jp.anthropic.claude-opus-5` 等も `Opus 5` に整形）
+- **effort** は**そのエージェントだけ効力レベルが違う時にだけ**出ます（セッションの設定を継承している行では表示されません）。安いエージェントに `low` を割り当てた時などに一目で分かります
 - **状態**は通常は出さず（実行中は Claude Code 標準の `○`/スピナーが示す）、`needs_input` など**注意が要る時だけ黄色い語**で表示
 - **worktree** 隔離エージェントは作業先を `🌲名` で表示
 - コンテキスト% と経過時間は**あえて出しません** — 並走するサブエージェントはどれも似た値になり（実測 5〜9% / 5〜6 分）、行が伸びるだけで判断に効きませんでした
