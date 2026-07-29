@@ -1360,8 +1360,11 @@ _wait_for_cache() {
   now=$(date +%s)
   _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45,"resets_at":'"$1"'}}}' \
     | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
-  [[ "$(_l4 $((now + 3720)))" == *"1:02"* ]]    # 1時間2分後
-  [[ "$(_l4 $((now + 300)))"  == *"0:05"* ]]    # 5分後 → 0 埋め
+  # オフセットは**分の中央**に置く。統一秒は 2 回読まれる (テストの date と
+  # statusline-command.sh の readonly _NOW) ので、境界ちょうど (+300) だと 1 秒ずれて
+  # 0:04 に落ちて flaky になる。format_reset_remaining は切り捨てなので余裕を取る
+  [[ "$(_l4 $((now + 3750)))" == *"1:02"* ]]    # 1時間2分30秒後
+  [[ "$(_l4 $((now + 330)))"  == *"0:05"* ]]    # 5分30秒後 → 0 埋め
   [[ "$(_l4 $((now - 60)))"   == *"now"* ]]     # 過ぎていたら now
 }
 
