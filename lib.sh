@@ -80,22 +80,23 @@ _paint() {
 
 # model_key VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to a canonical "tier version"
 # ("opus 5" / "sonnet 4.5" / "fable" / "" = unknown)。display_name と model id の両形、Bedrock の
-# inference-profile、旧形式 (版が tier より前) を 1 つの正規形に畳む。
+# inference-profile を 1 つの正規形に畳む。
 # 正規形は**必ず小文字**になる (tier 名はループのリテラルから取るので bash 4+ の ${var,,} が不要)。
-# これがあるので model_color 側は「順序に依存する 15 個の glob」ではなく完全一致で分岐できる。
+# **サポート下限は 4.x** (3.x 系は全廃止済み)。旧形式 id (版が tier より前、`claude-3-5-sonnet-…`)
+# は版スロットに日付が入る (`sonnet 20241022`) が、generic tier 色に落ちるだけで壊れない。
 model_key() {
-  local _s="$2|${3:-}" _t _v _out=""
+  local _s="$2|${3:-}" _t _mi _out=""
   shopt -s nocasematch
   for _t in fable opus sonnet haiku; do
     [[ "$_s" == *"$_t"* ]] || continue
-    if [[ "$_s" =~ ([0-9]+)[-.]([0-9]+)[-\ ]$_t ]]; then
-      # 旧形式 ("claude-3-5-sonnet-…" / "Claude 3.5 Sonnet") を先に見る。
-      # 後回しにすると新形式の規則が "sonnet-20241022" の日付を版として拾う
-      _out="$_t ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-    elif [[ "$_s" =~ $_t[-\ ]([0-9]+)([-.]([0-9]+))? ]]; then
-      _v="${BASH_REMATCH[1]}"
-      [[ -n "${BASH_REMATCH[3]}" ]] && _v="$_v.${BASH_REMATCH[3]}"
-      _out="$_t $_v"
+    if [[ "$_s" =~ $_t[-\ ]([0-9]+)([-.][0-9]+)? ]]; then
+      _out="$_t ${BASH_REMATCH[1]}"
+      # 版スロットには**日付が来ることがある** — minor を持たない tier の dated id
+      # (`claude-opus-4-20250514` / `claude-opus-5-20260101`) では第 2 group が `-20250514` になる。
+      # 5 桁以上を日付とみなして捨て、正規形を常に `tier N[.N]` に保つ。これがあるので
+      # model_color の arm は完全一致で足り「新モデルはパレット 1 行 + arm 1 行」が本当に成立する。
+      _mi="${BASH_REMATCH[2]}"
+      [[ ${#_mi} -le 3 ]] && _out="$_out${_mi/-/.}"   # "-5" も ".5" も ".5" に寄せる
     else
       _out="$_t"          # 版が読めない ("Opus" 単体等) — generic tier 色に落ちる
     fi
@@ -117,7 +118,7 @@ model_color() {
     fable*)                     rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
     "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
     "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
-    "sonnet 4.5"|"sonnet 3.5")  printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
+    "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
     opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
     sonnet*)                    printf -v "$1" '%s' "${TEAL}${_ms}${RST}" ;;
     haiku*)                     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}" ;;

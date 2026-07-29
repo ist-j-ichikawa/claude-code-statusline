@@ -1346,17 +1346,47 @@ _wait_for_cache() {
   [[ "$(_k '' '')"                                     == "" ]]
 }
 
-@test "model_key: 旧形式(版がtierより前)を単独でも正しく畳むこと" {
-  # 旧実装は show 単独だと *sonnet*3-5* に当たらず teal になっていた (連結の重複で偶然 amber だった)
+@test "model_key: サポート下限(4.x)未満の旧形式でも tier 色に落ちるだけで壊れないこと" {
+  # 3.x 系は全廃止済みなので専用分岐を持たない。版スロットに日付が入るが tier は拾えるので
+  # 「無色化」も「文字化け」も起きない (Bedrock で古い inference profile を pin した人向けの保証)
   model_key k 'claude-3-5-sonnet-20241022' ''
-  [[ "$k" == "sonnet 3.5" ]]
-  model_key k 'Claude 3.5 Sonnet' 'claude-3-5-sonnet-20241022'
-  [[ "$k" == "sonnet 3.5" ]]
-  # 日付 (20241022) が版スロットを奪わないこと
-  [[ "$k" != *"2024"* ]]
-  # 色は amber (Sonnet 3.5 は 4.5 と同じ扱い)
+  [[ "$k" == sonnet* ]]
   model_color c 'claude-3-5-sonnet-20241022' ''
-  [[ "$c" == *"38;5;214m"* ]]
+  [[ "$c" == *"38;5;79m"* ]]    # generic teal
+  model_key k 'claude-3-5-haiku-20241022' ''
+  [[ "$k" == haiku* ]]
+  model_color c 'claude-3-5-haiku-20241022' ''
+  [[ "$c" == *"38;5;183m"* ]]   # lavender
+  # 空白形の旧 display_name は版スロットごと落ちて素の tier になる (id 形とは畳み方が違う)
+  model_key k 'Claude 3.5 Sonnet' ''
+  [[ "$k" == "sonnet" ]]
+  model_color c 'Claude 3.5 Sonnet' ''
+  [[ "$c" == *"38;5;79m"* ]]    # 同じ generic teal に着地する
+  # 日付は版スロットに入れない — 正規形は常に `tier N[.N]`。これがあるので arm は完全一致 1 行で足る
+  model_key k 'claude-opus-4-20250514' ''
+  [[ "$k" == "opus 4" ]]
+  model_color c 'claude-opus-4-20250514' ''
+  [[ "$c" == *"38;5;173m"* ]]   # coral (Opus 4.x)
+  # 同じモデルが display_name 形でも dated id 形でも同一キーに畳まれること
+  model_key k2 'Opus 4' 'claude-opus-4-20250514'
+  [[ "$k2" == "$k" ]]
+  # **dated な 5 系が多色 arm に着地すること** — ここが実在の危険。日付を拾うと generic 単色に落ちる
+  model_key k 'claude-opus-5-20260101' ''
+  [[ "$k" == "opus 5" ]]
+  model_color c 'claude-opus-5-20260101' ''
+  [[ "$c" == *"38;5;130m"* ]]   # gradient の先頭ストップ (単色 coral 173 ではない)
+  model_key k 'claude-sonnet-5-20260101' ''
+  [[ "$k" == "sonnet 5" ]]
+  model_color c 'claude-sonnet-5-20260101' ''
+  [[ "$c" == *"38;5;28m"* ]]    # gradient の先頭ストップ
+  # 本物の minor 版は残ること (日付判定が版を食わない)
+  model_key k 'claude-opus-5-1' ''
+  [[ "$k" == "opus 5.1" ]]
+  # 日付付きの**現行** id は版として正しく畳めること (下限を上げても壊していない)
+  model_key k 'claude-haiku-4-5-20251001' ''
+  [[ "$k" == "haiku 4.5" ]]
+  model_key k 'claude-sonnet-4-5-20250929' ''
+  [[ "$k" == "sonnet 4.5" ]]
 }
 
 @test "model_key: 版なし tier は generic 色に落ちること" {

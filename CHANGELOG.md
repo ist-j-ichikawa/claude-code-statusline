@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.59.0] - 2026-07-29
+
+### Changed
+
+- **モデル色のサポート下限を 4.x に定めた**。3.x 系は Anthropic API から全廃止済み（Sonnet 3.5 = 2025-10-28、Opus 3 = 2026-01-05、Sonnet 3.7 / Haiku 3.5 = 2026-02-19、Haiku 3 = 2026-04-19）で、Claude Code 自身も Opus 4 / 4.1 を pin したユーザーを 4.6 へ自動移行させる。存在しないモデルのために `model_key` が**毎レンダーの最初に**旧形式専用の正規表現（版が tier より前、`claude-3-5-sonnet-…`）を評価していたのをやめた
+- 下限未満のモデルは **generic tier 色に落ちるだけで無色化も文字化けもしない**ので、Bedrock で古い inference profile を pin していても壊れない。唯一の実害は Sonnet 3.5 が amber ではなく teal になること
+- **正規形を常に `tier N[.N]` に揃えた**。minor を持たない tier の dated id（`claude-opus-4-20250514` / `claude-opus-5-20260101`）では第 2 キャプチャが `-20250514` になり、正規形が `opus 4.20250514` という非正規な形になっていた。5 桁以上を日付とみなして捨てるので、同じモデルが `display_name` 形でも dated id 形でも同一キーに畳まれる。これで `model_color` の arm は完全一致 1 行で足り、「**新モデルはパレット 1 行 + arm 1 行**」という docs の約束が実際に成立する（従来は dated な 5 系が静かに generic 単色へ落ちる危険があり、それを検出するテストも無かった）
+- 日付付きの現行 id（`claude-haiku-4-5-20251001` / `claude-sonnet-4-5-20250929`）が版として正しく畳まれること、dated な 5 系が多色 arm に着地することをテストで固定した
+
+### Removed
+
+- `model_color` の amber arm から `"sonnet 3.5"` を削除（`"sonnet 4.5"` のみ）
+
 ## [1.58.0] - 2026-07-27
 
 ### Changed

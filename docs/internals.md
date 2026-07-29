@@ -6,7 +6,7 @@
 
 - **`statusline-command.sh`** — メイン statusLine (プロンプト直下の 4 行)。`settings.json` の `statusLine` から参照。
 - **`subagent-statusline-command.sh`** — agent panel の各サブエージェント行 (`subagentStatusLine`、v1.45.0 追加)。`settings.json` の `subagentStatusLine` から参照。
-- **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_key`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`/`fmt_ctx_size`/`fmt_elapsed`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。tier 判定は `model_key` が display_name / id / Bedrock / 旧形式を `opus 5` 等の正規形に畳み、`model_color` はその完全一致で分岐する（新モデルはパレット 1 行 + arm 1 行で足せる）。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。
+- **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_key`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`/`fmt_ctx_size`/`fmt_elapsed`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。tier 判定は `model_key` が display_name / id / Bedrock inference-profile を `opus 5` 等の正規形に畳み、`model_color` はその完全一致で分岐する（新モデルはパレット 1 行 + arm 1 行で足せる）。**色の対象は 4.x 以降**（3.x 系は全廃止済み。下限未満は generic tier 色に落ちるだけで壊れない）。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。
 
 ## 仕組み
 
