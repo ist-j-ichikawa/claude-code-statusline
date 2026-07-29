@@ -257,11 +257,18 @@ build_git() {
   last_epoch="${log_output%%$'\n'*}"
   msg="${log_output#*$'\n'}"
   if [[ "$last_epoch" =~ ^[0-9]+$ ]]; then
+    # 単位は常に 1 つ (Line 4 の経過と同じ作法)。**どの古さでも必ず埋める** —
+    # 7 日超で age を空にしていた頃は render_git の gate が `-n "$age" && -n "$msg"` /
+    # `elif -n "$age"` の 2 本しかないため **msg も連鎖して落ち、Line 3 がブランチ名だけ**になった
+    # (最終コミットが 1 週間以上前のリポで再現。コミット無しと古いだけの区別も付かない)。
+    # gate を足すのではなく空の age が生まれる条件を消す方針 (v1.62.0)。
     local diff=$((_NOW - last_epoch))
-    if   ((diff < 3600));   then age="$((diff / 60))m"
-    elif ((diff < 86400));  then age="$((diff / 3600))h"
-    elif ((diff < 604800)); then age="$((diff / 86400))d"
-    fi
+    if   ((diff < 3600));     then age="$((diff / 60))m"
+    elif ((diff < 86400));    then age="$((diff / 3600))h"
+    elif ((diff < 604800));   then age="$((diff / 86400))d"
+    elif ((diff < 2592000));  then age="$((diff / 604800))w"     # 30 日未満
+    elif ((diff < 31536000)); then age="$((diff / 2592000))mo"   # 365 日未満
+    else                           age="$((diff / 31536000))y"; fi
   else
     msg=""
   fi

@@ -1284,6 +1284,28 @@ _wait_for_cache() {
   [[ "$facts" == *$'\037'* ]]        # US 区切りの facts である
 }
 
+@test "Git facts: 何日前のコミットでも age と msg の両方を出すこと" {
+  # 7 日超で age を空にしていた頃は render_git の gate (`-n age && -n msg` / `elif -n age`) を
+  # どちらも通らず **msg も連鎖して落ち Line 3 がブランチ名だけ**になっていた。
+  # 単位は常に 1 つで m/h/d/w/mo/y。
+  _age_of() {  # $1=何日前
+    local w="$BATS_TEST_TMPDIR/age$1" c="$BATS_TEST_TMPDIR/agec$1" e
+    mkdir -p "$w"; git -C "$w" init -q
+    e=$(( $(date +%s) - $1 * 86400 ))
+    echo x > "$w/f"; git -C "$w" add f
+    GIT_AUTHOR_DATE="$e +0000" GIT_COMMITTER_DATE="$e +0000" \
+      git -C "$w" -c user.email=a@b -c user.name=a commit -qm "msg-marker"
+    CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+    _wait_for_cache "$c/git"
+    CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' \
+      | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g'
+  }
+  l=$(_age_of 2);   [[ "$l" == *" 2d msg-marker"* ]]
+  l=$(_age_of 20);  [[ "$l" == *" 2w msg-marker"* ]]    # 旧実装はここで msg ごと消えた
+  l=$(_age_of 60);  [[ "$l" == *" 2mo msg-marker"* ]]
+  l=$(_age_of 400); [[ "$l" == *" 1y msg-marker"* ]]
+}
+
 @test "Git facts: 同一dirの別セッションが相手のPR stateを表示しないこと(cross-session汚染)" {
   d="$BATS_TEST_TMPDIR/xsess"
   _run_pr() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"}'"$1"',"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p; }
