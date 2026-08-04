@@ -1340,6 +1340,21 @@ _stub_env() {
   [[ "$output" == *"jq error"* ]]
 }
 
+@test "bash3.2: スクリプト起動が全て /bin/bash であること(制約を検証しないテストの混入を防ぐ)" {
+  # PATH の `bash` は homebrew 5.x なので、`/bin/` を付けずにスクリプトを起動すると
+  # このリポの最重要制約「bash 3.2 互換」を**一切検証しない**テストになる。
+  # v1.51.0 まで 120 箇所超がこの形で、3.2 だけで即死するバグ 3 件が全緑のまま出荷された。
+  # 判定は「`bash` の次の語が `.sh` を含む / `-c` / `"$` で始まる」= 起動している行だけ。
+  # 散在する散文 (「bash 3.2 の set -u は…」「bash ${BASH_VERSION}」等) は次の語がどれにも
+  # 当たらないので誤検出しない。`"$` を入れているのは install.sh の試走が
+  # `/bin/bash "$repo/$1"` の形で、引数から `.sh` が見えないため。
+  local bad
+  bad=$(grep -noE '[^[:space:]]*bash[[:space:]]+("\$|[^[:space:]]*(\.sh|-c))[^[:space:]]*' \
+          "$BATS_TEST_DIRNAME/test.bats" "$BATS_TEST_DIRNAME/install.sh" \
+        | grep -v '/bin/bash ' || true)
+  [ -z "$bad" ] || { printf 'PATH の bash で起動している箇所:\n%s\n' "$bad" >&2; false; }
+}
+
 # ============================================================================
 # セッション経過時間 (cost.total_duration_ms) — Line 4
 # ============================================================================
