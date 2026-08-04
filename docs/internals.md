@@ -100,7 +100,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 ## パフォーマンス
 
-- **バックグラウンド更新**: Git (5秒) と Subscription 種別取得 (3600秒) はサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない
+- **バックグラウンド更新**: Git (5秒)・Subscription 種別 (3600秒)・extra-usage (300秒) の 3 つをサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない。**`( … ) >/dev/null 2>&1 & disown` の `>/dev/null 2>&1` が非同期化の必須条件** — 付けないとサブシェルが親の stdout (Claude Code が読む pipe) を継承したまま生き、読み手は最後の fd 保持者が終わるまで EOF を見ない (実測: 冷キャッシュの大リポで 50ms → 300ms、遅い `curl` で 3.1s)
 - **単一 jq 呼び出し**: stdin JSON を `eval` + `@sh` で一括抽出（フィールドごとの再パースなし）
 - **共有タイムスタンプ**: `_NOW=$(date +%s)` を1回だけ呼び、全キャッシュ判定で再利用
 - **キャッシュ**: `${TMPDIR:-/tmp}/claude-statusline-$UID/{git,subscription,usage_spend}` (mkdir 700、親も含めて owner-only) に保存。`CLAUDE_STATUSLINE_CACHE_DIR` で差し替え可 (テスト密閉の seam)。固定の共有パスは共有 Mac で書けず curl storm になるため v1.52.0 でユーザー単位に変更
