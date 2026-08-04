@@ -21,13 +21,45 @@ setup() {
 _wait_for_cache() {
   local cache_dir=$1 i f
   for i in {1..20}; do
-    # atomic 書き込みの中間ファイル (.tmp) は完成キャッシュではないので無視する
+    # atomic 書き込みの中間ファイル (.tmp-<pid>) は完成キャッシュではないので無視する
     for f in "$cache_dir"/*; do
-      [[ -e "$f" && "$f" != *.tmp ]] && return 0
+      [[ -e "$f" && "$f" != *.tmp* ]] && return 0
     done
     sleep 0.1
   done
   return 1
+}
+
+# _wait_for_file PATH [-s] — 背景書き込みの完了を polling で待つ (固定 sleep を置かないため)。
+# `-s` を付けると「存在する」ではなく「非空」まで待つ。
+_wait_for_file() {
+  local f=$1 mode=${2:-} i
+  for i in {1..30}; do
+    if [[ "$mode" == "-s" ]]; then [[ -s "$f" ]] && return 0
+    else                           [[ -e "$f" ]] && return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# _stub_env DIRNAME [CURL_BODY] — 密閉した HOME + PATH を組み、`env -i` に渡す前置きを _stub_pre に入れる。
+# statusline が fork するコマンドだけを PATH に置くので、`security` は**入らない** =
+# Keychain 経路を外してファイル fallback を必ず通る。CURL_BODY を渡すと偽 curl を置く。
+# 複数テストで同じ足場を組んでいたのを 1 箇所に寄せた (symlink 一覧の drift が一番危ない)。
+_stub_env() {
+  local name=$1 curl_body=${2:-} x
+  _stub_bin="$BATS_TEST_TMPDIR/$name-bin"
+  _stub_home="$BATS_TEST_TMPDIR/$name-home"
+  _stub_cache="$BATS_TEST_TMPDIR/$name-cache"
+  mkdir -p "$_stub_bin" "$_stub_home/.claude"
+  for x in jq git md5 stat date grep mkdir touch mv rm sleep seq; do
+    ln -s "$(command -v $x)" "$_stub_bin/" 2>/dev/null || true
+  done
+  [[ -n "$curl_body" ]] && { printf '#!/bin/bash\n%s\n' "$curl_body" > "$_stub_bin/curl"; chmod +x "$_stub_bin/curl"; }
+  printf '%s' '{"claudeAiOauth":{"accessToken":"AAAAtest","subscriptionType":"max"}}' \
+    > "$_stub_home/.claude/.credentials.json"
+  _stub_pre=(env -i "HOME=$_stub_home" "PATH=$_stub_bin" "TMPDIR=$BATS_TEST_TMPDIR"
+             "CLAUDE_STATUSLINE_CACHE_DIR=$_stub_cache")
 }
 
 # ============================================================================
@@ -682,9 +714,36 @@ _wait_for_cache() {
 }
 
 @test "セッション: 旧フォーク形式でもbranchと表示すること" {
+  # 2.1.77 より前の `(Fork)` は現行 `/branch` のエイリアス。fork と出すと意味が逆になる
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"(Fork) my session","version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
   [[ "$result" == *$'\033[33mbranch'* ]]
+}
+
+@test "セッション: /fork の ⑂ マーカーを fork として黄で表示すること" {
+  # 2.1.220 実測: /fork は親の名前を継承して末尾に U+2442 (OCR FORK) だけを足す。(Fork) は付かない
+  j=$(jq -nc --arg n "branch と fork のテスト実装 $FORK_GLYPH" \
+    '{model:{id:"test",display_name:"Test"},session_name:$n,version:"2.1.220",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mfork'* ]]
+  [[ "$result" != *"branch"* ]]        # branch と混同しない
+  [[ "$result" != *"$FORK_GLYPH"* ]]   # 生グリフは出さない (語に置き換える)
+}
+
+@test "セッション: /branch した会話を /fork したら fork を優先すること" {
+  # 両マーカーが付く (`foo (Branch) ⑂`)。「親が並走している」ほうが新しく行動に直結する
+  j=$(jq -nc --arg n "my session (Branch) $FORK_GLYPH" \
+    '{model:{id:"test",display_name:"Test"},session_name:$n,version:"2.1.220",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mfork'* ]]
+  [[ "$result" != *$'\033[33mbranch'* ]]
+}
+
+@test "セッション: マーカーが無ければ出自バッジを出さないこと" {
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"ふつうの名前","version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"branch"* ]]
+  [[ "$result" != *"fork"* ]]
 }
 
 # ============================================================================
@@ -1177,14 +1236,32 @@ _wait_for_cache() {
   [[ "$(jq -r '.subagentStatusLine // "absent"' "$s")" == "absent" ]]
 }
 
-@test "install: 空白入りパスのcloneを断ること(設定値が分割されて壊れるため)" {
-  d="$BATS_TEST_TMPDIR/my repo"; mkdir -p "$d"
-  cp "$BATS_TEST_DIRNAME"/{statusline-command.sh,lib.sh,subagent-statusline-command.sh,install.sh} "$d/"
-  s="$BATS_TEST_TMPDIR/space.json"
-  run env CLAUDE_SETTINGS="$s" /bin/bash "$d/install.sh" --yes
-  [[ "$status" -ne 0 ]]
-  [[ "$output" == *"空白"* ]]
-  [[ ! -f "$s" ]]
+@test "install: 空白やシェルメタ文字を含むパスでも登録し、シェル経由で実行できること" {
+  # `command` はシェル経由で実行される。以前は空白を拒否し brace/glob は素通りさせていたため
+  # 「試走は通るのに登録すると真っ白」になった。今は printf %q で引用するので全部通る。
+  # `br{x,y}z` は引用が無いと 3 語に brace 展開され、bash が存在しないスクリプトを叩いて空白になる
+  for name in "my repo" "Projects (old)" "br{x,y}z" "glob*dir"; do
+    d="$BATS_TEST_TMPDIR/$name"; mkdir -p "$d"
+    cp "$BATS_TEST_DIRNAME"/{statusline-command.sh,lib.sh,subagent-statusline-command.sh,install.sh} "$d/"
+    s="$d/settings.json"; echo '{}' > "$s"
+    CLAUDE_SETTINGS="$s" /bin/bash "$d/install.sh" --yes >/dev/null
+    cmd=$(jq -r .statusLine.command "$s")
+    # Claude Code と同じくシェル経由で起動して、実際に描画されること
+    out=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":5}}' \
+      | CLAUDE_STATUSLINE_NO_NET=1 CLAUDE_STATUSLINE_CACHE_DIR="$d/cache" sh -c "$cmd" 2>/dev/null | head -1)
+    [[ -n "$out" ]] || { echo "空白になった: $name / cmd=$cmd" >&3; return 1; }
+  done
+}
+
+@test "install: 自分の ~ 形の登録を「別のツール」と誤警告しないこと" {
+  # README の主経路は `~/.claude/statusline/...` を手で貼る形。$HOME 展開後で突き合わせないと
+  # install.sh が自分自身の登録に対して「注意: 別のコマンドを指しています」を出す
+  s="$BATS_TEST_TMPDIR/tilde.json"
+  rel="${BATS_TEST_DIRNAME#$HOME/}"
+  jq -nc --arg c "/bin/bash ~/$rel/statusline-command.sh" \
+    '{statusLine:{type:"command",command:$c}}' > "$s"
+  run env CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --dry-run
+  [[ "$output" != *"別のコマンドを指しています"* ]]
 }
 
 @test "install: 空パレットでも色ヘルパーが statusline を空白にしないこと" {
@@ -1268,6 +1345,122 @@ _wait_for_cache() {
   # mode を当てないので、親 (CACHE_BASE) も operand に並べないと 755 で残る
   [[ "$(stat -f '%Lp' "$d")" == "700" ]]
   [[ "$(stat -f '%Lp' "$d/git")" == "700" ]]
+}
+
+@test "subscription: credentials が読めなくてもキャッシュを書き、毎レンダーの再取得を起こさないこと" {
+  # NO_NET を外して実際に fetch 経路へ入れる。実ユーザーの資格情報は読ませない —
+  # security を必ず失敗する偽物に差し替え、ファイル fallback も空の HOME へ向ける
+  mkdir -p "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/fakehome"
+  printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/security"
+  chmod +x "$BATS_TEST_TMPDIR/bin/security"
+  d="$BATS_TEST_TMPDIR/subcache"
+  run env -u CLAUDE_STATUSLINE_NO_NET HOME="$BATS_TEST_TMPDIR/fakehome" \
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH" CLAUDE_STATUSLINE_CACHE_DIR="$d" \
+    /bin/bash -c 'printf "%s" "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"'"$BATS_TEST_DIRNAME"'\"}}" | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"'
+  for i in {1..20}; do [[ -f "$d/subscription" ]] && break; sleep 0.1; done
+  # ファイルを書かないと cache_stale が「不在=stale」で毎レンダー背景 fetch を起こし、
+  # Keychain 読みの storm になる (extra-usage が 0 でも必ず書くのと同じ理由)
+  [[ -f "$d/subscription" ]]
+  [[ ! -s "$d/subscription" ]]        # 空でよい — display は has_val で非表示に倒れる
+  [[ "$output" == *"Anthropic"* ]]    # 種別が無くても provider 表示は出る
+  [[ "$output" != *"Anthropic("* ]]   # 空の括弧は出さない
+}
+
+@test "背景更新: 遅い curl と遅い git がレンダーをブロックしないこと(継承stdoutでEOFが遅れる回帰)" {
+  # `( ... ) & disown` だけでは背景化にならない — subshell が親の stdout を継承したまま生き、
+  # statusline を**捕捉する側**は最後の fd 保持者が終わるまで EOF を見ない。
+  # `>/dev/null 2>&1` を落とすと 3 秒の curl でレンダーが 3 秒止まる (実測 3.1s → 50ms)。
+  # curl 側と git 側の**両方**を見る — curl だけだと `current_dir` が非 git のとき
+  # build_git が即 return するので、git の背景ブロックから redirect を外しても緑のままになる。
+  # 偽コマンドは固定 sleep ではなく**解放ファイル待ち**にする — 固定 sleep だと bats が
+  # 実行終了時に孤児プロセスを待って 1 テストあたり数秒余計にかかる。
+  _stub_env block "$(printf 'touch "%s/curl-called"\nfor i in $(seq 40); do [[ -e "%s/release" ]] && exit 0; sleep 0.1; done' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR")"
+  # git も遅くする (背景の build_git が最初に呼ぶのは `git branch --show-current`)。
+  # `_stub_env` が張った symlink を先に外す — 残すと実 git バイナリへ書き込もうとして失敗する
+  rm -f "$_stub_bin/git"
+  printf '#!/bin/bash\ntouch "%s/git-called"\nfor i in $(seq 40); do [[ -e "%s/release" ]] && exit 1; sleep 0.1; done\nexit 1\n' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$_stub_bin/git"
+  chmod +x "$_stub_bin/git"
+  # current_dir は .git を持つ実リポにする = cold-start で build_git を必ず起こす
+  s=$SECONDS
+  # command substitution で捕捉する = Claude Code と同じ読み方
+  out=$(printf '%s' "$(jq -nc --arg d "$BATS_TEST_DIRNAME" \
+        '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:$d},context_window:{used_percentage:42}}')" \
+    | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh")
+  elapsed=$((SECONDS - s))
+  [[ -n "$out" ]]
+  (( elapsed < 2 )) || { echo "レンダーが ${elapsed}s ブロックした (背景 subshell が stdout を保持している)" >&3; return 1; }
+  # **偽コマンドまで到達していることを確認する** — credentials が読めない / 非 git dir だと
+  # 背景処理が起きず、このテストは「何もしていないから速い」で無条件に緑になる (実際に一度そうなった)
+  _wait_for_file "$BATS_TEST_TMPDIR/curl-called" || { echo "curl に到達していない = テストが無意味" >&3; return 1; }
+  _wait_for_file "$BATS_TEST_TMPDIR/git-called" || { echo "git に到達していない = git 側が未被覆" >&3; return 1; }
+  touch "$BATS_TEST_TMPDIR/release"   # 偽コマンドを解放して孤児待ちを避ける
+}
+
+@test "credentials: Keychain 不在でもファイルから読めてサブスク種別が出ること" {
+  # `$(<file 2>/dev/null)` は bash 3.2 で**常に空文字**になる (bash 5 では動くので手元で気付けない)。
+  # これを踏むと subscription と extra-usage が丸ごと死ぬが、キャッシュは空で書かれるので
+  # 「ファイルはある」系の assert だけでは検出できない → 表示まで見る
+  _stub_env cred 'exit 1'    # ネットは失敗させる (種別は Keychain/ファイル由来なので影響しない)
+  printf '%s' '{"claudeAiOauth":{"accessToken":"AAAAtest","subscriptionType":"enterprise"}}' \
+    > "$_stub_home/.claude/.credentials.json"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  [[ "$(<"$_stub_cache/subscription")" == "enterprise" ]]
+  # 2 回目のレンダーでキャッシュから読んで表示に載ること
+  run env "${_stub_pre[@]:1}" /bin/bash -c \
+    'printf "%s" "$1" | /bin/bash "$2"' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
+  [[ "$output" == *"Anthropic(enterprise)"* ]]
+}
+
+@test "credentials: 読めない credentials で stderr を汚さないこと" {
+  # 背景 subshell の stderr は閉じてあるが、gate 自体も `-r` で readability を見る
+  h="$BATS_TEST_TMPDIR/nrhome"; mkdir -p "$h/.claude"
+  c="$h/.claude/.credentials.json"
+  printf '%s' '{"claudeAiOauth":{"subscriptionType":"max"}}' > "$c"; chmod 000 "$c"
+  run env -u CLAUDE_STATUSLINE_NO_NET HOME="$h" CLAUDE_STATUSLINE_CACHE_DIR="$BATS_TEST_TMPDIR/nrcache" \
+    /bin/bash -c 'printf "%s" "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":5}}" | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh" 2>&1 >/dev/null'
+  chmod 644 "$c"
+  [[ -z "$output" ]] || { echo "stderr に出力: $output" >&3; return 1; }
+}
+
+@test "セキュリティ: トークンが curl のオプションに化けないこと(argv 露出も無いこと)" {
+  # `--config -` を使っていた頃は各行が**設定ディレクティブ**だったので、改行入りトークンが
+  # `output = <path>` の注入になりえた。`-H @-` なら各行は必ずヘッダなので構造的に化けない。
+  # 字種の拒否リストで守る形に戻すと、この 1 本が「注入されないこと」を保証しなくなる。
+  _stub_env inject "$(printf 'printf "%%s\\n" "$@" > "%s/argv.txt"\ncat > "%s/stdin.txt"' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR")"
+  ln -s "$(command -v cat)" "$_stub_bin/" 2>/dev/null || true
+  # トークンに curl ディレクティブを仕込む
+  jq -nc --arg t "$(printf 'AAAA\noutput = %s/pwned' "$BATS_TEST_TMPDIR")" \
+    '{claudeAiOauth:{accessToken:$t,subscriptionType:"max"}}' > "$_stub_home/.claude/.credentials.json"
+  printf '%s' "$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')" \
+    | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$BATS_TEST_TMPDIR/argv.txt" -s
+  # ① 注入したパスにファイルが作られていないこと
+  [[ ! -e "$BATS_TEST_TMPDIR/pwned" ]]
+  # ② argv にトークンが出ていないこと (ps 漏れ防止)。ヘッダは stdin から渡る
+  ! grep -q 'AAAA' "$BATS_TEST_TMPDIR/argv.txt"
+  grep -qF -- '-H' "$BATS_TEST_TMPDIR/argv.txt"
+  grep -qF -- '@-' "$BATS_TEST_TMPDIR/argv.txt"
+  # ③ Authorization ヘッダは stdin 経由で実際に渡っていること
+  grep -q '^Authorization: Bearer AAAA' "$BATS_TEST_TMPDIR/stdin.txt"
+}
+
+@test "install: 試走が実キャッシュディレクトリを汚さないこと" {
+  s="$BATS_TEST_TMPDIR/probe.json"
+  echo '{}' > "$s"
+  d="$BATS_TEST_TMPDIR/probe-realcache"
+  mkdir -p "$d"
+  CLAUDE_SETTINGS="$s" CLAUDE_STATUSLINE_CACHE_DIR="$d" \
+    /bin/bash "$BATS_TEST_DIRNAME/install.sh" --yes >/dev/null
+  sleep 0.5
+  # 試走は自前の mktemp -d に隔離する。NO_NET は git キャッシュには効かないので、
+  # この隔離が無いとインストールがユーザーの本物のキャッシュにエントリを作る
+  [[ -z "$(ls -A "$d")" ]]
 }
 
 # ============================================================================

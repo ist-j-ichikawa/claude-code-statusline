@@ -39,6 +39,11 @@ readonly VIM_VISUAL=$'\033[1;30;48;5;214m'  # bold black on gold (gruvbox-ish VI
 # Claude Code worktree レイアウトの marker（外部契約文字列）。両 statusline が参照し drift を防ぐ。
 readonly WT_MARKER='/.claude/worktrees/'
 
+# `/fork` が session_name 末尾に付ける U+2442 (OCR FORK)。2.1.220 で実測。
+# **8 進エスケープで書く** — 生グリフをソースに置くと Write/Edit で化けうる (US 区切りと同じ理由)。
+# `$'⑂'` は bash 4+ 専用なので使えない。
+readonly FORK_GLYPH=$'\342\221\202'
+
 # --- Helpers (fork-free: printf -v / [[ ]] only) ---
 has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 

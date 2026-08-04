@@ -52,10 +52,15 @@ get_credentials_blob() {
   if command -v security &>/dev/null; then
     local blob
     blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-    if [[ -n "$blob" ]]; then echo "$blob"; return 0; fi
+    # `printf '%s'` を使う — blob は外部文字列で、`echo` は先頭が `-n`/`-e` の値を食う
+    if [[ -n "$blob" ]]; then printf '%s\n' "$blob"; return 0; fi
   fi
   local creds="${HOME}/.claude/.credentials.json"
-  [[ -f "$creds" ]] && cat "$creds" 2>/dev/null
+  # gate は `-f` ではなく **`-r`** — root 所有や mode 000 の credentials では `$(<file)` が
+  # "Permission denied" を stderr に吐く (旧 `cat file 2>/dev/null` は黙っていた)。
+  # **`$(<file 2>/dev/null)` と書いてはいけない** — bash 3.2 では `$(<file)` の特殊構文が壊れて
+  # **常に空文字**になり、subscription と extra-usage が丸ごと死ぬ (bash 5 では動くので手元で気付けない)。
+  [[ -r "$creds" ]] && printf '%s\n' "$(<"$creds")"
 }
 
 # --- Subscription type (cached, background refresh) ---
@@ -71,17 +76,28 @@ fetch_subscription() {
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
   if cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
     (
-      local blob sub_type=""
+      local blob sub_type="" _st="${SUB_CACHE}.tmp-$$"
       blob=$(get_credentials_blob)
       if [[ -n "$blob" ]]; then
-        sub_type=$(jq -r '.claudeAiOauth.subscriptionType // empty' <<< "$blob" 2>/dev/null)
+        # blob は accessToken を含む。here-string (`<<<`) は bash 3.2 では一時ファイル経由に
+        # なるのでパイプで渡す (トークンを argv に出さないのと同じ理由でファイルにも落とさない)
+        sub_type=$(printf '%s' "$blob" | jq -r '.claudeAiOauth.subscriptionType // empty' 2>/dev/null)
       fi
-      if [[ -n "$sub_type" ]]; then
-        echo "$sub_type" > "$SUB_CACHE"
-      elif [[ -f "$SUB_CACHE" ]]; then
-        touch "$SUB_CACHE"
+      # 取れなくても必ず書く — 書かないと cache_stale がファイル不在で毎レンダー背景 fetch を起こし、
+      # Keychain 読みの storm になる (extra-usage と同じ理由。credentials を持たない API キー /
+      # env 運用のユーザーは恒常的に踏む)。空を書いても display は has_val で非表示に倒れる。
+      # 既存値があるときは潰さず touch で延命する (Keychain が一時的に読めないだけで表示が消えるのを防ぐ)。
+      if [[ -z "$sub_type" && -f "$SUB_CACHE" ]]; then
+        touch "$SUB_CACHE"          # 既存値は潰さず延命する
+      else
+        printf '%s' "$sub_type" > "$_st" && mv "$_st" "$SUB_CACHE"
       fi
-    ) & disown
+    # `>/dev/null 2>&1` が **背景化の必須条件** — 付けないと subshell が親の stdout を継承したまま
+    # 生き続け、statusline を捕捉する側 (Claude Code) は最後の fd 保持者が終わるまで EOF を見ない。
+    # `& disown` だけでは「出力をブロックしない」は成立しない (実測: 冷キャッシュの大リポで
+    # 50ms → 300ms、遅い curl で 3.1s。3 箇所すべてに必要)。stderr も閉じるのは、
+    # 背景の警告 (Keychain 不許可等) が statusline 出力に混ざらないようにするため。
+    ) >/dev/null 2>&1 & disown
   fi
   [[ -f "$SUB_CACHE" ]] && _sub_type=$(<"$SUB_CACHE") || _sub_type=""
 }
@@ -100,19 +116,29 @@ fetch_usage_spend() {
     (
       local blob token out cents=0
       blob=$(get_credentials_blob)
-      token=$(jq -r '.claudeAiOauth.accessToken // empty' <<< "$blob" 2>/dev/null)
+      # here-string ではなくパイプ — bash 3.2 の `<<<` は一時ファイルを作るので、
+      # トークンを含む blob をディスクに落とさない (argv 露出を避けるのと同じ理由)
+      token=$(printf '%s' "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
       if [[ -n "$token" ]]; then
-        # トークンは --config 経由 stdin で渡す (argv/ps 露出を防ぐ)
-        out=$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" \
-          | curl -s -m 4 --config - https://api.anthropic.com/api/oauth/usage 2>/dev/null)
+        # ヘッダは **`-H @-`** で stdin から渡す。argv には `@-` しか出ないので `ps` 漏れは無く、
+        # **各行が必ずヘッダとして解釈される**のでトークンに何が入っていても curl のオプションには化けない。
+        # `--config -` を使っていた頃は各行が設定ディレクティブだったので、`"` や改行を含む値が
+        # `output = <path>` の注入になりえた。字種の拒否リストで守るのではなく、
+        # ディレクティブとして読まれる面そのものを無くす方針 (install.sh の `printf %q` と同じ)。
+        out=$(printf 'Authorization: Bearer %s\nanthropic-beta: oauth-2025-04-20\n' "$token" \
+          | curl -s -m 4 -H @- https://api.anthropic.com/api/oauth/usage 2>/dev/null)
         cents=$(jq -r '(.spend.used // {}) | ((.amount_minor // 0) / pow(10; (.exponent // 2) - 2)) | round' <<< "$out" 2>/dev/null)
         [[ "$cents" =~ ^[0-9]+$ ]] || cents=0
       fi
       # spend 0 / トークン無し / 取得失敗でも「0」を必ず atomic に書く。書かないと
       # cache_stale が (ファイル不在=stale で) 毎レンダー refetch して curl storm になる
       # (extra-usage 0 のユーザーが大多数なので致命的)。display は 0 を非表示にするので実害なし。
-      echo "$cents" > "${USAGE_CACHE}.tmp" && mv "${USAGE_CACHE}.tmp" "$USAGE_CACHE"
-    ) & disown
+      # 中間ファイル名に PID を入れる — 固定名だと同一 dir の並走セッション (refreshInterval で
+      # 定期再実行 × 複数ペイン) が同じ .tmp に同時書き込みし、mv が atomic でも内容が混ざる
+      echo "$cents" > "${USAGE_CACHE}.tmp-$$" && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
+    # `>/dev/null 2>&1` は必須 (継承 stdout で捕捉側の EOF が遅れる。fetch_subscription の注記参照)。
+    # ここが最も効く — `curl -s -m 4` は最大 4 秒粘るので、無いとレンダーが 4 秒止まる
+    ) >/dev/null 2>&1 & disown
   fi
   [[ -f "$USAGE_CACHE" ]] && _usage_cents=$(<"$USAGE_CACHE")
 }
@@ -409,27 +435,26 @@ if has_val "$agent_name"; then
   line1+=("${AGENT}${agent_name}${RST}")
 fi
 
-# Session name (strip XML tags + command noise from /branch, /fork etc.)
-is_branch=false
-[[ "$session_name" == *"(Branch)"* || "$session_name" == *"(Fork)"* ]] && is_branch=true
-session_name="${session_name//(Branch)/}"
-session_name="${session_name//(Fork)/}"
-while [[ "$session_name" == *"<"*">"* ]]; do
-  session_name="${session_name%%<*}${session_name#*>}"
-done
-session_name="${session_name#"${session_name%%[![:space:]]*}"}"
-session_name="${session_name%"${session_name##*[![:space:]]}"}"
-# Drop if it looks like command/skill residue (contains colons like "plugin:skill" or starts with "/")
-if [[ "$session_name" == *:* || "$session_name" == /* ]]; then
-  session_name=""
-fi
+# Session lineage marker — session_name 末尾のマーカーから「このセッションの出自」を読む。
+# 2.1.220 実測: `/branch` は ` (Branch)`、`/fork` は ` ⑂` (U+2442) を付ける。**`(Fork)` は付かない**。
+# 旧 `(Fork)` は 2.1.77 より前の `/branch` のエイリアスなので **branch 扱い** — fork と出すと意味が逆になる。
+# 色は branch/fork で同じ黄。色はカテゴリ (別セッション由来) を表し、語がどちらかを表す。
+# ピンク (AGENT) は使わない — fork は agent view の行になるので `agent.name` と同色が 2 語並びうる。
+# ⑂ を先に見る: `/branch` した会話を `/fork` すると `foo (Branch) ⑂` と両方付くが、
+# 「親が並走している」ほうが行動に直結する新しい事実なので fork を優先する。
+# session_name 自体は表示しない (2.1.76+ が右上にネイティブ表示する) ので、サニタイズはしない。
+session_kind=""
+case "$session_name" in
+  *"$FORK_GLYPH"*)              session_kind="fork" ;;
+  *"(Branch)"*|*"(Fork)"*)      session_kind="branch" ;;
+esac
 # Version
 if has_val "$cc_version"; then
   line1+=("${DIMVER}v${cc_version}${RST}")
 fi
 # Session indicator
-if $is_branch; then
-  line1+=("${YLW}branch${RST}")
+if [[ -n "$session_kind" ]]; then
+  line1+=("${YLW}${session_kind}${RST}")
 fi
 
 # ============================================================================
@@ -497,8 +522,10 @@ line_git=()
 # Git info (background refresh)
 git_cache_file "$current_dir"
 if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
+  # 末尾の `>/dev/null 2>&1` は**内側の `> tmp` と別物で、外せない** — subshell が親の stdout を
+  # 保持し続けると捕捉側の EOF が遅れる (CLAUDE.md「Background refresh」/ fetch_subscription の注記)
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
-    build_git "$current_dir" > "${_gc}.tmp" && mv "${_gc}.tmp" "$_gc" ) & disown
+    build_git "$current_dir" > "${_gc}.tmp-$$" && mv "${_gc}.tmp-$$" "$_gc" ) >/dev/null 2>&1 & disown
 fi
 [[ -f "$_gc" ]] && _git_facts=$(<"$_gc") || _git_facts=""
 

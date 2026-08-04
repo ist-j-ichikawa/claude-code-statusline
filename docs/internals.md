@@ -27,7 +27,7 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — git の「事実」を US 区切りで返す（ANSI も stdin 由来値も含めない。5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + Version + branch
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + Version + セッション出自（`/branch`=`branch` / `/fork`=`fork`、どちらも黄）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([gh: (dim) + owner/repo (通常輝度)、GitHub origin あり時のみ] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、通常輝度)
@@ -86,7 +86,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | fast (`/fast` 有効時、`fast_mode`) | greenyellow | 38;5;190 |
 | Agent 名 | ピンク | 38;5;213 |
 | version (`v2.1.x`) | グレー | 38;5;248 |
-| branch セッション (`branch`) | 黄 | 33 |
+| セッション出自 (`branch` / `fork`) | 黄 | 33 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
 | Git staged `A` / ahead `↑` | 緑 | 32 |
 | Git modified `M` | 黄 | 33 |
@@ -118,7 +118,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 **extra-usage 実課金** (`extra:$X.XX`、gold `38;5;220`、Anthropic のみ)
 - `fetch_usage_spend()` が `/usage` OAuth エンドポイント (`api.anthropic.com/api/oauth/usage`) の `spend.used` を取得 — **stdin に無い唯一の課金情報**で、usage-credits の実消費額（参考値の session cost と別物）
-- **このスクリプト唯一のネットワーク呼び出し**。背景 subshell + 300s キャッシュで hot path をブロックしない。OAuth トークンは `curl --config -` で argv 非露出
+- **このスクリプト唯一のネットワーク呼び出し**。背景 subshell + 300s キャッシュで hot path をブロックしない。OAuth トークンは `curl -H @-`（stdin）で argv 非露出
 - Fable は 7/7 以降 extra-usage 課金に移行するため「実際に溶けた額」を出す実益が大きい
 - データ無し / 取得失敗 / `$0.00` は非表示。`CLAUDE_STATUSLINE_NO_NET=1` で fetch 自体を無効化（オフライン / プライバシー）。エンドポイントは非公式なので変わりうる前提の graceful degradation
 

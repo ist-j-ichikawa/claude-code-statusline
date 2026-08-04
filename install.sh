@@ -38,16 +38,8 @@ command -v jq >/dev/null || { echo "jq が必要です: brew install jq" >&2; ex
 
 # PATH に置かれた形 (スラッシュ無し) でも解決できるよう "." に fallback (姉妹スクリプトと同じ作法)
 _selfdir="${BASH_SOURCE%/*}"; [[ "$_selfdir" == "$BASH_SOURCE" ]] && _selfdir="."
-repo=$(cd "$_selfdir" && pwd)   # ~ 展開されない環境でも効くよう絶対パスに解決
-
-# settings.json の command 文字列にパスを埋めるので、空白入りパスは引用できず壊れる。
-# 試走は通ってしまい「入れたのに真っ白」になるため、書く前に断る。
-[[ $uninstall -eq 1 ]] || case "$repo" in
-  *[[:space:]]*)
-    printf 'clone 先のパスに空白が含まれています:\n  %s\n' "$repo" >&2
-    printf '設定値の分割で壊れるため登録できません。空白を含まないパスに clone し直してください。\n' >&2
-    exit 1 ;;
-esac
+# $BASH_SOURCE は相対のことがある (./install.sh) ので、cwd に依存しない値を書けるよう絶対化する
+repo=$(cd "$_selfdir" && pwd)
 
 if [[ $uninstall -eq 0 ]]; then
 scripts=(statusline-command.sh lib.sh)
@@ -77,14 +69,23 @@ done
 jq -e . "$settings" >/dev/null 2>&1 || { echo "$settings が不正な JSON です。先に直してください" >&2; exit 1; }
 
 # 登録するスクリプトを先に試走する (壊れたものを global 設定に書かない)。
-# CLAUDE_STATUSLINE_NO_NET=1 — インストールが OAuth 通信 / Keychain 読み / 共有キャッシュ書き込みを
-# 副作用として起こさないため (test.bats と同じ seam)。exit 0 だけでなく出力があることも見る。
+# 2 つの seam で副作用を止める (test.bats と同じもの):
+#   CLAUDE_STATUSLINE_NO_NET=1        — OAuth 通信と Keychain 読みを止める
+#   CLAUDE_STATUSLINE_CACHE_DIR=<tmp> — git キャッシュの書き込み先を捨てる先へ逃がす。
+#     NO_NET は git キャッシュには効かないので、これが無いと試走がユーザーの
+#     $TMPDIR/claude-statusline-<uid>/git/ に本物のエントリを作ってしまう。
+# exit 0 だけでなく出力があることも見る。
 _probe() {
   local out
-  out=$(printf '%s' "$2" | CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$repo/$1" 2>/dev/null) || return 1
+  out=$(printf '%s' "$2" | CLAUDE_STATUSLINE_NO_NET=1 CLAUDE_STATUSLINE_CACHE_DIR="$_probe_cache" \
+        /bin/bash "$repo/$1" 2>/dev/null) || return 1
   [[ -n "$out" ]]
 }
+# mktemp と trap は試走する時だけ — `--uninstall` は probe を 1 度も呼ばないので、
+# ここに置かないと「clone を消した後の掃除」経路が無駄に fork する
 if [[ $uninstall -eq 0 ]]; then
+_probe_cache=$(mktemp -d)
+trap 'rm -rf "$_probe_cache"' EXIT
 _probe statusline-command.sh \
   '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"0","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":1}}' \
   || { printf 'statusline-command.sh が正常に動きませんでした (%s)\n' "$repo" >&2; exit 1; }
@@ -109,8 +110,17 @@ else
   '
 fi
 
-_new=$(jq --arg main "/bin/bash $repo/statusline-command.sh" \
-          --arg sub  "/bin/bash $repo/subagent-statusline-command.sh" \
+# settings.json の `command` はシェル経由で実行される (docs: "The `command` field runs in a shell")
+# ので、埋めるパスは**シェル用に引用してから**入れる。`printf %q` は空白・`(`・`'`・glob 文字
+# (`{} * ? []`) すべてを安全にするので、拒否リストは持たない。
+# 以前は空白だけを弾いていたが、(a) `~/Documents/Projects (old)/` のような**正当なパスを拒否**し、
+# (b) `{a,b}` の brace 展開や `*` の glob は素通りして「試走は通るのに登録すると真っ白」になっていた
+# — 拒否リストを足し続けるのではなく、引用して発生条件そのものを消す方針。
+# `printf -v` で fork を作らない (このリポの作法)。
+printf -v _qmain '%q' "$repo/statusline-command.sh"
+printf -v _qsub  '%q' "$repo/subagent-statusline-command.sh"
+_new=$(jq --arg main "/bin/bash $_qmain" \
+          --arg sub  "/bin/bash $_qsub" \
           "$filter" "$settings")
 
 _keys='{statusLine, subagentStatusLine} | with_entries(select(.value != null))'
@@ -130,9 +140,14 @@ printf '書き込み先: %s\n\n変更内容:\n' "$settings"
 diff -u --label 'current' --label 'after' \
   <(printf '%s\n' "$_before") <(printf '%s\n' "$_after") || true
 
-# 他ツールの statusLine を奪う場合は明示的に警告する (無警告で奪わない)
+# 他ツールの statusLine を奪う場合は明示的に警告する (無警告で奪わない)。
+# 判定は**スクリプト名**で行う — パスで突き合わせると自分の登録を「別のツール」と誤警告する:
+# ① README の主経路は `~/.claude/statusline/...` を手で貼る形なので `$repo` と文字列一致しない
+# ② `printf %q` の引用が入ると `my\ repo` のように `$repo` と字面が変わる
+# ③ clone を移動・改名しても以前の登録は自分のもの
+# 同名スクリプトを持つ別ツールは警告できなくなるが、差分は必ず表示するので無断では奪わない。
 _cur_cmd=$(printf '%s' "$_before" | jq -r '.statusLine.command // ""')
-if [[ -n "$_cur_cmd" && "$_cur_cmd" != *"$repo"* ]]; then
+if [[ -n "$_cur_cmd" && "${_cur_cmd##*/}" != "statusline-command.sh" ]]; then
   printf '\n注意: 既存の statusLine が別のコマンドを指しています:\n  %s\nこれを上書きします。残したい場合は中止して手動で設定してください。\n' "$_cur_cmd"
 fi
 
