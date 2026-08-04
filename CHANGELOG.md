@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.63.0] - 2026-08-04
+
+### Fixed
+
+- **背景更新がレンダーをブロックしていた**のを修正。`( … ) & disown` だけでは背景化にならず、subshell が親の stdout（= Claude Code が読む pipe）を継承したまま生きるため、**読み手は最後の fd 保持者が終わるまで EOF を見ない**。`>/dev/null 2>&1` が背景化の必須条件で、3 箇所すべてに必要だった。実測で冷キャッシュの大リポ 300ms → 50ms、遅い `curl`（`-m 4` は最大 4 秒粘る）3.1s → 50ms。CLAUDE.md が掲げていた「statusline 出力を絶対にブロックしない」が実は成立していなかった。内側の `> "${_gc}.tmp-$$"` では足りない（問題は subshell が fd を保持し続けること）
+- **サブスクリプション種別が取れない環境で毎レンダー Keychain 読みが走っていた**のを修正。`fetch_subscription()` は値が取れないときキャッシュを書かなかったため、`cache_stale` が「ファイル不在 = stale」と判断して再取得を繰り返していた。credentials を持たない API キー / env 運用のユーザーが恒常的に踏む。extra-usage 側と同じ「取れなくても必ず書く」不変条件を適用した（空を書いても表示は非表示に倒れる）
+- `install.sh` が**空白や glob 文字を含む clone 先で壊れ、同時に正当なパスを拒否していた**のを修正。`{a,b}` の brace 展開や `*` の glob は素通りして「試走は通るのに登録すると真っ白」になり、逆に `~/Documents/Projects (old)/` のようなパスは拒否していた。拒否リストを足すのではなく `printf %q` で引用し、発生条件そのものを消した
+- `install.sh` が**自分自身の登録を「別のツール」と誤警告していた**のを修正。判定をスクリプト名で行い、`printf %q` の引用や README 主経路の `~/…` 形でも自分の登録と認識する
+- `install.sh` の試走がユーザーの実キャッシュ（`$TMPDIR/claude-statusline-<uid>/git/`）にエントリを作っていたのを修正。`CLAUDE_STATUSLINE_NO_NET=1` は git キャッシュには効かないため、試走専用の `mktemp -d` に隔離した
+- 読めない `~/.claude/.credentials.json`（root 所有 / mode 000）で stderr にエラーが出ないよう、gate を `-f` から `-r` に変更した
+
+### Added
+
+- **`/fork` した複製セッションを Line 1 に `fork`（黄）で表示**し、`/branch` の `branch` と出し分けるようにした。Claude Code 2.1.220 実測で `/fork` は session_name 末尾に `⑂`（U+2442）を付ける（`(Fork)` は付かない）。`fork` が出ているときは親セッションが並走しているので、作業ディレクトリを共有していれば Line 3 の変更が自分のものとは限らない、という警告として読める。2.1.77 より前の `(Fork)` は現行 `/branch` のエイリアスなので `branch` 扱いにする。両マーカーが付いた場合（`/branch` した会話を `/fork` した `foo (Branch) ⑂`）は fork を優先
+
+### Changed
+
+- OAuth トークンの受け渡しを `curl --config -` から **`-H @-`** に変更した。`--config` は各行を設定ディレクティブとして解釈するため、改行を含むトークンが `output = <path>` の注入になりえた。`-H @-` なら各行は必ずヘッダなので構造的に化けず、字種の拒否リストが不要になる（argv 非露出は維持）
+- README の主経路を「固定 clone 先 `~/.claude/statusline` + `settings.json` に 2 キーをコピペ」に変更した。`command` はシェル経由で実行される（docs: "The `command` field runs in a shell"）ため `~` は展開され、**「絶対パスでないと動かない」という旧 README の前提は誤りだった**。Installation 章は 119 行から 26 行になり、`install.sh` は「settings.json を自分で触りたくない人向け」の補助として折りたたみに移した
+
 ## [1.62.0] - 2026-07-29
 
 ### Fixed
