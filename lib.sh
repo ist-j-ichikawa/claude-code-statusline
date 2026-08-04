@@ -48,7 +48,18 @@ readonly FORK_GLYPH=$'\342\221\202'
 has_val() { [[ -n "$1" && "$1" != "null" ]]; }
 
 # osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
-osc8() { printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }
+# URL 側だけ percent-encode する (表示テキストの `;` 等はそのまま出す)。対象は 4 文字で、
+# **`%` を最初に**やる — 後回しにすると `feat/a%3Bb`（git 上は合法）が `feat/a;b` と同じ出力に
+# 畳まれて別ブランチへリンクする。`;` は OSC 8 の `OSC 8 ; params ; URI ST` のパラメータ区切り、
+# `#`/`?` は URI の fragment/query 区切りで、どれも git のブランチ名と macOS のパスには入りうる
+# (`#` を残すと `/Users/x/notes#1/repo` が `/Users/x/notes` を開く = 無言で別の対象を指す)。
+# 空白と非 ASCII は生のまま出す — 現に動いており、encode 側に倒すと percent-decode しない端末で
+# 今動いているリンクを壊す。壊れた実測が出たら対象に足す。
+osc8() {
+  local _u="${1//%/%25}"
+  _u="${_u//;/%3B}"; _u="${_u//#/%23}"; _u="${_u//\?/%3F}"
+  printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$_u" "$2"
+}
 
 # editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
 editor_url() { printf -v "$2" 'file://%s' "$1"; }

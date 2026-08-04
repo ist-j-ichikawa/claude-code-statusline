@@ -1,6 +1,15 @@
 #!/usr/bin/env bats
 # statusline-command.sh テスト
-# 実行: bats test.bats
+# 実行: bats test.bats  ← bats 自身は bash 4+ で。理由と機序は README「Development」
+#
+# bats を bash 3.2 で起動すると日本語テスト名のエンコードが割れ、**失敗ではなく 0 件実行**になる。
+# 流し読みでは「通った」に見えるので、無言で緑にせずここで落とす。
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  printf '%s\n' \
+    "FATAL: bats を bash ${BASH_VERSION} で起動しています。日本語テスト名が 0 件実行になります。" \
+    "bash 4+ を PATH に入れてから実行してください (スクリプト本体は /bin/bash のままで良い)。" >&2
+  exit 1
+fi
 
 # --- セットアップ: ヘルパー関数のみを読み込む ---
 setup() {
@@ -79,6 +88,31 @@ _stub_env() {
 
 @test "has_val: 文字列0を有効と判定すること" {
   has_val "0"
+}
+
+# ============================================================================
+# osc8 — OSC 8 ハイパーリンクを組むこと
+# ============================================================================
+@test "osc8: URL とテキストを OSC 8 シーケンスで包むこと" {
+  local out
+  osc8 "https://example.com/tree/main" "main" out
+  [ "$out" = $'\033]8;;https://example.com/tree/main\amain\033]8;;\a' ]
+}
+
+@test "osc8: URL の ; # ? を percent-encode し、表示テキストは素のまま出すこと" {
+  # どれも git のブランチ名には入りうるが、URI では区切り文字として解釈される
+  local out
+  osc8 "https://example.com/tree/a;b#c?d" "a;b#c?d" out
+  [ "$out" = $'\033]8;;https://example.com/tree/a%3Bb%23c%3Fd\aa;b#c?d\033]8;;\a' ]
+}
+
+@test "osc8: % を先に encode して別ブランチへのリンクに畳まれないこと" {
+  # `%` を後回しにすると `a%3Bb` が `a;b` と同じ出力になり、別ブランチを指す
+  local semi pct
+  osc8 "https://example.com/tree/a;b" "x" semi
+  osc8 "https://example.com/tree/a%3Bb" "x" pct
+  [ "$semi" != "$pct" ]
+  [[ "$pct" == *"tree/a%253Bb"* ]]
 }
 
 # ============================================================================
@@ -1177,6 +1211,17 @@ _stub_env() {
   run env CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" </dev/null
   [[ "$status" -ne 0 ]]
   [[ "$(cat "$s")" == "$orig" ]]
+}
+
+@test "install: --dry-run が settings.json もその親ディレクトリも作らないこと" {
+  # 「差分を見せるまで一切書かない」は --dry-run 自身にも掛かる。以前は未初期化のときに
+  # 親ディレクトリと `{}` を作ってから「書き込みませんでした」と表示していた
+  s="$BATS_TEST_TMPDIR/nodir/fresh.json"
+  run env CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --dry-run
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"statusLine"* ]]   # 差分は出ていること (何もせず抜けたのではない)
+  [[ ! -e "$s" ]]
+  [[ ! -d "$BATS_TEST_TMPDIR/nodir" ]]
 }
 
 @test "install: 2回実行しても最初のバックアップを潰さないこと" {

@@ -523,7 +523,7 @@ line_git=()
 git_cache_file "$current_dir"
 if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
   # 末尾の `>/dev/null 2>&1` は**内側の `> tmp` と別物で、外せない** — subshell が親の stdout を
-  # 保持し続けると捕捉側の EOF が遅れる (CLAUDE.md「Background refresh」/ fetch_subscription の注記)
+  # 保持し続けると捕捉側の EOF が遅れる (docs/internals.md「バックグラウンド更新」/ fetch_subscription の注記)
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
     build_git "$current_dir" > "${_gc}.tmp-$$" && mv "${_gc}.tmp-$$" "$_gc" ) >/dev/null 2>&1 & disown
 fi

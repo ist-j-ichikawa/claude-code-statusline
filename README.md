@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.63.0-blue)
+![Version](https://img.shields.io/badge/version-1.64.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -96,6 +96,9 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git ~/.claude
 
 **更新は `git pull` だけ。** コピーを作らずリポジトリを直接参照するので、このリポジトリが single source of truth のままです。
 
+> ただし **`settings.json` 側の推奨キーは `git pull` では増えません**。`refreshInterval` / `hideVimModeIndicator` / `subagentStatusLine` は後から推奨に加わったので、以前から使っている場合は欠けていることがあります。上の JSON と見比べて足してください。
+> `./install.sh --dry-run` でも不足キーを差分で確認できます (何も書き込みません)。ただし手で貼った設定に対しては、`command` を `/bin/bash <絶対パス>` 形に書き換える差分も一緒に出ます — install.sh が使う形が違うだけで、不足キーではありません。
+
 <details>
 <summary>v1.52.0 より前から使っている場合</summary>
 
@@ -123,7 +126,7 @@ cd claude-code-statusline
 
 グローバル設定を触るので、**差分を見せて確認するまで一切書き込みません**。
 
-- `statusLine` と `subagentStatusLine` を clone 先の絶対パスで登録します
+- `statusLine` と `subagentStatusLine` を clone 先の絶対パスで登録します。clone 先がどこでも良い代わりに、上の手貼り例の `~/.claude/statusline/statusline-command.sh` ではなく **`/bin/bash /Users/…/statusline-command.sh` の形**で書き込みます (動作は同じです)。手貼り済みの設定に後から `install.sh` を流すと、この差が差分として出ます
 - **既存の設定は保ったままマージ** — 他のキーはそのまま。`refreshInterval` / `hideVimModeIndicator` は未設定のときだけ推奨値を入れます
 - **既存の `statusLine` が別のツールを指している場合は名指しで警告**してから確認を求めます
 - 書き換え前に**タイムスタンプ付きバックアップ**を作成します (`settings.json.bak.20260727043008`)。固定名にしないので、2 回実行しても最初のバックアップが残ります
@@ -259,6 +262,25 @@ Claude Code 運用で特に便利な機能:
 - `git` (Git 情報表示用)
 - Bash 3.2+ (macOS 標準の `/bin/bash` で動作 — bash 4+ 機能は使いません)
 
+## Development
+
+テストは [bats](https://github.com/bats-core/bats-core) です。
+
+```bash
+brew install bats-core jq bash   # bash は 4+ が必要 (下記)
+bats test.bats
+```
+
+**bats 自身は bash 4+ で起動してください。** テスト名が日本語なので、macOS 標準の bash 3.2 で起動すると bats 内部のテスト名エンコードがバイト単位に落ちてマルチバイト文字が割れ、**失敗ではなく 0 件実行**になります。0 件は流し読みでは「通った」に見えるため、`test.bats` 冒頭のガードが理由付きで落とします。
+
+**一方スクリプト本体は `/bin/bash` (3.2) で起動します。** この分離は意図的で、テストがフルスクリプトを起動するときも `/bin/bash` を明示します — PATH の `bash` (homebrew 5.x) で起動すると、上記の bash 3.2 互換制約を一切検証しないテストになります。
+
+表示の目視確認は fixture を流し込みます:
+
+```bash
+printf '%s' '{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"'"$PWD"'"}}' | ./statusline-command.sh
+```
+
 ## License
 
-MIT
+[MIT](LICENSE)

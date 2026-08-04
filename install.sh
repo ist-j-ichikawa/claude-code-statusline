@@ -51,7 +51,8 @@ fi
 
 settings="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 _dir="${settings%/*}"; [[ "$_dir" == "$settings" ]] && _dir="."   # スラッシュ無しなら cwd
-mkdir -p "$_dir"
+# `mkdir -p "$_dir"` はここでは**やらない** — --dry-run が書き込まない保証を壊す。
+# 書き込む直前 (dry-run の bail より後) で作る。
 # symlink 越しなら実体に書く (dotfiles 管理で settings.json が symlink のことがある。
 # リンクに mv すると実体との繋がりが切れて「設定したのに反映されない」になる)
 _hops=0
@@ -64,9 +65,22 @@ while [[ -L "$settings" ]]; do
   esac
   _hops=$((_hops + 1)); (( _hops < 10 )) || { echo "symlink が深すぎます: $settings" >&2; exit 1; }
 done
-# 空ファイル (中断した編集の残骸等) も未初期化として扱う — 「不正な JSON」で突き返さない
-[[ -s "$settings" ]] || echo '{}' > "$settings"
-jq -e . "$settings" >/dev/null 2>&1 || { echo "$settings が不正な JSON です。先に直してください" >&2; exit 1; }
+# 空ファイル (中断した編集の残骸等) も未初期化として扱う — 「不正な JSON」で突き返さない。
+# 以降は中身を `$_cur_json` に持って回す — 未初期化のときの `{}` を
+# **--dry-run では変数に持つだけでファイルを作らない**ため。以前はここで実ファイルを作っており、
+# 「差分を見せるまで一切書かない」という install.sh の約束を --dry-run 自身が破っていた。
+# 実書き込みの経路は後段の `cp -p` / `stat` が実ファイルを要求するので、そちらでは作る。
+if [[ -s "$settings" ]]; then
+  _cur_json=$(<"$settings")
+elif [[ $dry_run -eq 1 ]]; then
+  _cur_json='{}'
+else
+  _dir="${settings%/*}"; [[ "$_dir" == "$settings" ]] && _dir="."
+  mkdir -p "$_dir"
+  echo '{}' > "$settings"
+  _cur_json='{}'
+fi
+jq -e . <<<"$_cur_json" >/dev/null 2>&1 || { echo "$settings が不正な JSON です。先に直してください" >&2; exit 1; }
 
 # 登録するスクリプトを先に試走する (壊れたものを global 設定に書かない)。
 # 2 つの seam で副作用を止める (test.bats と同じもの):
@@ -121,10 +135,10 @@ printf -v _qmain '%q' "$repo/statusline-command.sh"
 printf -v _qsub  '%q' "$repo/subagent-statusline-command.sh"
 _new=$(jq --arg main "/bin/bash $_qmain" \
           --arg sub  "/bin/bash $_qsub" \
-          "$filter" "$settings")
+          "$filter" <<<"$_cur_json")
 
 _keys='{statusLine, subagentStatusLine} | with_entries(select(.value != null))'
-_before=$(jq -S "$_keys" "$settings")
+_before=$(jq -S "$_keys" <<<"$_cur_json")
 _after=$(printf '%s' "$_new" | jq -S "$_keys")
 
 if [[ "$_before" == "$_after" ]]; then
