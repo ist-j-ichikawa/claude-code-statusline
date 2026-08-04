@@ -199,6 +199,53 @@ Claude Code 運用で特に便利な機能:
 
 > 他ターミナル (iTerm2, WezTerm, kitty, Alacritty 等) でも動作しますが、OSC 8 対応の差でクリック可能リンクが平文表示になる場合があります。
 
+## 参考: フッターの GitHub リンクバッジ
+
+**これはステータスラインの機能ではありません。** Claude Code 本体の `footerLinksRegexes` は会話テキストだけを対象にした別機能で、ステータスラインの出力には適用されません。相性がよいので、動作を確認した設定を参考として置いています。
+
+会話に現れた GitHub の URL や `owner/repo#123` が、フッターのクリック可能なバッジになります。
+
+<details>
+<summary>設定（`~/.claude/settings.json` に追加）</summary>
+
+```json
+"footerLinksRegexes": [
+  {
+    "type": "regex",
+    "pattern": "https://github\\.com/(?<owner>[A-Za-z0-9][\\w.-]*)/(?<repo>[A-Za-z0-9][\\w.-]*)/pull/(?<num>\\d+)",
+    "url": "https://github.com/{owner}/{repo}/pull/{num}",
+    "label": "PR #{num}"
+  },
+  {
+    "type": "regex",
+    "pattern": "https://github\\.com/(?<owner>[A-Za-z0-9][\\w.-]*)/(?<repo>[A-Za-z0-9][\\w.-]*)/issues/(?<num>\\d+)",
+    "url": "https://github.com/{owner}/{repo}/issues/{num}",
+    "label": "issue #{num}"
+  },
+  {
+    "type": "regex",
+    "pattern": "(?<![\\w./-])(?<owner>[A-Za-z0-9][\\w-]*)/(?<repo>[A-Za-z0-9][\\w.-]*)#(?<num>\\d+)\\b",
+    "url": "https://github.com/{owner}/{repo}/issues/{num}",
+    "label": "#{num}"
+  }
+]
+```
+
+パターンが 3 本に分かれている理由:
+
+- `/pull/` と `/issues/` を `(?:issues|pull)` で 1 本にまとめると、遷移先を `/issues/{num}` に潰すことになり、`issue #5` と `PR #5` がどちらも同じラベルになります。URL 形式は文字列自体に種別が入っているので、分ければ判別できます
+- 3 本目のベアな `owner/repo#123` は、issue か PR かを判別できません（正規表現は静的なので GitHub に問い合わせられない）。`/issues/{num}` に送って GitHub 側のリダイレクトに任せ、ラベルも曖昧な `#{num}` にしています
+- 3 本目の先読み否定 `(?<![\w./-])` は、`src/utils/foo.ts#42` のようなコード中の参照を GitHub リンクと誤認しないためのものです（外すと誤マッチします）
+
+使う前に知っておくとよいこと:
+
+- **バッジは同時に 5 個まで**で、新しいマッチが古いものを押し出します。セッション自身が検出した PR は `prUrlTemplate` 経由で自動的に 1 個目のバッジになるため、その分だけ枠が減ります
+- **反映には Claude Code の再起動が必要**です（`/clear` では読み直されません）
+- **user 設定でのみ有効**です。リポジトリの `.claude/settings.json` と `.claude/settings.local.json` では無視されます（Claude Code 2.1.221 のスキーマで確認）
+- クリック可能になるのは OSC 8 対応端末（Ghostty 等）です。非対応端末ではラベルが平文で並びます
+
+</details>
+
 ## 実装詳細
 
 スクリプトの仕組み・構造・カラーテーマ・パフォーマンス最適化・Line 4 の内訳・クラウドプロバイダー検出ロジックは **[docs/internals.md](docs/internals.md)** にまとめています。
