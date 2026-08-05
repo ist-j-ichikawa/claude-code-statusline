@@ -170,7 +170,7 @@ IFS= read -r -d '' input || true
 
 # Initialize all jq variables — prevents set -u instant death if eval fails
 model="" model_id="" current_dir="." used_pct=""
-exceeds_200k="false" cc_version="" session_name=""
+exceeds_200k="false" cc_version="" session_name="" transcript_path=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
@@ -188,6 +188,7 @@ _jq_out=$(jq -r '
   @sh "exceeds_200k=\(.exceeds_200k_tokens // false)",
   @sh "cc_version=\(.version // "")",
   @sh "session_name=\(.session_name // "")",
+  @sh "transcript_path=\(.transcript_path // "")",
   @sh "agent_name=\(.agent.name // "")",
   @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
   @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
@@ -443,11 +444,34 @@ fi
 # ⑂ を先に見る: `/branch` した会話を `/fork` すると `foo (Branch) ⑂` と両方付くが、
 # 「親が並走している」ほうが行動に直結する新しい事実なので fork を優先する。
 # session_name 自体は表示しない (2.1.76+ が右上にネイティブ表示する) ので、サニタイズはしない。
+# 連番 ` (Branch 2)` も付く (2.1.220 実測) ので数字付きの arm を持つ。`*"(Branch"*` の前方一致に
+# しないのは、名前に "(Branch protection)" 等を含むだけのセッションが degraded path (transcript が
+# 読めない環境) で誤爆するため — マーカーの実測形 `(Branch)` / `(Branch N)` だけを受ける。
 session_kind=""
 case "$session_name" in
-  *"$FORK_GLYPH"*)              session_kind="fork" ;;
-  *"(Branch)"*|*"(Fork)"*)      session_kind="branch" ;;
+  *"$FORK_GLYPH"*)                                  session_kind="fork" ;;
+  *"(Branch)"*|*"(Branch "[0-9]*")"*|*"(Fork)"*)    session_kind="branch" ;;
 esac
+# 名前のマーカーだけでは足りない — `/branch` は **元セッションの名前にも** ` (Branch)` を書き込む
+# (2.1.221 実測。元・子・元を resume した実体の 3 つが同名 `… (Branch)` になり、元に戻っても消えなかった)。
+# transcript 冒頭の `forkedFrom` 記録だけが「本当に派生した側」の証拠なので、これで裏取りする。
+# 先頭 1 行ではなく **20 行** 見る — 冒頭に custom-title/mode/file-history-snapshot のヘッダ記録が
+# 積まれて forkedFrom が 7 行目に来る transcript が実在する (実測: 23 件中 22 件が 1 行目、1 件が 7 行目)。
+# needle は `"forkedFrom":{` — JSON 文字列値の中では `"` が必ず `\"` にエスケープされるので、
+# この生の並びは**構造上のキーとしてしか現れない**（本文に貼られた jsonl 断片では一致しない）。
+# 読めない時 (旧 Claude Code に `transcript_path` が無い等) は従来どおり名前だけで出す = graceful degradation。
+# 旧 `(Fork)` (2.1.77 以前の子) も gate を通るが、実在する 4 件全てが forkedFrom を 1 行目に持つ (実測済み)。
+# `⑂` にはゲートを掛けない — customTitle には書かれず実行時の名前にだけ付くので元へ伝播せず、
+# かつ fork の子が `forkedFrom` を持つ保証が実測で取れていない (掛けると出なくなる副作用のほうが重い)。
+if [[ "$session_kind" == "branch" && -r "$transcript_path" ]]; then
+  _fork_seen="" _scan=0 _tline=""
+  # `|| [[ -n ... ]]` — 最終行に改行が無い transcript で read が rc=1 でも内容は入っている
+  while IFS= read -r _tline || [[ -n "$_tline" ]]; do
+    [[ "$_tline" == *'"forkedFrom":{'* ]] && { _fork_seen=1; break; }
+    (( ++_scan >= 20 )) && break
+  done < "$transcript_path"
+  [[ -n "$_fork_seen" ]] || session_kind=""
+fi
 # Version
 if has_val "$cc_version"; then
   line1+=("${DIMVER}v${cc_version}${RST}")

@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.64.0-blue)
+![Version](https://img.shields.io/badge/version-1.65.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.220-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -23,6 +23,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。
 > 代わりに**セッションの出自**を黄で出します — `/branch` した会話は `branch`、`/fork` した複製は `fork`。
 > `fork` が出ているときは親セッションが並走しているので、Line 3 の変更が自分のものとは限りません。
+> `branch` は transcript の `forkedFrom` で裏取りするので、元の会話に戻れば消えます（Claude Code は元セッションの名前にも `(Branch)` を書き込むため、名前だけでは見分けられません）。
 > 端末幅による表示切替は行いません。すべての要素が常時フル表示されます。
 
 ### 表示例

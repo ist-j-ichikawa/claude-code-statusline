@@ -773,6 +773,78 @@ _stub_env() {
   [[ "$result" != *$'\033[33mbranch'* ]]
 }
 
+@test "セッション: 元セッションの名前が (Branch) に書き換えられても branch を出さないこと" {
+  # 2.1.221 実測: `/branch` は子だけでなく **元セッションの custom-title にも** ` (Branch)` を書く。
+  # 元・子・元を resume した実体の 3 つが同名になり、元に戻っても branch が消えなかった。
+  # 元の transcript は `forkedFrom` を持たないので、それを裏取りに使って抑止する。
+  _t="$BATS_TEST_TMPDIR/origin.jsonl"
+  printf '%s\n' '{"type":"custom-title","customTitle":"my session (Branch)"}' > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:$t,version:"2.1.221",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *$'\033[33mbranch'* ]]
+  [[ "$result" == *"v2.1.221"* ]]   # 到達証跡: 行自体は描かれている
+}
+
+@test "セッション: forkedFrom が冒頭のヘッダ記録の後ろでも連番 (Branch 2) で branch を出すこと" {
+  # 実測 2 点を 1 本で pin: ① forkedFrom は必ずしも 1 行目でない (custom-title/mode/
+  # file-history-snapshot が先に積まれ 7 行目に来る transcript が実在。23 件中 1 件) —
+  # 先頭 1 行しか見ない実装だと本物の子のバッジが消える ② 2 本目の分岐は `(Branch 2)` の連番
+  _t="$BATS_TEST_TMPDIR/child.jsonl"
+  {
+    printf '%s\n' '{"type":"custom-title","customTitle":"branchとforkのテスト (Branch 2)"}'
+    printf '%s\n' '{"type":"mode","mode":"default"}'
+    printf '%s\n' '{"type":"permission-mode","permissionMode":"default"}'
+    printf '%s\n' '{"type":"file-history-snapshot","snapshot":{}}'
+    printf '%s\n' '{"type":"file-history-snapshot","snapshot":{}}'
+    printf '%s\n' '{"type":"file-history-snapshot","snapshot":{}}'
+    printf '%s\n' '{"type":"user","forkedFrom":{"sessionId":"a8ec6f0b","messageUuid":"241ae17b"}}'
+  } > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"branchとforkのテスト (Branch 2)",transcript_path:$t,version:"2.1.220",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mbranch'* ]]
+}
+
+@test "セッション: 本文に forkedFrom の文字列を含むだけの元セッションを子と誤認しないこと" {
+  # JSON 文字列値の中の `"` は必ず `\"` にエスケープされるので、needle `"forkedFrom":{` は
+  # 構造上のキーとしてしか現れない。jsonl 断片を最初のプロンプトに貼ったセッションが誤爆しないことを pin
+  _t="$BATS_TEST_TMPDIR/pasted.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":"debug: \"forkedFrom\":{\"sessionId\":\"x\"} をパースしたい"}}' > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:$t,version:"2.1.221",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *$'\033[33mbranch'* ]]
+  [[ "$result" == *"v2.1.221"* ]]   # 到達証跡
+}
+
+@test "セッション: (Branch を含むだけの名前をマーカーと誤認しないこと (degraded path)" {
+  # transcript が読めない環境では名前だけが頼り。マーカーの実測形 `(Branch)` / `(Branch N)` 以外
+  # ("(Branch protection rules)" 等) を受けると degraded path で偽バッジが常時点灯する
+  j=$(jq -nc '{model:{id:"test",display_name:"Test"},session_name:"meeting notes (Branch protection rules)",version:"2.1.77",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *$'\033[33mbranch'* ]]
+  [[ "$result" == *"v2.1.77"* ]]   # 到達証跡
+}
+
+@test "セッション: ⑂ は forkedFrom の裏取り無しでも fork を出すこと" {
+  # ⑂ は customTitle に書かれず実行時の名前にだけ付く = 元へ伝播しないので gate を掛けない。
+  # fork の子が forkedFrom を持つ保証も実測で取れていないため、掛けると出なくなる副作用のほうが重い。
+  _t="$BATS_TEST_TMPDIR/forked.jsonl"
+  printf '%s\n' '{"type":"custom-title","customTitle":"my session"}' > "$_t"
+  j=$(jq -nc --arg n "my session $FORK_GLYPH" --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:$n,transcript_path:$t,version:"2.1.221",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mfork'* ]]
+}
+
+@test "セッション: transcript_path が読めない旧 Claude Code では名前だけで branch を出すこと" {
+  # graceful degradation — フィールドが無い/消えた環境で機能を落とさない
+  j=$(jq -nc '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:"/nonexistent/x.jsonl",version:"2.1.77",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mbranch'* ]]
+}
+
 @test "セッション: マーカーが無ければ出自バッジを出さないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"ふつうの名前","version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
