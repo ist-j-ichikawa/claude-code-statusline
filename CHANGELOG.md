@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.66.0] - 2026-08-05
+
+### Changed
+
+- Built against を Claude Code 2.1.222 に追従（1.65.0 と同日リリース）。契約面の変更なし — stdin JSON・subagent per-task 13 フィールド・statusLine 設定とも 2.1.220 から不変で、スクリプト変更は無い。2.1.222 の「`/fork` が親の checkout ではなく自前の worktree を作る」変更を受けて README の fork バッジ注記を版条件付きに更新済み（`9c8fe4f`）。2.1.221 の「session names from every rename surface are now sanitized」はマーカー実測（`(Branch)` / `⑂`）への影響を要観察
+
 ## [1.65.0] - 2026-08-05
 
 ### Fixed
