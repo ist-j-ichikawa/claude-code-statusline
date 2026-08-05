@@ -845,6 +845,64 @@ _stub_env() {
   [[ "$result" == *$'\033[33mbranch'* ]]
 }
 
+@test "セッション: branch 先に元セッションの id を full uuid で添えること" {
+  # `/branch` の元は別端末で resume されるので、戻るには元の id が要る (コピーして `--resume`)。
+  # 裏取りで既に読んでいる forkedFrom.sessionId から抜くので追加 I/O も fork も無い。
+  # **切り詰めない** — `--resume` は 8 桁 prefix を受けない (2.1.222 実測) ので短縮すると戻れない
+  _t="$BATS_TEST_TMPDIR/child-sid.jsonl"
+  printf '%s\n' '{"type":"user","forkedFrom":{"sessionId":"3052272d-8e61-4a0c-a506-bfd8d3206d73","messageUuid":"c75c65fa-5030-4058-9b07-d4ca25f83f27"}}' > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:$t,version:"2.1.222",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  # ラベル側 (黄) に `:` まで含め、値は通常輝度 — `gh:` と同じ「値が一次情報」の作法
+  [[ "$result" == *$'\033[33mbranch:\033[0m3052272d-8e61-4a0c-a506-bfd8d3206d73'* ]]
+  # messageUuid を混ぜて拾っていないこと (forkedFrom は 2 つの uuid を持つ)
+  [[ "$result" != *"c75c65fa"* ]]
+}
+
+@test "セッション: forkedFrom の外にある別の sessionId を元の id と誤認しないこと" {
+  # 抽出は `}` まででスコープを閉じる。閉じないと forkedFrom が sessionId を持たない形 (将来の
+  # スキーマ変更) で同じ行の後続キー (自分自身の sessionId 等) を拾い、「元へ戻る id」が自分に
+  # なって往復が成立しなくなる。`#*` は最短一致なので、forkedFrom 内に sessionId がある通常形は
+  # スコープ切り無しでも正しく取れる — このケースだけが `}` の存在を検出できる
+  _t="$BATS_TEST_TMPDIR/scoped.jsonl"
+  printf '%s\n' '{"type":"user","forkedFrom":{"messageUuid":"x"},"sessionId":"bbbbbbbb-5555-6666-7777-888888888888"}' > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:$t,version:"2.1.222",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" != *"bbbbbbbb"* ]]
+  [[ "$result" == *$'\033[33mbranch\033[0m'* ]]   # 語だけに落ちる (到達証跡も兼ねる)
+}
+
+@test "セッション: uuid の形でない sessionId は添えず branch の語だけにすること" {
+  # 許可リストで 8-4-4-4-12 の hex だけ受ける (拒否リストは持たない方針) — 壊れた記録や別形式の
+  # id (`agent-*` 等) が来ても表示を汚さず、語だけの従来表示に落ちる。
+  # 2 つの arm を別々に pin する — 配置 arm だけだと非 hex が素通りする (mutation で確認済み)
+  _t="$BATS_TEST_TMPDIR/badsid.jsonl"
+  printf '%s\n' '{"type":"user","forkedFrom":{"sessionId":"../../etc/passwd","messageUuid":"x"}}' > "$_t"
+  j=$(jq -nc --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:"my session (Branch)",transcript_path:$t,version:"2.1.222",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mbranch\033[0m'* ]]   # 配置 arm が弾く
+  [[ "$result" != *"passwd"* ]]
+  # uuid の**配置は正しいが hex でない** — こちらは字種 arm だけが弾ける
+  printf '%s\n' '{"type":"user","forkedFrom":{"sessionId":"zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz","messageUuid":"x"}}' > "$_t"
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mbranch\033[0m'* ]]
+  [[ "$result" != *"zzzz"* ]]
+}
+
+@test "セッション: fork には元の id を添えないこと" {
+  # fork の元は同じ端末に残り detach (`←`) で戻れるので id が要らない。かつ fork の子は
+  # forkedFrom を持たない (2.1.222 実測: `/fork` 子 transcript の全 47 行に 0 件) ので抜き元も無い
+  _t="$BATS_TEST_TMPDIR/fork-nosid.jsonl"
+  printf '%s\n' '{"type":"custom-title","customTitle":"my session"}' > "$_t"
+  j=$(jq -nc --arg n "my session $FORK_GLYPH" --arg t "$_t" \
+    '{model:{id:"test",display_name:"Test"},session_name:$n,transcript_path:$t,version:"2.1.222",workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}')
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *$'\033[33mfork\033[0m'* ]]
+}
+
 @test "セッション: マーカーが無ければ出自バッジを出さないこと" {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"session_name":"ふつうの名前","version":"2.1.220","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)

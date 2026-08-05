@@ -27,7 +27,7 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — git の「事実」を US 区切りで返す（ANSI も stdin 由来値も含めない。5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + Version + セッション出自（`/branch`=`branch` / `/fork`=`fork`、どちらも黄。`branch` は transcript の `forkedFrom` で裏取りする）
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + Version + セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([gh: (dim) + owner/repo (通常輝度)、GitHub origin あり時のみ] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、通常輝度)
@@ -86,7 +86,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | fast (`/fast` 有効時、`fast_mode`) | greenyellow | 38;5;190 |
 | Agent 名 | ピンク | 38;5;213 |
 | version (`v2.1.x`) | グレー | 38;5;248 |
-| セッション出自 (`branch` / `fork`) | 黄 | 33 |
+| セッション出自のラベル (`branch:` / `fork`) | 黄 | 33 |
+| セッション出自に添える元セッション id (full uuid) | 通常輝度 (`gh:` と同じ「ラベルだけ色、値は一次情報」の作法。コピーして `--resume` に渡す値なので弱めない) | - |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
 | Git staged `A` / ahead `↑` | 緑 | 32 |
 | Git modified `M` | 黄 | 33 |
@@ -104,7 +105,17 @@ Line 1 末尾の黄バッジは `session_name` 末尾のマーカーから読み
 
 **`(Branch)` 系は名前だけでは判定できません** — `/branch` は分岐した子だけでなく **元セッションの名前にも** ` (Branch)` を書き込みます（2.1.221 実測。元・子・元を resume した実体の 3 つが同名になり、元の会話に戻ってもバッジが消えませんでした）。そこで `transcript_path` の**冒頭 20 行に `"forkedFrom":{` があるか**で裏取りします — これが「本当に派生した側」の唯一の証拠です。1 行でなく 20 行見るのは、冒頭に custom-title / mode / file-history-snapshot のヘッダ記録が積まれて `forkedFrom` が 7 行目に来る transcript が実在するため（実測 23 件中 22 件が 1 行目、1 件が 7 行目）。needle の `":{` は、JSON 文字列値の中では `"` が必ず `\"` にエスケープされる性質を使っています — 生の `"forkedFrom":{` は構造上のキーとしてしか現れないので、jsonl 断片を本文に貼ったセッションでも誤爆しません。読み込みは `read` のリダイレクトなので fork ゼロ。`transcript_path` が来ない・読めない環境では従来どおり名前だけで判定します（graceful degradation）。マーカーの受理形は実測どおり `(Branch)` / `(Branch N)` に限定します — 前方一致にすると `(Branch protection rules)` のような名前が degraded path で誤爆します。
 
-`⑂` にはこの裏取りを掛けません。`⑂` は transcript の `customTitle` には書かれず実行時の名前にだけ付くので元セッションへ伝播せず、かつ fork の子が `forkedFrom` を持つ保証が実測で取れていないため、掛けると「出るべき fork が出ない」副作用のほうが重くなります。
+`⑂` にはこの裏取りを掛けません。`⑂` は transcript の `customTitle` には書かれず実行時の名前にだけ付くので元セッションへ伝播しません。そして **fork の子は `forkedFrom` を持ちません**（2.1.222 実測: `/fork` した子の transcript 全 47 行に 1 件も無く、`customTitle` も空）。掛ければ「出るべき fork が出ない」が確実に起きるので、branch とゲートの有無を分けるのは非対称ではなく実測どおりです。
+
+### 元セッション id を添える (`branch:<uuid>`)
+
+`branch` には元セッションの id を添えます。`/branch` の元は別の端末で resume されるため、戻るには id が必要です（コピーして `claude --resume <id>`）。元の transcript が消えていれば `No conversation found` になります — 手元の実測では派生した子 26 件中 3 件が既に親を失っていました。id は「戻れるかもしれない手がかり」で、常に resume できる保証ではありません。
+
+**切り詰めずに full uuid で出します。** `--resume` は先頭 8 桁のような短縮形を受け付けません（2.1.222 実測: `Error: … "3052272d" is not a UUID and does not match any session title`。full uuid では `No conversation found with session ID:` = UUID として受理された上での不一致になり、エラーの種類が違います）。prefix 解決はどこにも無いので、短くすると「コピーできるのに戻れない id」になります。`claude attach` のほうは 8 桁を受けますが、あちらは背景セッション専用で `/branch` の元には使えません。
+
+裏取りに使う `forkedFrom` の記録が `{"sessionId":"…","messageUuid":"…"}` の形で親 id を持っているので、**追加の I/O も fork もありません**。抽出は `}` まででスコープを閉じます — 閉じないと、`forkedFrom` が `sessionId` を持たない形（将来のスキーマ変更）で同じ行の後続キーを拾い、「元へ戻る id」が自分自身になって往復が成立しなくなります。取り出した値は許可リストで検査し（hex とハイフン以外を弾いた上で 8-4-4-4-12 の配置を見る）、通らなければ語だけの表示に落とします（拒否リストは持たない方針）。
+
+`fork` には添えません。`/fork` の元は同じ端末に残って `←` の detach で戻れるので id が要らず、そもそも上記のとおり fork の子は `forkedFrom` を持たないため抜き元がありません。
 
 ## パフォーマンス
 

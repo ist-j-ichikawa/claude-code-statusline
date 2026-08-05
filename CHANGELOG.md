@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.67.0] - 2026-08-05
+
+### Added
+
+- `branch` バッジに元セッションの id を添える（`branch:3052272d-8e61-4a0c-a506-bfd8d3206d73`）。`/branch` の元セッションは別の端末で resume されるので、この id をコピーして `claude --resume <id>` で元の会話へ戻れる（元の transcript が残っている場合。実測では派生した子 26 件中 3 件が既に親を失っていた）。裏取りに使う transcript の `forkedFrom` 記録が親 id を持っているため、追加の I/O も fork も無い。**id は切り詰めない** — `--resume` は先頭 8 桁のような短縮形を `is not a UUID and does not match any session title` で弾き、prefix 解決をどこにも持たない（full uuid では `No conversation found with session ID:` = UUID として受理された上での不一致になり、エラーの種類が違う。2.1.222 実測）ので、短縮すると「コピーできるのに戻れない id」になる。`fork` には添えない — `/fork` の元は同じ端末に残り `←` の detach で戻れるうえ、fork の子は `forkedFrom` を持たない（2.1.222 実測: 子 transcript の全 47 行に 0 件）。逆方向（元 → 先の id）は出さない: 全 transcript の逆引きが実測 721ms で hot path に載らず、子が複数ありうるため 1 つに絞れず、fork の子は逆引きでも見つからない。1.66.0 と同日リリース
+
+### Changed
+
+- README の Installation に「動作確認」を追加し、Development の冒頭がコントリビュータ向けであることを明記。インストールを依頼された coding agent が、README で唯一コピペ可能な実行コマンドである `bats test.bats` に引き寄せられ、bats 未導入・bash 3.2 のみの環境で「インストールは成功しているのに失敗したように見える」事例が報告されたため。副作用が無くインストールの成否を実際に示す fixture 流し込み 1 行を、検証手段として Installation 側に置いた
+
 ## [1.66.0] - 2026-08-05
 
 ### Changed

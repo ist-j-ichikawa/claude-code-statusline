@@ -461,24 +461,55 @@ esac
 # この生の並びは**構造上のキーとしてしか現れない**（本文に貼られた jsonl 断片では一致しない）。
 # 読めない時 (旧 Claude Code に `transcript_path` が無い等) は従来どおり名前だけで出す = graceful degradation。
 # 旧 `(Fork)` (2.1.77 以前の子) も gate を通るが、実在する 4 件全てが forkedFrom を 1 行目に持つ (実測済み)。
-# `⑂` にはゲートを掛けない — customTitle には書かれず実行時の名前にだけ付くので元へ伝播せず、
-# かつ fork の子が `forkedFrom` を持つ保証が実測で取れていない (掛けると出なくなる副作用のほうが重い)。
+# `⑂` にはゲートを掛けない — customTitle には書かれず実行時の名前にだけ付くので元へ伝播しない。
+# かつ **fork の子は forkedFrom を持たない** (2.1.222 実測: `/fork` 子 transcript の全 47 行に 0 件、
+# customTitle も空) ので、掛ければ「出るべき fork が出ない」が確実に起きる。非対称は実測どおり。
+parent_sid=""
 if [[ "$session_kind" == "branch" && -r "$transcript_path" ]]; then
-  _fork_seen="" _scan=0 _tline=""
+  _fork_seen="" _scan=0 _tline="" _fk=""
   # `|| [[ -n ... ]]` — 最終行に改行が無い transcript で read が rc=1 でも内容は入っている
   while IFS= read -r _tline || [[ -n "$_tline" ]]; do
-    [[ "$_tline" == *'"forkedFrom":{'* ]] && { _fork_seen=1; break; }
+    if [[ "$_tline" == *'"forkedFrom":{'* ]]; then
+      _fork_seen=1
+      # 裏取りに使う同じ記録が親 id も持つ (`{"sessionId":"…","messageUuid":"…"}`) ので、
+      # ついでに抜いて「元へ戻る」用に出す — 追加の I/O も fork も無い。
+      # `}` までで切ってスコープを閉じる — forkedFrom の値はネストを持たないので、
+      # 後続の別キーの `"sessionId"` を誤って拾わない。
+      _fk="${_tline#*'"forkedFrom":{'}" _fk="${_fk%%\}*}"
+      if [[ "$_fk" == *'"sessionId":"'* ]]; then
+        _fk="${_fk#*'"sessionId":"'}" _fk="${_fk%%'"'*}"
+        # **切り詰めず full uuid で出す** — `--resume` は 8 桁 prefix を受けない (2.1.222 実測:
+        # `"3052272d" is not a UUID and does not match any session title` で弾かれる。full uuid だと
+        # `No conversation found with session ID:` = UUID として受理された上での不一致になり、
+        # エラーの種類が違う)。prefix 解決は存在しないので、短くするとコピーしても戻れない。
+        # 許可リストで uuid の形だけ受ける (拒否リストは持たない方針) — 1 番目の arm で hex と
+        # ハイフン以外を弾き、2 番目で 8-4-4-4-12 の配置を見る。壊れた記録や別形式の id では
+        # 語だけの従来表示に落ちる。
+        case "$_fk" in
+          *[!0-9a-f-]*) ;;
+          ????????-????-????-????-????????????) parent_sid="$_fk" ;;
+        esac
+      fi
+      break
+    fi
     (( ++_scan >= 20 )) && break
   done < "$transcript_path"
-  [[ -n "$_fork_seen" ]] || session_kind=""
+  [[ -n "$_fork_seen" ]] || session_kind="" parent_sid=""
 fi
 # Version
 if has_val "$cc_version"; then
   line1+=("${DIMVER}v${cc_version}${RST}")
 fi
-# Session indicator
+# Session indicator — branch 先では元セッションの id を添える (`branch:<uuid>`)。
+# `/branch` の元は別端末で resume されるので、戻るには id が要る (コピーして `--resume`)。
+# fork には添えない — 元は同じ端末に残り detach で戻れるうえ、fork の子は forkedFrom を持たない。
+# ラベル側 (黄) に `:` まで含め値は通常輝度 — `gh:` と同じ「値が一次情報」の作法。
 if [[ -n "$session_kind" ]]; then
-  line1+=("${YLW}${session_kind}${RST}")
+  if [[ -n "$parent_sid" ]]; then
+    line1+=("${YLW}${session_kind}:${RST}${parent_sid}")
+  else
+    line1+=("${YLW}${session_kind}${RST}")
+  fi
 fi
 
 # ============================================================================

@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.66.0-blue)
+![Version](https://img.shields.io/badge/version-1.67.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.222-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -15,7 +15,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 
 | 行 | 内容 |
 |---|---|
-| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · Agent 名 · Version · branch / fork |
+| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · Agent 名 · Version · `branch:`元セッション id / `fork` |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
 | **Line 3** | `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · `base:`親ブランチ · dirty state · ahead/behind · last commit |
 | **Line 4** | 5h レート制限 · コンテキストバー (分母付き `/200k` `/1M`) · weekly レート制限 · extra-usage 実課金 · セッション経過 · セッションコスト |
@@ -24,6 +24,9 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 > 代わりに**セッションの出自**を黄で出します — `/branch` した会話は `branch`、`/fork` した複製は `fork`。
 > `fork` が出ているときは親セッションが並走しています。Claude Code 2.1.221 以前は複製が親と同じ checkout で走るため、Line 3 の変更が自分のものとは限りません（2.1.222 で `/fork` は自前の worktree を作るようになり、この衝突は解消）。
 > `branch` は transcript の `forkedFrom` で裏取りするので、元の会話に戻れば消えます（Claude Code は元セッションの名前にも `(Branch)` を書き込むため、名前だけでは見分けられません）。
+> `branch` には**元セッションの id を添えます**。`/branch` の元は別の端末で resume されるので、この id をコピーして `claude --resume <id>` で戻れます（元の transcript が残っている場合。古い分岐では元が既に消えていることがあります）。裏取りに使う `forkedFrom` がその id を持っているので、追加のコストはかかりません。
+> id は切り詰めず全体を出します — `--resume` は先頭 8 桁のような短縮形を受け付けない（`is not a UUID` で弾かれる）ので、短くするとコピーしても戻れません。
+> `fork` には添えません。`/fork` の元は同じ端末に残り、`←` の detach で戻れるためです。
 > 端末幅による表示切替は行いません。すべての要素が常時フル表示されます。
 
 ### 表示例
@@ -166,6 +169,20 @@ chmod +x ~/.claude/statusline/*-command.sh
 
 </details>
 
+### 動作確認
+
+fixture を流し込むと、Claude Code を再起動する前に描画を確かめられます。**clone したディレクトリで実行してください** — `install.sh` を使った場合は clone 先がどこでも構わないので、`~/.claude/statusline` とは限りません。
+
+```bash
+cd ~/.claude/statusline   # 別の場所に clone した場合はそのディレクトリ
+printf '%s' '{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"'"$PWD"'"}}' | ./statusline-command.sh
+```
+
+色付きの行が出れば成功です。`jq` が足りない場合もここで分かります。
+clone 先は Git リポジトリなので、ブランチ名を含む行まで出ます。
+
+> **`bats test.bats` を実行する必要はありません。** テストはこのリポジトリに手を入れる人向けで、bats と bash 4+ の追加インストールが必要です。インストールできたかどうかは上の 1 行で確認できます。
+
 ## サブエージェント行
 
 `subagentStatusLine` は agent panel に並ぶサブエージェントの各行を、メインの statusline と協調した配色で描画します。
@@ -264,6 +281,8 @@ Claude Code 運用で特に便利な機能:
 - Bash 3.2+ (macOS 標準の `/bin/bash` で動作 — bash 4+ 機能は使いません)
 
 ## Development
+
+> **ここから下はこのリポジトリに手を入れる人向けです。** statusline を使うだけなら不要で、bats や bash 4+ のインストールも要りません。インストールの確認は [動作確認](#動作確認) の 1 行で足ります。
 
 テストは [bats](https://github.com/bats-core/bats-core) です。
 
