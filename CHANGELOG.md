@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.68.0] - 2026-08-10
+
+### Changed
+
+- Built against を Claude Code 2.1.226 に追従。契約面の変更なし — stdin JSON・subagent per-task 13 フィールド・statusLine 設定（`padding` / `refreshInterval` / `hideVimModeIndicator`）とも 2.1.222 から不変で、スクリプト変更は無い。docs の版ゲート注記は最新でも 2.1.216（resume 時の二重実行の修正で、契約ではない）。2.1.223 の「gateway が `bedrock/anthropic.claude-*` / `vertex_ai/claude-*` 形の model id を隠していた不具合の修正」は、そうした id が来ても `model_key` の tier 部分一致で色は正しく出るので無対応とした（provider バッジだけ Anthropic に落ちる。`model.id` にこの形が来た実測がなく、同じ版の `modelOverrides` 修正は canonical id への正規化を示唆するため。再検討条件は実測でプロバイダ接頭辞形の `model.id` を観測したとき）。2.1.224 の `ANTHROPIC_BEDROCK_REGION_PREFIX` も、値が既にカバー済みの region prefix 群で `CLAUDE_CODE_USE_BEDROCK=1` と併用される前提なので無対応。2.1.221 の「rename 経路のセッション名 sanitize」はマーカー実測（`(Branch)` / `⑂`）への影響を要観察のまま持ち越し
+
 ## [1.67.0] - 2026-08-05
 
 ### Added
