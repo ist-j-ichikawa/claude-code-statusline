@@ -516,16 +516,22 @@ if has_val "$session_id"; then
     # `read` の rc は見ない — このファイル群は末尾改行が無く rc=1 でも内容は入る (forkedFrom と同じ罠)
     IFS= read -r _sl < "$_sf"
     [[ "$_sl" == *"\"sessionId\":\"${session_id}\""* ]] || continue
-    # **`derived` の明示がある時だけ出す**。`/branch <名前>` は宛名にもその名前を書き、このとき
-    # **`nameSource` キー自体が消える** (`jq` は欠損フィールドにも `null` を返すので「null になる」と
-    # 誤読しやすい。生 JSON にキーが無い)。キー不在を「出す」側に倒すと `/branch <名前>` で
-    # 確実に誤表示するので、許可リストで倒す。判断の根拠は docs/internals.md の「宛名」節。
-    [[ "$_sl" == *'"nameSource":"derived"'* ]] || continue
+    # **`nameSource` で絞らない** — `name` は生成規則にかかわらず常にアドレスなので、絞ると
+    # 「送れる宛先が画面に無い」状態が生まれる (v1.69.0 の回帰。経緯は docs/internals.md の「宛名」節)。
     # `"name":"` は `"nameSource":"` に一致しない (`"name` の次が `S`)。JSON 文字列値の中では
     # `"` が必ずエスケープされるので、この生の並びは構造上のキーとしてしか現れない (forkedFrom と同じ理屈)。
     [[ "$_sl" == *'"name":"'* ]] || continue
     peer_name="${_sl#*'"name":"'}"
+    # **終端の `"` は退避の後に探す** — 素朴に切ると値の中の `\"` で切れて誤った宛名を出す = 誤配。
+    # **`\\` を `\"` より先に退避する**のが順序の不変条件 (`\\"` の誤読を防ぐ。`osc8` の `%` 先行と同じ)。
+    # **制御文字の escape (`\n` `\uXXXX`) は decode しない** — `\n` を実文字に戻すと単一 printf の
+    # 4 行契約が壊れ、ESC の escape は AI 生成タイトルからの ANSI 注入になる。第 3 の escape が実測で
+    # 出たら `//` を足さず parser へ移す (経緯と根拠は docs/internals.md の「宛名」節)。
+    peer_name="${peer_name//\\\\/$'\002'}"
+    peer_name="${peer_name//\\\"/$'\001'}"
     peer_name="${peer_name%%'"'*}"
+    peer_name="${peer_name//$'\001'/\"}"
+    peer_name="${peer_name//$'\002'/\\}"
     break
   done
 fi

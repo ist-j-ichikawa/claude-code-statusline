@@ -915,16 +915,16 @@ _stub_env() {
 # 表記の判断と却下案は docs/internals.md の「宛名」節を参照
 # ============================================================================
 
-# _peer_home SID NAME [EXTRA_JSON] [NAMESOURCE_JSON] — 偽 HOME に sessions ファイルを 1 個置き、
+# _peer_home SID NAME [EXTRA_JSON] [NAMESOURCE_JSON] [KIND] — 偽 HOME に sessions ファイルを 1 個置き、
 # _peer_pre を組む。NAMESOURCE_JSON は `,"nameSource":…` 相当を丸ごと差し替える (既定 derived、
-# 空文字を渡すとフィールドごと消えて旧 Claude Code 相当になる)。
+# 空文字を渡すとフィールドごと消えて背景セッション / `/rename` 相当になる)。KIND は既定 `interactive`。
 # **末尾に改行を付けない** — 実物 (2.1.229) が改行なしで、`read` が rc=1 を返す罠をここで常に踏ませる
 _peer_home() {
-  local sid=$1 name=$2 extra=${3:-} ns=${4-',"nameSource":"derived"'}
+  local sid=$1 name=$2 extra=${3:-} ns=${4-',"nameSource":"derived"'} kind=${5:-interactive}
   _ph="$BATS_TEST_TMPDIR/peer-home"
   mkdir -p "$_ph/.claude/sessions"
-  printf '{"pid":54642,"sessionId":"%s","cwd":"/tmp","version":"2.1.229","kind":"interactive",%s"name":"%s"%s,"status":"busy"}' \
-    "$sid" "$extra" "$name" "$ns" > "$_ph/.claude/sessions/54642.json"
+  printf '{"pid":54642,"sessionId":"%s","cwd":"/tmp","version":"2.1.229","kind":"%s",%s"name":"%s"%s,"status":"busy"}' \
+    "$sid" "$kind" "$extra" "$name" "$ns" > "$_ph/.claude/sessions/54642.json"
   # 上書きが要るのは HOME だけ — `CLAUDE_STATUSLINE_NO_NET` と `CLAUDE_STATUSLINE_CACHE_DIR` は
   # `setup()` が export 済みで、`env -i` ではないので継承される (`BATS_TEST_TMPDIR` もテスト毎に別)
   _peer_pre=(env "HOME=$_ph")
@@ -990,27 +990,61 @@ _peer_json() {
   [[ "$(printf '%s' "$result" | grep -c .)" -ge 3 ]]   # 行数も崩れていない
 }
 
-@test "宛名: /branch <名前> の形 (nameSource キー不在) では出さないこと" {
-  # 2.1.229 実測: `/branch <名前>` は `customTitle` と `name`（宛名）の**両方**にその名前を書き、
-  # このとき **`nameSource` キー自体が消える**。この形では右上のネイティブ表示と宛名が同じ文字列に
-  # なるので出さない（出すと二重表示になり Line 1 も大きく伸びる。実測の宛名は日本語の長文だった）。
-  # fixture は**実物どおりキーを丸ごと落とす** — `"nameSource":null` を書くと実在しない形を
-  # テストすることになる（`jq` は欠損フィールドも null を返すので、そう誤読しやすい）
-  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "ユーザーが付けた長い名前" "" ""
+@test "宛名: nameSource キーが無い背景セッションでも出すこと" {
+  # **v1.69.0 の回帰**: `derived` の明示だけを受ける gate を入れたところ、`kind:bg`（`claude agents`
+  # 経由）のセッションが `nameSource` キーを持たないため宛名が丸ごと消えた（2.1.229 実測。
+  # `name` は AI 生成タイトルで、日本語と空白を含む）。`name` は生成規則にかかわらず
+  # `SendMessage` のアドレスなので、出さないと「送れる宛先が画面に無い」状態になる。
+  # fixture は**実物どおりキーを丸ごと落とす** — `"nameSource":null` は実在しない形
+  # （`jq` が欠損フィールドにも null を返すので、そう誤読しやすい）。
+  # 併せて**空白と日本語を含む名前**でも抽出が壊れないことを見る
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "statuslineに session id を常に表示" "" "" "bg"
   result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
     | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
-  [[ "$result" != *"ユーザーが付けた長い名前"* ]]
-  [[ "$result" == *"Test"* ]]   # 到達証跡 — 描画自体は続いている
+  [[ "$result" == *" statuslineに session id を常に表示"* ]]
 }
 
-@test "宛名: nameSource が derived 以外の値なら出さないこと" {
-  # 許可リストで `derived` だけを受ける（拒否リストは持たない方針）。将来 `custom` 等の値が
-  # 増えても「ユーザー/明示指定 = 右上に出る = 宛名を重複させない」側に自動で倒れる
+@test "宛名: 名前に含まれる引用符で切らないこと (誤配防止)" {
+  # 値の中の `"` は JSON では `\"` なので、素朴に `%%'"'*` で切ると `fix \"foo\" bug` が
+  # `fix \` になり **誤った宛名**を出す = `SendMessage` の誤配。名前が cwd 由来の slug だけだった
+  # 頃は `"` が入らず踏まなかったが、AI 生成タイトルや `/branch <名前>` の任意文字列を受ける
+  # ようになって常用経路に乗った。この機能で唯一「無表示」でなく「誤情報」になる経路なので pin する。
+  # `\\` も見る — `\\"` を「`\` + エスケープされた `"`」と誤読すると同じく切る位置を間違える
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" 'fix \"foo\" bug' "" ""
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" == *'fix "foo" bug'* ]]
+  [[ "$result" != *'fix \'* ]]
+}
+
+@test "宛名: 制御文字の escape は decode せず行数契約を守ること" {
+  # **`\n` を実文字へ decode してはいけない** — 単一 printf で書き出す行数契約が壊れ、Claude Code の
+  # パースが崩れる。ESC の escape なら AI 生成タイトルからの ANSI 注入になる。`\"`/`\\` の 2 つだけを
+  # 扱うのは「7 つのうち 2 つ」ではなく **decode してよい上限**（JSON は非 ASCII を escape しないので
+  # 日本語は生で来る）。将来 `//` を足して「完成」させると全緑のまま行数契約を破るのでここで pin する。
+  # needle は **ASCII エスケープから組み立てる** — 生の ESC をソースに置くと Write/Edit で化ける
+  # (US 区切りと同じ方針。実際に一度混入させた)
+  _needle="a\\nb\\u001b[31m"
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "$_needle" "" ""
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null)
+  # 行数は**ちょうど 4** — `/tmp` は git リポではないので Line 3 は `no git` のプレースホルダ。
+  # `-ge` にしないのが要点で、名前由来の改行が混ざって行が増えたら落ちる
+  [[ "$(printf '%s' "$result" | grep -c .)" -eq 4 ]]
+  # `\n` も ESC の escape も文字列のまま（実文字・実 ESC に化けていない）
+  [[ "$result" == *"$_needle"* ]]
+  # 実 ESC が名前経由で出力に現れていないこと（色コードは 1 行目に必ずあるので、
+  # 名前の直後に ESC が来ていないかを見る）
+  [[ "$result" != *"a"$'\033'* ]]
+}
+
+@test "宛名: nameSource が derived 以外の値でも出すこと" {
+  # 値で絞らない — 上流が新しい `nameSource` 値を増やしても宛名が消えないこと。
+  # 「非 derived = ユーザー由来 = 右上に出ている」という推論は bg セッションで外れた実績がある
   _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "explicit-name-55" "" ',"nameSource":"custom"'
   result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
     | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
-  [[ "$result" != *"explicit-name-55"* ]]
-  [[ "$result" == *"Test"* ]]
+  [[ "$result" == *" explicit-name-55"* ]]
 }
 
 @test "宛名: session_id が来ない旧 Claude Code では宛名を出さないこと" {
