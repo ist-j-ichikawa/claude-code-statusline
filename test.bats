@@ -1047,6 +1047,23 @@ _peer_json() {
   [[ "$result" == *" explicit-name-55"* ]]
 }
 
+@test "宛名: CLAUDE_CONFIG_DIR で切り替えた config dir から読むこと" {
+  # docs (env-vars): 「All settings, session history, and plugins are stored under this path」。
+  # `$HOME/.claude` をハードコードすると、別 config dir で走るセッション (複数アカウント併用や
+  # 案件ごとの切り替え) で sessions が 1 件も見つからず**宛名が丸ごと消える**。
+  # 実測: `CLAUDE_CONFIG_DIR=~/.claude-work` のセッションのファイルはそちらにしか無かった。
+  # 偽 HOME 側には**別名のファイルを置いて**、そちらを読んでいたら落ちるようにする
+  _peer_home "bbbbbbbb-9999-9999-9999-999999999999" "wrong-home-side"
+  _alt="$BATS_TEST_TMPDIR/alt-config"
+  mkdir -p "$_alt/sessions"
+  printf '{"pid":777,"sessionId":"aaaaaaaa-1111-2222-3333-444444444444","cwd":"/tmp","kind":"bg","name":"alt-config-session"}' \
+    > "$_alt/sessions/777.json"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | env "HOME=$_ph" "CLAUDE_CONFIG_DIR=$_alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" == *" alt-config-session"* ]]
+  [[ "$result" != *"wrong-home-side"* ]]
+}
+
 @test "宛名: session_id が来ない旧 Claude Code では宛名を出さないこと" {
   # graceful degradation — フィールドが無い環境でも他の要素は出す。
   # 併せて「id 無しで sessions ファイルを漫然と読んで先頭の名前を出す」実装でないことを pin する

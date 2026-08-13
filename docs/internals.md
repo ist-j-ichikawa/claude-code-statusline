@@ -104,6 +104,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 cross-session messaging（`SendMessage` / `ListAgents`、2.1.224+）でこのセッションを指すアドレスです。`~/.claude/sessions/<pid>.json` の `name` フィールドを、stdin の `session_id` で照合して読みます。
 
+読む場所は **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** です。`CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を差し替える環境変数で、docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しています。複数アカウントの併用や案件ごとの切り替えでこれを設定して走るセッションがあり、`$HOME/.claude` をハードコードすると sessions が 1 件も見つからず**宛名が丸ごと消えます**（v1.71.0 までのバグ。実測で `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在しませんでした）。同じ理由で `.credentials.json` の fallback パスもこの変数を尊重します — ハードコードしていた間は、別 config dir で subscription と extra-usage が無言で消えていました。
+
 出すのは**そのセッション自身の宛名**です。目的は「これをコピーして別のセッションに渡し、そちらからこのセッションへ送らせる」ことなので、`session_id` が指すセッションの名前を出します（同じ端末に interactive と背景の 2 セッションが並ぶことがありますが、描画対象の `session_id` に対応する側を出せば常に「自分の宛先」になります）。
 
 **アドレスは session id でも右上のタイトルでもなく、`name` フィールドです**（2.1.229 実測）。`ListAgents` の実出力も `my-project-otlp-41` の形で `name` と一致し、ツール定義も "Names are the address" と明記しています。`claude agents --json` も同じ `name` を返すので、2 系統で裏が取れています。

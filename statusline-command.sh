@@ -55,7 +55,10 @@ get_credentials_blob() {
     # `printf '%s'` を使う — blob は外部文字列で、`echo` は先頭が `-n`/`-e` の値を食う
     if [[ -n "$blob" ]]; then printf '%s\n' "$blob"; return 0; fi
   fi
-  local creds="${HOME}/.claude/.credentials.json"
+  # `CLAUDE_CONFIG_DIR` を尊重する — docs は「credentials on Linux and Windows」もこの下と明記
+  # (macOS は Keychain が主で、ここはその fallback)。ハードコードすると別 config dir で
+  # subscription と extra-usage が無言で消える (宛名と同じ根本原因)。
+  local creds="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
   # gate は `-f` ではなく **`-r`** — root 所有や mode 000 の credentials では `$(<file)` が
   # "Permission denied" を stderr に吐く (旧 `cat file 2>/dev/null` は黙っていた)。
   # **`$(<file 2>/dev/null)` と書いてはいけない** — bash 3.2 では `$(<file)` の特殊構文が壊れて
@@ -507,7 +510,12 @@ peer_name=""
 # gate は**性能のため**で、挙動の防御は下の id 照合が単独で担う (空 id はどのファイルにも一致しない)。
 # 未取得時に glob 展開ごと省ける (bash は非選択の分岐で glob を展開しない)。
 if has_val "$session_id"; then
-  for _sf in "$HOME"/.claude/sessions/*.json; do
+  # **`CLAUDE_CONFIG_DIR` を尊重する** — 「All settings, session history, and plugins are stored
+  # under this path」(env-vars docs) なので、`$HOME/.claude` をハードコードすると別 config dir で
+  # 走るセッション (複数アカウントの併用や案件ごとの切り替え) で sessions が 1 件も見つからず、
+  # 宛名が丸ごと消える。実測: `CLAUDE_CONFIG_DIR=~/.claude-work` のセッションの
+  # sessions ファイルはそちらにあり、`$HOME/.claude` 側には存在しなかった。
+  for _sf in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do
     # **`-r` で gate する。`2>/dev/null` では黙らせられない** — リダイレクトは左から適用されるので
     # `< "$_sf"` の失敗が先に起き、ディレクトリが無い環境 (2.1.224 より前) では未展開の glob が渡って
     # **毎レンダー stderr にエラーが出る**。credentials の `$(<file)` と同じ Gotcha。

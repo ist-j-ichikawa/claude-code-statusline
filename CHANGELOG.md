@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.72.0] - 2026-08-13
+
+### Fixed
+
+- `CLAUDE_CONFIG_DIR` で設定ディレクトリを切り替えているセッションで宛名が表示されない問題を修正。読む場所を `$HOME/.claude/sessions/` のハードコードから **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** に変更した。docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しているとおり sessions もこの下に移るので、ハードコードでは 1 件も見つからず宛名が丸ごと消えていた（実測: `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在せず、`$HOME/.claude` 側には無かった。複数アカウントの併用や案件ごとの切り替えで踏む）。同じ根本原因で `.credentials.json` の fallback パスも同変数を尊重するようにした — ハードコードしていた間は別 config dir で subscription と extra-usage が無言で消えていた（macOS は Keychain が主経路なので気づきにくい）
+
 ## [1.71.0] - 2026-08-13
 
 ### Fixed

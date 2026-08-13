@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.71.0-blue)
+![Version](https://img.shields.io/badge/version-1.72.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.229-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -37,7 +37,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 
 宛名は**常に表示します**。セッションの種類によって名前の作られ方が変わり、`claude agents` 経由の背景セッションでは会話内容から付いた名前が、`/branch` に名前を渡した場合はその名前が宛名になります。いずれの場合もそれが送信先なので、そのまま表示します（`/branch` に名前を渡したときは右上と同じ文字列が並びます）。
 
-宛名の取得元は Claude Code の内部ファイルなので、形が変わって読めなくなった場合は宛名だけが消え、他の表示はそのまま残ります。
+宛名の取得元は Claude Code の内部ファイルなので、形が変わって読めなくなった場合は宛名だけが消え、他の表示はそのまま残ります。`CLAUDE_CONFIG_DIR` で設定ディレクトリを切り替えている場合も、そちらから読みます。
 
 ### 表示例
 
