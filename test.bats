@@ -911,6 +911,119 @@ _stub_env() {
 }
 
 # ============================================================================
+# 宛名 — cross-session messaging のアドレス (`~/.claude/sessions/<pid>.json` の derived name)。
+# 表記の判断と却下案は docs/internals.md の「宛名」節を参照
+# ============================================================================
+
+# _peer_home SID NAME [EXTRA_JSON] [NAMESOURCE_JSON] — 偽 HOME に sessions ファイルを 1 個置き、
+# _peer_pre を組む。NAMESOURCE_JSON は `,"nameSource":…` 相当を丸ごと差し替える (既定 derived、
+# 空文字を渡すとフィールドごと消えて旧 Claude Code 相当になる)。
+# **末尾に改行を付けない** — 実物 (2.1.229) が改行なしで、`read` が rc=1 を返す罠をここで常に踏ませる
+_peer_home() {
+  local sid=$1 name=$2 extra=${3:-} ns=${4-',"nameSource":"derived"'}
+  _ph="$BATS_TEST_TMPDIR/peer-home"
+  mkdir -p "$_ph/.claude/sessions"
+  printf '{"pid":54642,"sessionId":"%s","cwd":"/tmp","version":"2.1.229","kind":"interactive",%s"name":"%s"%s,"status":"busy"}' \
+    "$sid" "$extra" "$name" "$ns" > "$_ph/.claude/sessions/54642.json"
+  # 上書きが要るのは HOME だけ — `CLAUDE_STATUSLINE_NO_NET` と `CLAUDE_STATUSLINE_CACHE_DIR` は
+  # `setup()` が export 済みで、`env -i` ではないので継承される (`BATS_TEST_TMPDIR` もテスト毎に別)
+  _peer_pre=(env "HOME=$_ph")
+}
+
+_peer_json() {
+  jq -nc --arg s "$1" \
+    '{model:{id:"test",display_name:"Test"},session_id:$s,workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}'
+}
+
+@test "宛名: session_id に一致する sessions ファイルから宛名を出すこと" {
+  # `SendMessage` のアドレスは derived name。session id でも custom title でもないので、
+  # これを出さないと「宛名がどこにも表示されない」状態が続く (2.1.229 実測)
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "claude-code-statusline-74"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  # **記号も囲みも付けない**ので名前の直前は必ずスペース = ダブルクリックで丸ごと取れる。
+  # この 1 本で `@name` / `<name>` / `[name]` への逆戻りも同時に弾ける (どれも直前がスペースでない)
+  [[ "$result" == *" claude-code-statusline-74"* ]]
+  # ラベル形は空白を挟んで書けてしまい上の assert を通りうるので、別に弾く
+  [[ "$result" != *"peer:"* ]]
+}
+
+@test "宛名: 別セッションの sessions ファイルから宛名を拾わないこと" {
+  # 同じ HOME に全セッションのファイルが並ぶので、id 照合を外すと**他セッションの宛名**を出す。
+  # 宛名は「この端末は誰か」を答えるものなので、取り違えると連携の指示が丸ごと誤配になる
+  _peer_home "bbbbbbbb-1111-2222-3333-444444444444" "someone-elses-session-99"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" != *"someone-elses-session-99"* ]]
+  [[ "$result" == *"Test"* ]]   # 到達証跡 — 描画自体は続いている
+}
+
+@test "宛名: nameSource を宛名と誤認しないこと" {
+  # needle は `"name":"` で、`"nameSource":"` には一致しない (`"name` の次が `S`)。
+  # 実物は name → nameSource の順だが、逆順でも最初の `"name":"` を正しく選ぶことを pin する
+  # `nameSource` を `name` より**前**に置いた形 (実物は name → nameSource の順) で、
+  # 最初の `"name":"` を正しく選ぶことを見る。4 引数目を空にして既定の重複挿入を止める
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "real-name-12" '"nameSource":"derived",' ""
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" == *" real-name-12"* ]]
+  [[ "$result" != *"derived"* ]]
+}
+
+@test "宛名: sessions ディレクトリが無くても描画を続け stderr を汚さないこと" {
+  # `~/.claude/sessions/` は undocumented な内部ファイル (docs にも CHANGELOG にも無い) なので、
+  # 消えても形が変わっても宛名だけ落ちて他は出る = subscription と同じ graceful degradation.
+  # glob が展開されないまま `read` に渡る経路もここで踏む。
+  # **stderr の空を必ず assert する** — `2>/dev/null` で捨てると、`-r` gate を外しても緑のままになり
+  # 「毎レンダー stderr に No such file or directory」を検出できない (リダイレクトは左から
+  #  適用されるので `< "$_sf" 2>/dev/null` では黙らない。gate でしか消せない)
+  _ph="$BATS_TEST_TMPDIR/peer-nodir"
+  mkdir -p "$_ph/.claude"
+  _errf="$BATS_TEST_TMPDIR/peer-nodir-stderr"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | env "HOME=$_ph" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>"$_errf")
+  [[ ! -s "$_errf" ]]
+  # glob が展開されないまま漏れていないこと (`*.json` のリテラルや sessions パスが出ない)
+  [[ "$result" != *".json"* ]]
+  [[ "$result" != *"sessions"* ]]
+  [[ "$result" == *"Test"* ]]                    # Line 1 は出ている
+  [[ "$(printf '%s' "$result" | grep -c .)" -ge 3 ]]   # 行数も崩れていない
+}
+
+@test "宛名: /branch <名前> の形 (nameSource キー不在) では出さないこと" {
+  # 2.1.229 実測: `/branch <名前>` は `customTitle` と `name`（宛名）の**両方**にその名前を書き、
+  # このとき **`nameSource` キー自体が消える**。この形では右上のネイティブ表示と宛名が同じ文字列に
+  # なるので出さない（出すと二重表示になり Line 1 も大きく伸びる。実測の宛名は日本語の長文だった）。
+  # fixture は**実物どおりキーを丸ごと落とす** — `"nameSource":null` を書くと実在しない形を
+  # テストすることになる（`jq` は欠損フィールドも null を返すので、そう誤読しやすい）
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "ユーザーが付けた長い名前" "" ""
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" != *"ユーザーが付けた長い名前"* ]]
+  [[ "$result" == *"Test"* ]]   # 到達証跡 — 描画自体は続いている
+}
+
+@test "宛名: nameSource が derived 以外の値なら出さないこと" {
+  # 許可リストで `derived` だけを受ける（拒否リストは持たない方針）。将来 `custom` 等の値が
+  # 増えても「ユーザー/明示指定 = 右上に出る = 宛名を重複させない」側に自動で倒れる
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "explicit-name-55" "" ',"nameSource":"custom"'
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" != *"explicit-name-55"* ]]
+  [[ "$result" == *"Test"* ]]
+}
+
+@test "宛名: session_id が来ない旧 Claude Code では宛名を出さないこと" {
+  # graceful degradation — フィールドが無い環境でも他の要素は出す。
+  # 併せて「id 無しで sessions ファイルを漫然と読んで先頭の名前を出す」実装でないことを pin する
+  _peer_home "aaaaaaaa-1111-2222-3333-444444444444" "should-not-appear-11"
+  result=$(jq -nc '{model:{id:"test",display_name:"Test"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:10}}' \
+    | "${_peer_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" != *"should-not-appear-11"* ]]
+  [[ "$result" == *"Test"* ]]
+}
+
+# ============================================================================
 # Worktree — stdin JSONからworktree情報を表示
 # ============================================================================
 @test "Worktree: worktreeセッションで🌲とfrom:元ブランチが表示されること" {

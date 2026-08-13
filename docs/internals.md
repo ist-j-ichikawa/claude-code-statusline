@@ -27,7 +27,7 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — git の「事実」を US 区切りで返す（ANSI も stdin 由来値も含めない。5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + Version + セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）
+├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([gh: (dim) + owner/repo (通常輝度)、GitHub origin あり時のみ] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           5hレート制限 + コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、通常輝度)
@@ -85,9 +85,10 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | think | light cyan | 38;5;117 |
 | fast (`/fast` 有効時、`fast_mode`) | greenyellow | 38;5;190 |
 | Agent 名 | ピンク | 38;5;213 |
-| version (`v2.1.x`) | グレー | 38;5;248 |
+| 宛名 (derived name。ラベルも囲みも付けない) | 無色・通常輝度 (値が一次情報。`SendMessage` にコピーする値なので弱めない) | - |
 | セッション出自のラベル (`branch:` / `fork`) | 黄 | 33 |
 | セッション出自に添える元セッション id (full uuid) | 通常輝度 (`gh:` と同じ「ラベルだけ色、値は一次情報」の作法。コピーして `--resume` に渡す値なので弱めない) | - |
+| version (`v2.1.x`。Line 1 の最後) | グレー | 38;5;248 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
 | Git staged `A` / ahead `↑` | 緑 | 32 |
 | Git modified `M` | 黄 | 33 |
@@ -99,9 +100,60 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | コンテキストの分母 (`/200k`・`/1M` 等を常時表示。値が来ていない旧 CC のみ無印) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |
 | Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
+## 宛名 (cross-session messaging のアドレス)
+
+cross-session messaging（`SendMessage` / `ListAgents`、2.1.224+）でこのセッションを指すアドレスです。`~/.claude/sessions/<pid>.json` の `name` フィールドを、stdin の `session_id` で照合して読みます。
+
+**アドレスは session id でも右上のタイトルでもなく、cwd 由来の derived name です**（2.1.229 実測）。`ListAgents` の実出力も `my-project-otlp-41` の形で、ツール定義も "Names are the address" と明記しています。
+
+タイトルは **2 系統**あります:
+
+| キー | 誰が書くか | 直近 40 transcript での付与 |
+|---|---|---|
+| `aiTitle` | Claude Code が会話内容から自動生成（`language` 設定で言語が決まる） | 26 件 |
+| `customTitle` | ユーザー由来のみ（`/rename` と `/branch <名前>`） | 14 件 |
+
+**どちらも会話内容由来**なので、cwd 由来の宛名とは食い違います。決定的な実測は、customTitle が `v2について` のセッションでも `name` は `my-project-b6` / `nameSource` は `derived` のままだったことです。したがって宛名はどこにも表示されていませんでした。
+
+**例外は `/branch <名前>`** で、これは `customTitle` と `name`（宛名）の**両方**にその名前を書き、このとき **`nameSource` キー自体が消えます**（実測で宛名が日本語の長文になりました）。この形では右上と宛名が同じ文字列なので出しません — 出す目的が「食い違って宛名がどこにも出ない」ことを埋めるためなので、一致しているなら重複させる意味がありません。`/rename` は `customTitle` だけを変え `name` は derived のまま残るので、こちらは出します。
+
+切り分けは **`"nameSource":"derived"` が明示されているときだけ出す**という許可リストで行います。**キーの有無がそのまま切り分けになる**のが実測です（5 件中、derived の 4 件はキーを持ち、`/branch <名前>` の 1 件だけ持たない）。`jq` で読むと欠損フィールドも `null` を返すため「`nameSource` が null になる」と誤読しやすいので注意してください — 生の JSON には `"nameSource"` の並びが 1 つもありません。テスト fixture も実物どおりキーを丸ごと落とします。
+
+キー不在を「出す」側に倒していないのは意図的です。cross-session messaging 自体が 2.1.224+ の新機能なので、`nameSource` を持たない古い版で宛名を出す意味がありません（出ない方向の degradation は無害）。逆に「不在なら出す」にすると `/branch <名前>` で確実に誤表示します。
+
+### 表記: ラベルも囲みも付けない
+
+宛名は `SendMessage` にコピーして使う値なので、**ダブルクリックで名前だけが選択される**ことが要件です。その条件は「前後が単語境界文字であること」で、要素間のスペースがそれを満たします。名前に含まれる `-` は Ghostty のデフォルト境界文字 18 文字（`` \t'"│`|:;,()[]{}<>$``、`src/terminal/selection_codepoints.zig` 実測）に**含まれない**ので、`claude-code-statusline-74` は丸ごと 1 単語として選択されます。
+
+却下した表記:
+
+| 表記 | 却下理由 |
+|---|---|
+| `@name` | `@` が境界文字に無いため記号ごと選択され、貼った後に消す手間が出る |
+| `<name>` / `[name]` | 選択は正しいが囲みが視覚ノイズで、そもそも不要だった |
+| `peer:` | ラベル語の向きが逆 — 上流は `peerProtocol` / `Peer sessions` を**他セッション群**に使うので、自分の宛名に付けると「相手」に読める |
+
+`branch:<uuid>` 側は対応不要です（`:` が境界文字かつ `-` が非境界なので、uuid 全体が一発で取れます）。ラベルを持たないことで `branch:` との形の違いも自然に付きます — 役割が真逆（自分の宛名 / 他セッションへの参照）なので、同じ `ラベル:値` で揃えると色（dim / 黄）だけでは「どちらが自分か」が読み取れません。
+
+同一リポで複数セッションを開くと suffix だけが違う宛名になります（実測: `…-my-project-41` と `-5c`）。どの端末がどちらかは宛名を見ないと判別できないので、常時表示します。**ただし宛名は固定 ID ではありません** — resume で pid が変わると suffix も変わります（実測: `claude-code-statusline-74` → `-1d`）。判別に使えるのは「その時点で並んでいる端末どうしの区別」までで、宛名をメモして後で使う類のものではありません。
+
+読み取りは **fork ゼロ**です（glob 展開 + `read` のリダイレクトのみ。実測 1.2ms / `grep` 版は 5.9ms）。この安さのためキャッシュを持ちません — `cache_stale` の `stat` を 1 個足すほうが高くつき、かつ宛名が書き換わった時（`/branch <名前>` は実際に書き換えます。`/rename` は `customTitle` だけなので宛名は動きません）に古い値を出す危険が増えます。`read` の戻り値は見ず**内容の有無で判断します** — このファイル群は末尾に改行が無く、`read` は rc=1 を返しつつ内容は変数に入るためです（`forkedFrom` スキャンと同じ罠）。`name` の needle は `"name":"` で、`"nameSource":"` には一致しません（`"name` の次が `S`）。
+
+ファイルは **`[[ -r "$_sf" ]]` で gate します**。`read ... < "$_sf" 2>/dev/null` ではリダイレクトが左から適用されるため入力側の失敗を黙らせられず、`~/.claude/sessions/` が無い環境（cross-session messaging は 2.1.224+ なので旧版には存在しません）では glob が未展開のまま渡って**毎レンダー stderr に "No such file or directory"** が出ます。credentials の `$(<file)` と同じ扱いで、リダイレクトではなく gate で消します。テストは **stderr が空であることを assert します** — `2>/dev/null` で捨てると gate を外しても緑のままになるためです。各 gate は `break` ではなく `continue` を使い、同一 sessionId のファイルが複数ある形で先頭が derived でなくても後続の正しいファイルを拾えるようにしています。
+
+同一 `sessionId` のファイルが複数あるときは **glob 順（pid の辞書順）の先勝ち**です。ただし実測では `<pid>.json` は**再利用され、中の `sessionId` が別のセッションに差し替えられる**ことがあります（`/branch` で観測）。したがって「古いファイルが残り続ける」形よりも「同じファイルが上書きされる」形が普通で、stale による誤表示は起きにくい構造です。recency 判定には `stat` の fork が要り fork ゼロの利点を失うので入れていません — キャッシュを持たない設計なので、ずれても次のレンダーで自然回復します。
+
+「宛名が変」という報告が来たときに疑う順序:
+
+1. **glob 順** — 上記のとおり先勝ちです。
+2. **`continue` の副作用** — 同一 sessionId の stale ファイルが `derived` を持っていると、live 側が意図的に抑止した宛名を復活させます（`continue` は「真実を出す」より「何か出す」側に倒れます）。ファイルが再利用される実測があるので稀ですが、gate 自身の不変条件を引き換えにしている点は無料ではありません。
+3. **消えるのではなく「別物が出る」場合は抽出側** — `${_sl#*'"name":"'}` はスコープを閉じないので、上流が `name` を持つオブジェクトを top-level より前にネストすると（`"model":{"name":…}` 等）誤った名前を出します。これはこの機能で唯一「無表示」ではなく**誤情報**になる経路で、`SendMessage` の誤配につながります。現状は flat な 1 行 object という実測（5 件）で足りているため brace 均衡チェックは入れていません。兄弟の `parent_sid` 抽出が `}` でスコープを閉じ uuid 形を許可リストで検証しているのに対し、宛名側は cwd 由来の任意文字を受けるため検証できる形がありません。
+
+`~/.claude/sessions/` は docs にも CHANGELOG にも記載の無い内部ファイルなので、subscription エンドポイントと同じ graceful degradation とし、読めなければ宛名だけを落として他の要素は出します。`session_id` が来ない旧 Claude Code ではファイルを読みにも行きません（挙動の防御は id 照合が単独で担い、このゲートは 5-9 ファイル分の read を省く性能目的）。
+
 ## セッション出自 (`branch` / `fork`)
 
-Line 1 末尾の黄バッジは `session_name` 末尾のマーカーから読みます。`/branch` は ` (Branch)`（同じ会話から 2 本目を切ると ` (Branch 2)` の連番）、`/fork` は ` ⑂`（U+2442）。2.1.77 より前の ` (Fork)` は当時の `/branch` のエイリアスなので **branch 扱い**。両方付いた時は fork を優先します（親が並走しているほうが行動に直結する）。
+Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾のマーカーから読みます。`/branch` は ` (Branch)`（同じ会話から 2 本目を切ると ` (Branch 2)` の連番）、`/fork` は ` ⑂`（U+2442）。2.1.77 より前の ` (Fork)` は当時の `/branch` のエイリアスなので **branch 扱い**。両方付いた時は fork を優先します（親が並走しているほうが行動に直結する）。
 
 **`(Branch)` 系は名前だけでは判定できません** — `/branch` は分岐した子だけでなく **元セッションの名前にも** ` (Branch)` を書き込みます（2.1.221 実測。元・子・元を resume した実体の 3 つが同名になり、元の会話に戻ってもバッジが消えませんでした）。そこで `transcript_path` の**冒頭 20 行に `"forkedFrom":{` があるか**で裏取りします — これが「本当に派生した側」の唯一の証拠です。1 行でなく 20 行見るのは、冒頭に custom-title / mode / file-history-snapshot のヘッダ記録が積まれて `forkedFrom` が 7 行目に来る transcript が実在するため（実測 23 件中 22 件が 1 行目、1 件が 7 行目）。needle の `":{` は、JSON 文字列値の中では `"` が必ず `\"` にエスケープされる性質を使っています — 生の `"forkedFrom":{` は構造上のキーとしてしか現れないので、jsonl 断片を本文に貼ったセッションでも誤爆しません。読み込みは `read` のリダイレクトなので fork ゼロ。`transcript_path` が来ない・読めない環境では従来どおり名前だけで判定します（graceful degradation）。マーカーの受理形は実測どおり `(Branch)` / `(Branch N)` に限定します — 前方一致にすると `(Branch protection rules)` のような名前が degraded path で誤爆します。
 

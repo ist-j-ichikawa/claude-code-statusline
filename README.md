@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.68.0-blue)
+![Version](https://img.shields.io/badge/version-1.69.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.226-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -15,7 +15,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 
 | 行 | 内容 |
 |---|---|
-| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · Agent 名 · Version · `branch:`元セッション id / `fork` |
+| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
 | **Line 3** | `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · `base:`親ブランチ · dirty state · ahead/behind · last commit |
 | **Line 4** | 5h レート制限 · コンテキストバー (分母付き `/200k` `/1M`) · weekly レート制限 · extra-usage 実課金 · セッション経過 · セッションコスト |
@@ -29,10 +29,20 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 > `fork` には添えません。`/fork` の元は同じ端末に残り、`←` の detach で戻れるためです。
 > 端末幅による表示切替は行いません。すべての要素が常時フル表示されます。
 
+`my-project-41` は**セッション同士がメッセージを送り合うときの宛名**です。別のセッションから呼びかけるときは、この名前をそのまま宛先に使います。記号を付けずに置いているので、ダブルクリックすれば名前だけが選択され、そのまま貼り付けられます。
+
+この名前はどこにも表示されていませんでした。右上に出るセッション名は会話の内容から付くもので、宛名は作業ディレクトリ名から別に作られるため、両者は食い違います（内容が「v2について」でも宛名は `my-project-b6` のまま）。セッション id も宛名としては使えません。
+
+同じリポジトリで複数のセッションを開くと、末尾の 2 文字だけが違う宛名になります（`my-project-41` と `my-project-5c`）。どの端末がどちらなのかは、この表示がないと判別できません。ただし宛名は固定ではなく、セッションを resume すると末尾が変わります。並んでいる端末どうしを見分けるための表示で、メモして後から使うものではありません。
+
+`/branch` に名前を渡した場合は、その名前が右上と宛名の両方になります。この場合は右上を見れば分かるので、宛名は表示しません。
+
+宛名の取得元は Claude Code の内部ファイルなので、形が変わって読めなくなった場合は宛名だけが消え、他の表示はそのまま残ります。
+
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 5  high  think  fast  v2.1.226
+Anthropic(enterprise)  Opus 5  high  think  fast  my-project-41  v2.1.226
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  base:main  A3 M2 ?1 ↑2 1h fix: update logic..
 ⣶     16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h  $4.83

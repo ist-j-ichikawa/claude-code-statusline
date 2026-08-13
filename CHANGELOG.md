@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.69.0] - 2026-08-13
+
+### Changed
+
+- Version (`v2.1.x`) を Line 1 の**最後**へ移動（従来は Agent 名の直後）。Claude Code 自体の版は「今このセッションで何をするか」に効かない参照情報なので、モデル / effort / 宛名 / 出自といった行動に効く要素を先に読ませる。溢れて truncate されるとき最初に削られてよい要素でもある（`…` は末尾から効く）
+
+### Added
+
+- Line 1 に宛名 — cross-session messaging（`SendMessage` / `ListAgents`、2.1.224+）でこのセッションを指すアドレスを常時表示。`~/.claude/sessions/<pid>.json` の `name` を stdin の `session_id` で照合して読む。**アドレスは session id でも右上のタイトルでもなく cwd 由来の derived name**（2.1.229 実測: customTitle が `v2について` のセッションでも `name` は `my-project-b6` / `nameSource` は `derived` のまま）。タイトルは 2 系統あり `aiTitle` が Claude Code の自動生成（会話内容から、直近 40 transcript で 26 件）・`customTitle` が `/rename` と `/branch <名前>` によるユーザー由来（14 件）で、**どちらも会話内容由来**なので cwd 由来の宛名と食い違う = **宛名はどこにも出ていなかった**。同一リポで複数セッションを開くと suffix だけが違う（実測 `…-my-project-41` / `-5c`）ので、どの端末がどれかは宛名を見ないと判別できない（ただし resume で pid が変わると suffix も変わるため固定 ID ではない。実測 `…-74` → `-1d`）。**`/branch <名前>` の形では出さない** — これは `customTitle` と `name` の両方にその名前を書き、このとき `nameSource` キー自体が消えるので、右上と宛名が同じ文字列になる（`"nameSource":"derived"` の明示がある時だけ出す許可リストで切り分ける。messaging 自体が 2.1.224+ なのでキー不在の古い版で出す意味は無く、倒すと `/branch <名前>` で誤表示する）。記号も囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ選択できる（`@` は境界文字でないため記号ごと選択されて貼り付けに手間が出る。`branch:<uuid>` 側は `:` が境界かつ `-` が非境界なので対応不要）。読み取りは fork ゼロ（glob + `read` のリダイレクトのみ、実測 1.2ms / `grep` 版 5.9ms）なのでキャッシュを持たない。`~/.claude/sessions/` は docs にも CHANGELOG にも無い内部ファイルなので、読めなければ宛名だけ落として他は出す graceful degradation
+
 ## [1.68.0] - 2026-08-10
 
 ### Changed

@@ -170,7 +170,7 @@ IFS= read -r -d '' input || true
 
 # Initialize all jq variables — prevents set -u instant death if eval fails
 model="" model_id="" current_dir="." used_pct=""
-exceeds_200k="false" cc_version="" session_name="" transcript_path=""
+exceeds_200k="false" cc_version="" session_name="" session_id="" transcript_path=""
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
@@ -188,6 +188,7 @@ _jq_out=$(jq -r '
   @sh "exceeds_200k=\(.exceeds_200k_tokens // false)",
   @sh "cc_version=\(.version // "")",
   @sh "session_name=\(.session_name // "")",
+  @sh "session_id=\(.session_id // "")",
   @sh "transcript_path=\(.transcript_path // "")",
   @sh "agent_name=\(.agent.name // "")",
   @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
@@ -364,7 +365,7 @@ render_git() {
 
 
 # ============================================================================
-# Line 1: Provider + Model + Agent + [(Branch)] + Version + Vim mode
+# Line 1: Vim mode + Provider + Model + effort/think/fast + Agent + 宛名 + [branch/fork] + Version
 # ============================================================================
 line1=()
 
@@ -496,10 +497,43 @@ if [[ "$session_kind" == "branch" && -r "$transcript_path" ]]; then
   done < "$transcript_path"
   [[ -n "$_fork_seen" ]] || session_kind="" parent_sid=""
 fi
-# Version
-if has_val "$cc_version"; then
-  line1+=("${DIMVER}v${cc_version}${RST}")
+# --- Peer name: cross-session messaging の宛名 ---
+# `SendMessage`/`ListAgents` のアドレスは `~/.claude/sessions/<pid>.json` の `name` (cwd 由来 derived)。
+# **undocumented な内部ファイル** (docs にも CHANGELOG にも無い) なので読めなければ何も出さない。
+# 出す理由・却下した表記・付与率の実測は docs/internals.md の「宛名」節にある (ここには
+# 編集時に壊しうる不変条件だけ置く)。**fork ゼロを保つこと** — キャッシュ (`cache_stale` の stat)
+# を足すと、それだけでこのループより高くつく。
+peer_name=""
+# gate は**性能のため**で、挙動の防御は下の id 照合が単独で担う (空 id はどのファイルにも一致しない)。
+# 未取得時に glob 展開ごと省ける (bash は非選択の分岐で glob を展開しない)。
+if has_val "$session_id"; then
+  for _sf in "$HOME"/.claude/sessions/*.json; do
+    # **`-r` で gate する。`2>/dev/null` では黙らせられない** — リダイレクトは左から適用されるので
+    # `< "$_sf"` の失敗が先に起き、ディレクトリが無い環境 (2.1.224 より前) では未展開の glob が渡って
+    # **毎レンダー stderr にエラーが出る**。credentials の `$(<file)` と同じ Gotcha。
+    [[ -r "$_sf" ]] || continue
+    _sl=""
+    # `read` の rc は見ない — このファイル群は末尾改行が無く rc=1 でも内容は入る (forkedFrom と同じ罠)
+    IFS= read -r _sl < "$_sf"
+    [[ "$_sl" == *"\"sessionId\":\"${session_id}\""* ]] || continue
+    # **`derived` の明示がある時だけ出す**。`/branch <名前>` は宛名にもその名前を書き、このとき
+    # **`nameSource` キー自体が消える** (`jq` は欠損フィールドにも `null` を返すので「null になる」と
+    # 誤読しやすい。生 JSON にキーが無い)。キー不在を「出す」側に倒すと `/branch <名前>` で
+    # 確実に誤表示するので、許可リストで倒す。判断の根拠は docs/internals.md の「宛名」節。
+    [[ "$_sl" == *'"nameSource":"derived"'* ]] || continue
+    # `"name":"` は `"nameSource":"` に一致しない (`"name` の次が `S`)。JSON 文字列値の中では
+    # `"` が必ずエスケープされるので、この生の並びは構造上のキーとしてしか現れない (forkedFrom と同じ理屈)。
+    [[ "$_sl" == *'"name":"'* ]] || continue
+    peer_name="${_sl#*'"name":"'}"
+    peer_name="${peer_name%%'"'*}"
+    break
+  done
 fi
+
+# 宛名 — **ラベルも囲みも色も付けず値だけ置く**。要素間のスペースが単語境界になり、名前に含まれる
+# `-` は境界文字でないのでダブルクリックで丸ごと選択できる = そのまま `SendMessage` に貼れる。
+# 記号を足すと選択に混ざるので**付けないことが要件**。却下した表記は docs/internals.md の「宛名」節。
+has_val "$peer_name" && line1+=("$peer_name")
 # Session indicator — branch 先では元セッションの id を添える (`branch:<uuid>`)。
 # `/branch` の元は別端末で resume されるので、戻るには id が要る (コピーして `--resume`)。
 # fork には添えない — 元は同じ端末に残り detach で戻れるうえ、fork の子は forkedFrom を持たない。
@@ -510,6 +544,11 @@ if [[ -n "$session_kind" ]]; then
   else
     line1+=("${YLW}${session_kind}${RST}")
   fi
+fi
+
+# Version — **Line 1 の最後**。版は行動に効かない参照情報なので、溢れた時に最初に削られてよい
+if has_val "$cc_version"; then
+  line1+=("${DIMVER}v${cc_version}${RST}")
 fi
 
 # ============================================================================
