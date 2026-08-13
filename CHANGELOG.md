@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.70.0] - 2026-08-13
+
+### Changed
+
+- Built against を Claude Code 2.1.229 に追従（1.69.0 と同日リリース）。契約面の変更なし — stdin JSON・subagent per-task 13 フィールド・statusLine 設定（`padding` / `refreshInterval` / `hideVimModeIndicator`）とも 2.1.226 から不変で、docs の版ゲート注記も最新が 2.1.214 のまま。2.1.227〜2.1.229 で関連キーワードに当たった 6 件はいずれも無関係（Vertex/Bedrock の SSE keepalive、MCP OAuth の redirect URI を `127.0.0.1` へ、self-hosted runner の git credential、`/login` の `CLAUDE_CODE_OAUTH_TOKEN` 警告、cross-session message の送信者表示）。2.1.229 の「`ListAgents` が切断中の Remote Control セッションを `offline`、クラウドセッションを `cloud` と表示」は一覧表示側の変更で、宛名として読む `~/.claude/sessions/<pid>.json` の `name` / `nameSource` には影響しない（1.69.0 の実測はこの版で取得済み）。1.68.0 から持ち越していた 2.1.221「rename 経路のセッション名 sanitize」はマーカー実測（`(Branch)` / `⑂`）への影響を要観察のまま継続
+
 ## [1.69.0] - 2026-08-13
 
 ### Changed
