@@ -510,11 +510,8 @@ peer_name=""
 # gate は**性能のため**で、挙動の防御は下の id 照合が単独で担う (空 id はどのファイルにも一致しない)。
 # 未取得時に glob 展開ごと省ける (bash は非選択の分岐で glob を展開しない)。
 if has_val "$session_id"; then
-  # **`CLAUDE_CONFIG_DIR` を尊重する** — 「All settings, session history, and plugins are stored
-  # under this path」(env-vars docs) なので、`$HOME/.claude` をハードコードすると別 config dir で
-  # 走るセッション (複数アカウントの併用や案件ごとの切り替え) で sessions が 1 件も見つからず、
-  # 宛名が丸ごと消える。実測: `CLAUDE_CONFIG_DIR=~/.claude-work` のセッションの
-  # sessions ファイルはそちらにあり、`$HOME/.claude` 側には存在しなかった。
+  # **`CLAUDE_CONFIG_DIR` を尊重する** — ハードコードすると別 config dir のセッションで宛名が
+  # 丸ごと消える (経緯は docs/internals.md の「宛名」節。メタテストが直書きを禁じている)。
   for _sf in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do
     # **`-r` で gate する。`2>/dev/null` では黙らせられない** — リダイレクトは左から適用されるので
     # `< "$_sf"` の失敗が先に起き、ディレクトリが無い環境 (2.1.224 より前) では未展開の glob が渡って

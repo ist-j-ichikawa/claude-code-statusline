@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.73.0] - 2026-08-14
+
+### Fixed
+
+- `install.sh` の既定の書き込み先が `CLAUDE_CONFIG_DIR` を無視していた問題を修正（v1.72.0 で statusline 側を直したのと同じ根本原因）。`${CLAUDE_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}` に変更。この変数を設定している人の Claude Code は `$HOME/.claude/settings.json` を読まないので、**登録は成功したのに statusline が出ず、理由も表示されない**状態になっていた。`CLAUDE_SETTINGS` の明示指定は従来どおり優先する
+- `.credentials.json` の `CLAUDE_CONFIG_DIR` 分岐にテストが無かったのを追加（v1.72.0 で直した経路が pin されていなかった）。偽 HOME 側と別 config dir 側に**異なる subscription 種別**を置き、誤った側を読んだら落ちる形にした
+- `~/.claude` の直書きと、テストの env 漏れを**メタテストで機械的に禁じた**。前者は 3 箇所を 1 つずつ踏んでから直す形になったので、prose（CLAUDE.md の記述は「新規コードを足さない」= forward-only で既存を拾えなかった）ではなく grep で強制する。後者は `setup()` の `unset` 列挙が腐らないよう、スクリプトが読む `CLAUDE_*` を export か unset するまで赤くなるようにした — ambient な `CLAUDE_SETTINGS` は install テストを**開発者の実 settings.json に `--yes` で書き込ませ**、`CLAUDE_CODE_USE_BEDROCK` は「Bedrock では extra-usage を出さない」を検出が壊れていても通す（偽の赤は自分で申告するが、偽の緑は沈黙する）
+
+### Changed
+
+- Built against を Claude Code 2.1.231 に追従。契約面の変更なし — stdin JSON 56 フィールド・subagent per-task 13 フィールド・statusLine 設定 3 キーとも 2.1.229 から不変で、docs の版ゲート注記も最新が 2.1.214 のまま。2.1.231 の唯一のエントリ（pre-registered OAuth client を使う MCP サーバーの redirect URI 不一致の修正）は MCP 側の話で、Keychain / `.credentials.json` から読む OAuth トークンとは別系統
+
 ## [1.72.0] - 2026-08-13
 
 ### Fixed

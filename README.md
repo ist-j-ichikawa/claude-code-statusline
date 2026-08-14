@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.72.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.229-purple)
+![Version](https://img.shields.io/badge/version-1.73.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.231-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -42,7 +42,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 5  high  think  fast  my-project-41  v2.1.229
+Anthropic(enterprise)  Opus 5  high  think  fast  my-project-41  v2.1.231
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/my-project  feature/x  approved  base:main  A3 M2 ?1 ↑2 1h fix: update logic..
 ⣶     16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h  $4.83
@@ -74,7 +74,7 @@ Foundry  Opus 5  ...                              ← Microsoft Foundry (Azure�
 
 ## Installation
 
-clone して、`~/.claude/settings.json` に 2 キー足すだけです。
+clone して、`~/.claude/settings.json` に 2 キー足すだけです（`CLAUDE_CONFIG_DIR` を設定している場合はそちらの `settings.json`）。
 
 ```bash
 git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git ~/.claude/statusline

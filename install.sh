@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — このリポジトリの statusline を ~/.claude/settings.json に登録する。
+# install.sh — このリポジトリの statusline を settings.json に登録する。
 # 既定は「差分を見せて y/N 確認」。既存設定は保ったままマージし、書き換え前にタイムスタンプ付き
 # バックアップを取る (上書きしない)。詳細は README の Installation 参照。
 set -euo pipefail
@@ -15,7 +15,8 @@ for a in "$@"; do
       cat <<'USAGE'
 usage: ./install.sh [--dry-run] [--yes] [--main-only] [--uninstall]
 
-  ~/.claude/settings.json に statusLine (と subagentStatusLine) を登録します。
+  settings.json に statusLine (と subagentStatusLine) を登録します
+  (既定: ${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json)。
   既定では変更内容を差分で表示して確認を求めます。スクリプトは clone したこの場所を
   絶対パスで参照するので、更新は git pull だけで反映されます。
 
@@ -24,7 +25,7 @@ usage: ./install.sh [--dry-run] [--yes] [--main-only] [--uninstall]
       --main-only  メインの statusLine だけ登録し、サブエージェント行は Claude Code 既定のままにする
       --uninstall  statusLine / subagentStatusLine の登録を外す (他のキーは触らない)
 
-  CLAUDE_SETTINGS=<path>  書き込み先の settings.json を差し替える (既定: ~/.claude/settings.json)
+  CLAUDE_SETTINGS=<path>  書き込み先の settings.json を差し替える
 USAGE
       exit 0 ;;
     *) printf 'unknown option: %s (--help を参照)\n' "$a" >&2; exit 2 ;;
@@ -49,7 +50,9 @@ for f in "${scripts[@]}"; do
 done
 fi
 
-settings="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+# **`CLAUDE_SETTINGS` が外側の既定であること**が壊しうる不変条件 (入れ替えると明示指定を無視する)。
+# `CLAUDE_CONFIG_DIR` を尊重する理由は docs/internals.md の「宛名」節。
+settings="${CLAUDE_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
 _dir="${settings%/*}"; [[ "$_dir" == "$settings" ]] && _dir="."   # スラッシュ無しなら cwd
 # `mkdir -p "$_dir"` はここでは**やらない** — --dry-run が書き込まない保証を壊す。
 # 書き込む直前 (dry-run の bail より後) で作る。

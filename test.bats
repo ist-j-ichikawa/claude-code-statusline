@@ -23,12 +23,17 @@ setup() {
   # キャッシュはテストごとに隔離する。本物 (ユーザーの TMPDIR) を触ると bats 実行中に
   # ライブ statusline へ偽の値が出るため、専用ディレクトリへ逃がす。
   export CLAUDE_STATUSLINE_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
-  # **`CLAUDE_CONFIG_DIR` を必ず落とす** — 宛名の探索は v1.72.0 からこの変数が優先なので、
-  # 設定済みのセッション (案件ごとの切り替え等) から `bats` を回すと偽 HOME より環境変数が勝ち、
-  # 宛名テストが 6 本まとめて偽の赤になる。さらに悪いことに「sessions ディレクトリが無くても…」は
-  # **無条件に緑**になる (実在するディレクトリを読むので未展開 glob の経路に入らず、stderr の
-  # assert が何も pin しなくなる)。PostToolUse hook が編集ごとに bats を回すので必ず踏む。
-  unset CLAUDE_CONFIG_DIR
+  # **スクリプトが読む env seam は必ず落とす** — テストの一部は `env -i` で密閉していないので
+  # (`_peer_pre` は HOME だけ、多くの起動は env 上書きすら無い) 環境変数がそのまま漏れる。
+  # 危険度が高い順に:
+  #   `CLAUDE_SETTINGS`  — install テストが**開発者の実 settings.json に `--yes` で書き込む**
+  #   `CLAUDE_CONFIG_DIR` — 「sessions ディレクトリが無くても…」が**無条件に緑**になる
+  #                        (実在ディレクトリを読み未展開 glob の経路に入らず、stderr の assert が何も pin しない)
+  #   `CLAUDE_CODE_USE_*` — 「Bedrock では extra-usage を出さない」が**検出が壊れていても緑**になる
+  # 偽の赤は自分で申告するが、偽の緑は沈黙するので後者が本番。リストは下のメタテストが強制する。
+  # 行継続で分けない — メタテストは 1 行ごとに `unset` と変数名の同居を見るため
+  unset CLAUDE_SETTINGS CLAUDE_CONFIG_DIR
+  unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
 }
 
 # build_git の background cache 書き込み完了まで polling (最大 ~2秒)
@@ -1065,7 +1070,7 @@ _peer_json() {
   printf '{"pid":777,"sessionId":"aaaaaaaa-1111-2222-3333-444444444444","cwd":"/tmp","kind":"bg","name":"alt-config-session"}' \
     > "$_alt/sessions/777.json"
   result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
-    | env "HOME=$_ph" "CLAUDE_CONFIG_DIR=$_alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+    | "${_peer_pre[@]}" "CLAUDE_CONFIG_DIR=$_alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
   [[ "$result" == *" alt-config-session"* ]]
   [[ "$result" != *"wrong-home-side"* ]]
 }
@@ -1466,12 +1471,28 @@ _peer_json() {
 # ============================================================================
 @test "install: settings.json が無ければ作って絶対パスで両statuslineを登録すること" {
   s="$BATS_TEST_TMPDIR/new/settings.json"
-  CLAUDE_SETTINGS="$s" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --yes >/dev/null
+  # `CLAUDE_CONFIG_DIR` も同時に渡して**罠**にする — `CLAUDE_SETTINGS` の明示指定が
+  # 外側の既定であり続けることを、起動を増やさずに pin する（優先が入れ替わると罠側に書かれる）
+  local trap_="$BATS_TEST_TMPDIR/trapcfg"
+  CLAUDE_SETTINGS="$s" CLAUDE_CONFIG_DIR="$trap_" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --yes >/dev/null
+  [[ ! -e "$trap_/settings.json" ]]
   [[ "$(jq -r .statusLine.command "$s")" == "/bin/bash $BATS_TEST_DIRNAME/statusline-command.sh" ]]
   [[ "$(jq -r .subagentStatusLine.command "$s")" == "/bin/bash $BATS_TEST_DIRNAME/subagent-statusline-command.sh" ]]
   # 未設定なら推奨値が入る
   [[ "$(jq -r .statusLine.refreshInterval "$s")" == "30" ]]
   [[ "$(jq -r .statusLine.hideVimModeIndicator "$s")" == "true" ]]
+}
+
+@test "install: CLAUDE_CONFIG_DIR を既定の書き込み先にすること" {
+  # ハードコードすると、この変数を使っている人は**登録は成功したのに statusline が出ず、
+  # 理由も出ない**状態になる（Claude Code が別の settings.json を読むため）。
+  # `CLAUDE_SETTINGS` の優先は下の `install: settings.json が無ければ…` が罠ディレクトリで見る。
+  # 偽 HOME 側に作られない assert が要点 — 書き先を間違えても「ファイルはできた」で緑になりうる
+  local cd_="$BATS_TEST_TMPDIR/altcfg" home_="$BATS_TEST_TMPDIR/althome"
+  mkdir -p "$home_/.claude"          # `$cd_` は install.sh 自身が作る
+  env "HOME=$home_" "CLAUDE_CONFIG_DIR=$cd_" /bin/bash "$BATS_TEST_DIRNAME/install.sh" --yes >/dev/null
+  [[ "$(jq -r .statusLine.command "$cd_/settings.json")" == "/bin/bash $BATS_TEST_DIRNAME/statusline-command.sh" ]]
+  [[ ! -e "$home_/.claude/settings.json" ]]
 }
 
 @test "install: 既存の他キーとユーザー設定値を壊さないこと(.bakも残る)" {
@@ -1655,6 +1676,41 @@ _peer_json() {
   [ -z "$bad" ] || { printf 'PATH の bash で起動している箇所:\n%s\n' "$bad" >&2; false; }
 }
 
+@test "config dir: ~/.claude を直に書いた箇所が無いこと(CLAUDE_CONFIG_DIR の取りこぼし防止)" {
+  # `CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を移すので、`$HOME/.claude` をハードコードすると
+  # その変数を使っている人の環境で**静かに動かなくなる** — sessions が見つからず宛名が消え、
+  # credentials が読めず subscription と extra-usage が消え、install は書いても読まれない。
+  # 3 箇所を 1 つずつ踏んでから直す形になったので、prose ではなく grep で強制する
+  # (CLAUDE.md の記述は「新規コードを足さない」= forward-only で、既存のハードコードを拾えなかった)。
+  # **コメント行は除外する** — 散文は `~/.claude/sessions/...` のように直接書くので、
+  # `/bin/bash` メタテストの「隣の語で絞る」手が使えない。`path:行番号:` の後が `#` で
+  # 始まる行を落とす (行末コメントだけの言及は拾ってしまうが、そこは実コードと同居する形なので許容)。
+  local bad
+  bad=$(grep -nE '(\$\{?HOME\}?|~)/\.claude' \
+          "$BATS_TEST_DIRNAME/statusline-command.sh" "$BATS_TEST_DIRNAME/lib.sh" \
+          "$BATS_TEST_DIRNAME/subagent-statusline-command.sh" "$BATS_TEST_DIRNAME/install.sh" \
+        | grep -vE ':[0-9]+:[[:space:]]*#' \
+        | grep -v 'CLAUDE_CONFIG_DIR:-' || true)
+  [ -z "$bad" ] || {
+    printf '~/.claude を直書きしている箇所 (${CLAUDE_CONFIG_DIR:-$HOME/.claude} を使うこと):\n%s\n' "$bad" >&2; false; }
+}
+
+@test "env seam: スクリプトが読む CLAUDE_* を setup で必ず落としていること" {
+  # `unset` の列挙は放置すると腐る（このリポは拒否リストを嫌う方針）。スクリプト側が新しい
+  # env seam を読み始めたら、それを setup で export か unset するまでここが赤くなるようにして
+  # 列挙を自己保守にする。**偽の緑が本番の危険** — ambient な `CLAUDE_CODE_USE_BEDROCK` は
+  # 「Bedrock では extra-usage を出さない」を検出が壊れていても通してしまう。
+  local v missing=""
+  for v in $(grep -hoE '\$\{?CLAUDE_[A-Z_]+' \
+               "$BATS_TEST_DIRNAME/statusline-command.sh" "$BATS_TEST_DIRNAME/lib.sh" \
+               "$BATS_TEST_DIRNAME/subagent-statusline-command.sh" \
+             | tr -d '${' | sort -u); do
+    grep -qE "(export|unset)[^#]*\b$v\b" "$BATS_TEST_DIRNAME/test.bats" || missing="$missing $v"
+  done
+  [ -z "$missing" ] || {
+    printf 'setup() で export も unset もしていない env seam:%s\n' "$missing" >&2; false; }
+}
+
 # ============================================================================
 # セッション経過時間 (cost.total_duration_ms) — Line 4
 # ============================================================================
@@ -1774,6 +1830,24 @@ _peer_json() {
   run env "${_stub_pre[@]:1}" /bin/bash -c \
     'printf "%s" "$1" | /bin/bash "$2"' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
   [[ "$output" == *"Anthropic(enterprise)"* ]]
+}
+
+@test "credentials: CLAUDE_CONFIG_DIR 側の credentials から読むこと" {
+  # ハードコードすると別 config dir で **subscription と extra-usage が無言で消える**
+  # (macOS は Keychain が主経路なので気づきにくい)。詳細は docs/internals.md の「宛名」節。
+  # **alt 側に helper の既定と違う種別を置く** — 同じ値にすると、偽 HOME 側の書き込みを
+  # 後から誰かが消したときに両方一致して**無条件に緑**になる
+  _stub_env credcd 'exit 1'          # 偽 HOME 側は helper の既定 (max) のまま
+  local alt="$BATS_TEST_TMPDIR/credcd-alt"
+  mkdir -p "$alt"
+  printf '%s' '{"claudeAiOauth":{"accessToken":"AAAAtest","subscriptionType":"pro"}}' \
+    > "$alt/.credentials.json"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  # `pro` = CLAUDE_CONFIG_DIR 側。`max` なら偽 HOME 側を読んでいる
+  [[ "$(<"$_stub_cache/subscription")" == "pro" ]]
 }
 
 @test "credentials: 読めない credentials で stderr を汚さないこと" {
