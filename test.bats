@@ -40,12 +40,17 @@ setup() {
 # 4 テストで `sleep` 固定にすると合計数秒のオーバーヘッドになるため
 _wait_for_cache() {
   local cache_dir=$1 i f
-  for i in {1..20}; do
+  # **前半は 0.01s 刻み** — 背景の書き込みは実測 4.4ms で着くのに、一律 0.1s だと 1 回目の確認で
+  # 間に合わず 0.1s まるごと眠る (待ちの 96% が無駄な sleep)。呼び出しは 15 箇所あり、
+  # PostToolUse hook が編集ごとに全テストを回すので実測 2.1s / 回の差になる。
+  # 合計タイムアウトは 2.0s → 2.2s でほぼ据え置き (遅いマシンで待ち足りなくならないように)。
+  # `{1..N}` の brace 展開のまま — `$(seq)` にすると 1 呼び出しごとに fork が増える
+  for i in {1..40}; do
     # atomic 書き込みの中間ファイル (.tmp-<pid>) は完成キャッシュではないので無視する
     for f in "$cache_dir"/*; do
       [[ -e "$f" && "$f" != *.tmp* ]] && return 0
     done
-    sleep 0.1
+    if (( i <= 20 )); then sleep 0.01; else sleep 0.1; fi
   done
   return 1
 }
@@ -54,10 +59,11 @@ _wait_for_cache() {
 # `-s` を付けると「存在する」ではなく「非空」まで待つ。
 _wait_for_file() {
   local f=$1 mode=${2:-} i
-  for i in {1..30}; do
+  # 前半 0.01s 刻みの理由は `_wait_for_cache` の注記と同じ。合計は 3.0s → 3.2s で据え置き
+  for i in {1..50}; do
     if [[ "$mode" == "-s" ]]; then [[ -s "$f" ]] && return 0
     else                           [[ -e "$f" ]] && return 0; fi
-    sleep 0.1
+    if (( i <= 20 )); then sleep 0.01; else sleep 0.1; fi
   done
   return 1
 }
