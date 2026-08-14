@@ -23,6 +23,12 @@ setup() {
   # キャッシュはテストごとに隔離する。本物 (ユーザーの TMPDIR) を触ると bats 実行中に
   # ライブ statusline へ偽の値が出るため、専用ディレクトリへ逃がす。
   export CLAUDE_STATUSLINE_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
+  # **`CLAUDE_CONFIG_DIR` を必ず落とす** — 宛名の探索は v1.72.0 からこの変数が優先なので、
+  # 設定済みのセッション (案件ごとの切り替え等) から `bats` を回すと偽 HOME より環境変数が勝ち、
+  # 宛名テストが 6 本まとめて偽の赤になる。さらに悪いことに「sessions ディレクトリが無くても…」は
+  # **無条件に緑**になる (実在するディレクトリを読むので未展開 glob の経路に入らず、stderr の
+  # assert が何も pin しなくなる)。PostToolUse hook が編集ごとに bats を回すので必ず踏む。
+  unset CLAUDE_CONFIG_DIR
 }
 
 # build_git の background cache 書き込み完了まで polling (最大 ~2秒)
