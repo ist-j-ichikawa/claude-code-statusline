@@ -99,8 +99,9 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | output style (`default` 以外のときだけ) | 白 (Line 1 に唯一残っていた「色相を持たない」枠。Agent 名のピンク 213 と被らせないため) | 38;5;231 |
 | 進行中の git 操作 (`rebase 2/5` / `merge` / `cherry-pick` / `revert` / `bisect`、Line 3 の先頭) | 赤 (detached / conflicts と同じ「特別な git 状態」) | 31 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
-| Git 追加行 `+N` / ahead `↑` | 緑 | 32 |
-| Git 削除行 `-N` / conflicts `!N` / behind `↓` / Detached HEAD | 赤 | 31 |
+| Git 追加行 `+N` / ahead `↑` | muted green (**ANSI 32 ではなく 256 色を明示** — ANSI は端末テーマが olive に化かす実測) | 38;5;71 |
+| Git 削除行 `-N` / behind `↓` | muted rose (同上。ANSI 31 は brick に化ける) | 38;5;131 |
+| conflicts `!N` / Detached HEAD | 赤 (**アラームの赤**。「量」の 71/131 と役割を分ける) | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
 | last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
 | コンテキストの分母 (`/200k`・`/1M` 等を常時表示。値が来ていない旧 CC のみ無印) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |

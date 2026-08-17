@@ -13,6 +13,14 @@ readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
+# 変更行数と ahead/behind の色。**ANSI 31/32 を使わない** — あれは端末テーマがマップし直すので、
+# 実測では olive (#b5bf70) と brick (#c36c68) に化けて「緑と赤」に見えなかった (ユーザーの
+# スクリーンショットから採色。2026-08-17)。**256 色を明示するとテーマに依存しない**。
+# 値は Claude Desktop の code 画面の diff 色に合わせた実測値 (#51a565 / #aa5e6c) の最近傍。
+# **アラームの赤 (ANSI 31) とは分ける** — `!N` コンフリクト / detached / コンテキスト 90%+ /
+# 遅れた版は「問題」、`+N -N ↑N ↓N` は「量」なので、色の役割を混ぜない。
+readonly DIFF_ADD=$'\033[38;5;71m'    # muted green  (#5faf5f)
+readonly DIFF_DEL=$'\033[38;5;131m'   # muted rose   (#af5f5f)
 readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL の両方がここから派生する
 readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 # 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。

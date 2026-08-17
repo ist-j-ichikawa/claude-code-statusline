@@ -670,10 +670,10 @@ render_git() {
   # `+`/`-` との桁揃えが崩れる。`U` は git の `--diff-filter=U` 由来の内部語彙なので使わない。
   # `?` は旧 untracked 表示を廃止したので空いており、`!` と衝突しない。
   [[ "$conflicts" =~ ^[0-9]+$ ]] && ((conflicts > 0)) && line_git+=("${RED}!${conflicts}${RST}")
-  [[ "$ins" =~ ^[0-9]+$ ]] && ((ins > 0)) && line_git+=("${GRN}+${ins}${RST}")
-  [[ "$del" =~ ^[0-9]+$ ]] && ((del > 0)) && line_git+=("${RED}-${del}${RST}")
-  [[ "$ahead"  =~ ^[0-9]+$ ]] && ((ahead > 0))  && line_git+=("${GRN}↑${ahead}${RST}")
-  [[ "$behind" =~ ^[0-9]+$ ]] && ((behind > 0)) && line_git+=("${RED}↓${behind}${RST}")
+  [[ "$ins" =~ ^[0-9]+$ ]] && ((ins > 0)) && line_git+=("${DIFF_ADD}+${ins}${RST}")
+  [[ "$del" =~ ^[0-9]+$ ]] && ((del > 0)) && line_git+=("${DIFF_DEL}-${del}${RST}")
+  [[ "$ahead"  =~ ^[0-9]+$ ]] && ((ahead > 0))  && line_git+=("${DIFF_ADD}↑${ahead}${RST}")
+  [[ "$behind" =~ ^[0-9]+$ ]] && ((behind > 0)) && line_git+=("${DIFF_DEL}↓${behind}${RST}")
 
   # Last commit: age + 20 字に切った message
   if [[ -n "$age" && -n "$msg" ]]; then

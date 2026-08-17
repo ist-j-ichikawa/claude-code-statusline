@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.74.1-blue)
+![Version](https://img.shields.io/badge/version-1.75.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -63,11 +63,11 @@ Line 3 の変更表示は **Claude Desktop の code 画面と同じ単位と色*
 
 | 記号 | 意味 | 色 | 単位 |
 |---|---|---|---|
-| `+42` | 追加された行 | 緑 | 行 |
-| `-17` | 削除された行 | 赤 | 行 |
-| `!2` | コンフリクト中のファイル | 赤 | ファイル |
-| `↑2` | origin より進んでいるコミット | 緑 | コミット |
-| `↓1` | origin より遅れているコミット | 赤 | コミット |
+| `+42` | 追加された行 | 緑 (256 色で明示。端末テーマに左右されません) | 行 |
+| `-17` | 削除された行 | 赤 (同上) | 行 |
+| `!2` | コンフリクト中のファイル | 赤 (**注意を促す赤**。行数の赤とは別の色) | ファイル |
+| `↑2` | origin より進んでいるコミット | 緑 (行数と同じ) | コミット |
+| `↓1` | origin より遅れているコミット | 赤 (行数と同じ) | コミット |
 
 行数に畳まれるもの:
 
