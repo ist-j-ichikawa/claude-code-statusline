@@ -52,11 +52,43 @@ cache_fmt_is() {
   [[ "$_cur" == "$_tag" ]]
 }
 
+# prefetch_mtimes FILE... — **1 回の `stat` で mtime をまとめて取る**。`cache_stale` はこの結果を
+# 使うので、3 つの stale 判定で `stat` を 3 回 fork しない（実測 9.802ms → 3.146ms = **-6.7ms**、
+# 暖まった描画の 16%。「制限あり 41.5ms / なし 31.0ms」の差はほぼこれだった）。
+# **`stat` の出力をそのまま表として使う**（`%N %m` = 「パス 空白 mtime」の行）— 自前の区切りに
+# 詰め直すと、書く側と読む側で区切りの綴りを一致させ続ける必要が出るだけで何も増えない。
+# **キーは行頭でアンカーする**（先頭に `\n` を 1 個足す）— 名前で引くので、欠損ファイルで行が
+# ずれて**別ファイルの mtime を読む**罠に当たらない（`%m` だけだと実測で 3 番目の値が 2 番目に入る）。
+# map に無いファイルは `cache_stale` が個別 `stat` に落ちる（= 従来の挙動）。
+prefetch_mtimes() {
+  _MTIME_AT_START=""
+  # 末尾改行が無くても `read` は内容を入れる（rc は見ない。このリポで繰り返し踏んでいる罠）
+  IFS= read -r -d '' _MTIME_AT_START < <(stat -f '%N %m' "$@" 2>/dev/null) || true
+  _MTIME_AT_START=$'\n'"$_MTIME_AT_START"
+}
+
 cache_stale() {
-  local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE}
-  [[ ! -f "$cache" ]] && return 0
-  local age=$(( _NOW - $(stat -f %m "$cache" 2>/dev/null) ))
-  ((age > max_age))
+  local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE} _mt=""
+  # キーは 1 回だけ組む（3 度綴ると 1 つ typo しても黙って個別 `stat` に落ちるだけでテストは緑）。
+  # **`local` を別行にする** — bash 3.2 は `local a=$1 b="…$a…"` を先に全部展開するので、
+  # 同じ `local` 行で `$cache` を参照すると `set -u` で "unbound variable" になる。
+  local _k=$'\n'"$cache "
+  # **`-f` が「不在」と「通常ファイルでない」を 1 箇所で吸う**（まとめ取りの前に置く）—
+  # `stat` はディレクトリや FIFO にも成功するので map にも入る。後ろに置くと、`md5` が PATH に
+  # 無く `_gc` が git/ ディレクトリに落ちた時だけ判定を素通りする。
+  [[ -f "$cache" ]] || return 0
+  # まとめ取りの結果があれば fork ゼロで引く（行頭アンカーなので行ずれの影響を受けない）
+  if [[ "${_MTIME_AT_START:-}" == *"$_k"* ]]; then
+    _mt="${_MTIME_AT_START#*"$_k"}"; _mt="${_mt%%$'\n'*}"
+  else
+    _mt=$(stat -f %m "$cache" 2>/dev/null)
+  fi
+  # **ファイルはあるが mtime が読めない時は「古くない」に倒す**（`/code-review` 指摘）—
+  # `return 0` にすると `stat` が壊れた環境で 3 つのキャッシュが毎レンダー stale になり、
+  # 背景 git + `curl` が `refreshInterval` ごとに走る storm になる（このリポが名指しで
+  # 避けている破綻）。鮮度が分からないなら取り直さないほうが安全。
+  [[ "$_mt" =~ ^[0-9]+$ ]] || return 1
+  (( _NOW - _mt > max_age ))
 }
 
 # --- キャッシュの形式タグ ---
@@ -73,6 +105,11 @@ cache_stale() {
 # **必ずこの一覧を編集する**ので番号より忘れにくい / 一致しなければ即取り直すので
 # 「古い形式のファイルが TTL 分だけ表示を欠かせる」が起きない。読みは fork ゼロのまま。
 readonly GIT_FMT='branch,detached,repo,remote,ins,del,conf,ahead,behind,age,msg,op'
+# `render_git` が使う変数名の列（宣言と分解の 2 箇所を 1 本から作る）。**`GIT_FMT` とは別に持つ** —
+# 名前がずれており（`repo`/`conf` 対 `repo_id`/`conflicts`）、揃えて導出させると**ディスクの形式タグを
+# 編集した人が bash のローカル変数名を暗黙にリネームする**ことになり、関数本体は旧名を参照して
+# `set -u` で statusline が丸ごと空白になる。別々なら、タグ編集は「facts を捨てて cold-start」に倒れる。
+readonly GIT_FIELDS='branch detached repo_id remote ins del conflicts ahead behind age msg op'
 readonly SUB_FMT='type,tier'
 readonly USAGE_FMT='cents,limits'
 readonly RESET_FMT='e5,t5,e7,t7'
@@ -296,7 +333,7 @@ render_scoped_limits() {
 
 # --- Reset-time memo (stdin 由来の epoch → 表示文字列) ---
 # **`date` を叩くのは epoch が変わったときだけ** = 5h / 7d に 1 回。従来は毎レンダー 2 回叩いていて、
-# 実測で `date -j` 1 回 4.15ms × 2 = 約 8ms、warm render 52ms の **15%** を占めていた。
+# 実測で `date -j` 1 回 4.15ms を 1 描画に 2 回 = 約 8ms 払っていた。
 # リセット時刻の epoch はリセットまで動かないので、整形結果を覚えておけば丸ごと省ける
 # (使用率そのものは使うたび変わるのでキャッシュ不可 — 覚えるのは epoch→時刻の写像だけ)。
 #
@@ -409,7 +446,7 @@ resolve_version_color() {
 
 
 # --- JSON extraction (single jq call) ---
-IFS= read -r -d '' input || true
+# **stdin は変数に読まない** — `$( )` が継承するので、渡し直す口（here-string / プロセス置換）が要らない。
 
 # Initialize all jq variables — prevents set -u instant death if eval fails
 model="" model_id="" current_dir="." used_pct=""
@@ -455,7 +492,7 @@ _jq_out=$(jq -r '
   @sh "output_style=\(.output_style.name // "")",
   @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)",
   @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)"
-' <<< "$input" 2>/dev/null) || _jq_ok=0
+' 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 
 # Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
@@ -474,7 +511,7 @@ fi
 # 表示は render_git() が一手に引き受ける。事実だけをキャッシュするのが要点:
 #  - レコードは **`GIT_FMT` タグ + 12 フィールド**: branch detached repo_id remote ins del
 #    conflicts ahead behind age msg op（位置で読むので、この一覧と `GIT_FMT` と `render_git` の
-#    `read` は常に同時に直す）
+#    分解ループの変数列は常に同時に直す）
 #  - 3 経路 (非 detached / detached / cold-start) で gate を揃える必要が消える
 #    — cold-start は「多くのフィールドが空の facts」に退化するだけで、判断は presenter に 1 箇所化される
 #  - cache key は md5(dir) だけなので、stdin 由来値 (pr.review_state 等) を混ぜると同一 dir の
@@ -659,9 +696,18 @@ build_git() {
 # 参照する。グローバル参照にすると「Line 2 区画の後で呼ぶ」という暗黙の順序依存になり、
 # 並べ替えたときに **fallback が黙って別の値を使って畳みが効かなくなる** (テストも stderr も赤くならない)。
 render_git() {
-  local branch detached repo_id remote ins del conflicts ahead behind age msg op
+  # 宣言と分解は `GIT_FIELDS` の 1 本から作る（`local $var` の word splitting は bash 3.2 で動く）
+  local $GIT_FIELDS
   local screen_dir="${2:-$current_dir}"
-  IFS=$'\037' read -r branch detached repo_id remote ins del conflicts ahead behind age msg op <<< "$1"
+  # **here-string を使わない** — bash 3.2 の `<<<` は一時ファイルを作るので、`read <<<` は
+  # 実測 1.679ms（パラメータ展開の分割なら 0.083ms）。hot path なので毎描画に乗る。
+  # **末尾に US を 1 個足す**と「区切りが残っているか」の分岐が要らなくなる — 尽きた後は
+  # 空文字が続き、フィールド数より短いレコード（cold-start の 2 個）でも残りが空になる。
+  local _rest="$1"$'\037' _f
+  for _f in $GIT_FIELDS; do
+    printf -v "$_f" '%s' "${_rest%%$'\037'*}"
+    _rest="${_rest#*$'\037'}"
+  done
   [[ -z "$branch" ]] && return
 
   # .invalid: Git が空リポ (git init 直後 / clone 失敗残骸) の HEAD に使う placeholder
@@ -751,6 +797,14 @@ if ((_jq_ok == 0)); then
   printf '%s\n\n\n' "${line1[*]}"
   exit 0
 fi
+
+# --- キャッシュの mtime をまとめて取る（実測と仕組みは `prefetch_mtimes` の頭に 1 箇所だけ）---
+# ここで守るのは**順序**だけ: ① `git_cache_file` でパスを確定してから渡す ② **jq 失敗の bail より
+# 後**（前に置くと捨てる結果のために `md5` と `stat` を fork し、キャッシュ dir まで作る）
+# ③ 3 つの stale 判定より前。**取った値は描画開始時点のスナップショット**なので、この描画中に
+# 自分が書き換えるファイル（`resolve_resets` の `$RESET_CACHE` 等）を渡してはいけない。
+git_cache_file "$current_dir"
+prefetch_mtimes "$SUB_CACHE" "$USAGE_CACHE" "$_gc"
 
 # Vim mode badge (Claude Code 2.1.x vim.mode) — leftmost so it catches the eye while typing.
 # Claude Code's footer shows a dim "-- INSERT --" hint; this badge is intentionally louder.
@@ -896,8 +950,11 @@ fi
 # `SendMessage`/`ListAgents` のアドレスは `~/.claude/sessions/<pid>.json` の `name` (cwd 由来 derived)。
 # **undocumented な内部ファイル** (docs にも CHANGELOG にも無い) なので読めなければ何も出さない。
 # 出す理由・却下した表記・付与率の実測は docs/internals.md の「宛名」節にある (ここには
-# 編集時に壊しうる不変条件だけ置く)。**fork ゼロを保つこと** — キャッシュ (`cache_stale` の stat)
-# を足すと、それだけでこのループより高くつく。
+# 編集時に壊しうる不変条件だけ置く)。**キャッシュを持たせないこと** — 理由はコストではなく
+# **宛名が走行中に書き換わる**こと (`/rename` `/branch` が `name` を書き換え、背景セッションは
+# 8 桁 id → AI タイトルへ変わる)。キャッシュすると死んだ宛先を出し続ける = SendMessage の誤配。
+# (v1.81.0 まではコストも理由だったが、`prefetch_mtimes` の引数に足せば stat は増えないので
+# その論拠は消えた。fork ゼロ自体は維持する。)
 peer_name=""
 # gate は**性能のため**で、挙動の防御は下の id 照合が単独で担う (空 id はどのファイルにも一致しない)。
 # 未取得時に glob 展開ごと省ける (bash は非選択の分岐で glob を展開しない)。
@@ -1024,7 +1081,6 @@ fi
 line_git=()
 
 # Git info (background refresh)
-git_cache_file "$current_dir"
 # **タグを検証してから使う** — 一致しなければ「無い」扱いにして cold-start に落ち、同時に背景 build を
 # 起こす (TTL を待たない)。読みは `read` で fork ゼロ (`$(<file)` は bash 3.2 でコマンド置換 = fork)
 _git_facts="" _gc_raw=""

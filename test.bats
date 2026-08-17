@@ -136,6 +136,25 @@ _stub_env() {
              "CLAUDE_STATUSLINE_CACHE_DIR=$_stub_cache")
 }
 
+# _count_cmd DIR NAME LOG — NAME の**起動回数**を数える偽コマンドを DIR に置く（実体へ exec する
+# ので挙動は変わらない）。ログは 1 起動 1 行 `called <args>` なので `grep -c .` で回数、
+# `grep -c -- '<arg>'` で引数も見られる。fork / メモ化の回帰は表示では見えないのでこれで見る。
+# **ログのパスは埋め込む** — 環境変数で渡すと呼び出し側が `env` に並べ忘れて `>> ""` になる。
+# **先に `rm -f` する** — `_stub_env` の偽 PATH は実体への symlink なので、上書きしようとすると
+# 実体（`/usr/bin/stat` 等）へ書きに行って "Operation not permitted" で失敗する。
+# **exec 先は BSD 版に固定する** — `command -v` だけだと homebrew coreutils の gnubin が PATH に
+# ある機体で GNU 版に化け、`stat -f` / `date -j` が失敗して「原因の読めない赤」になる。
+_count_cmd() {
+  local dir=$1 name=$2 log=$3 real
+  # **絶対パスを強制する** — 相対や変数名を渡すと、偽コマンドが**リポ直下にログを作る**
+  # （実際に `FAKE_GIT_LOG` 等 3 個を作った。ここは本番のスクリプトが置かれている場所）
+  [[ "$log" == /* ]] || { echo "_count_cmd: ログは絶対パスで渡す（受け取った値: $log）" >&3; return 1; }
+  real=$(PATH=/usr/bin:/bin command -v "$name") || real=$(command -v "$name")
+  mkdir -p "$dir"; rm -f "$dir/$name"
+  printf '%s\n' '#!/bin/bash' "echo \"called \$*\" >> $(printf %q "$log")" "exec $real \"\$@\"" > "$dir/$name"
+  chmod +x "$dir/$name"
+}
+
 # ============================================================================
 # has_val — 値の有無を判定すること
 # ============================================================================
@@ -2519,10 +2538,9 @@ _os_run() {
   # 秒を跨がせる固定 sleep も要る（実測 1.5s でスイート最遅だった。`/simplify` 指摘）。
   local bin="$BATS_TEST_TMPDIR/nogitbin" log="$BATS_TEST_TMPDIR/nogitlog" d="$BATS_TEST_TMPDIR/nogitcache"
   mkdir -p "$bin" "$d"
-  printf '%s\n' '#!/bin/bash' 'echo called >> "$FAKE_GIT_LOG"' 'exec /usr/bin/git "$@"' > "$bin/git"
-  chmod +x "$bin/git"
+  _count_cmd "$bin" git "$log"
   local j='{"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}'
-  _render() { printf '%s' "$j" | env "PATH=$bin:$PATH" "FAKE_GIT_LOG=$log" \
+  _render() { printf '%s' "$j" | env "PATH=$bin:$PATH" \
     "CLAUDE_STATUSLINE_CACHE_DIR=$d" /bin/bash statusline-command.sh >/dev/null 2>&1; }
   : > "$log"; _render
   _wait_for_file "$d/git/$(md5 -q -s /tmp)" \
@@ -2545,6 +2563,53 @@ _os_run() {
   plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"workspace\":{\"current_dir\":\"$d\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
   [[ "$plain" == "am 2/5"* ]]
   [[ "$plain" != *"rebase"* ]]
+}
+
+@test "キャッシュ: mtime をまとめて 1 回の stat で取ること" {
+  # 3 つの stale 判定で個別に `stat` を呼ぶと fork が 3 個になる（実測 9.802ms、暖まった描画の
+  # 16%）。**1 回のまとめ取り**に寄せた（`/simplify` の効率担当が計測）。
+  # 偽 `stat` の**起動回数**で見る（時間で測ると環境差で flaky になる）。
+  # **`NO_NET` を使わない** — あれは subscription と usage の stale 判定ごと短絡するので、
+  # まとめ取りを外しても stat が 1 回のままになり「常に緑」になる（実際にこの形で書いて
+  # pin できていなかった）。`_stub_env` で偽 PATH/HOME と失敗する curl を用意し、
+  # **3 つの判定が全部走る**状態にする。
+  _stub_env statcnt 'exit 1'
+  local log="$BATS_TEST_TMPDIR/statlog"
+  _count_cmd "$_stub_bin" stat "$log"
+  mkdir -p "$_stub_cache/git"
+  printf 'type,tier\037max\037default_claude_max_5x' > "$_stub_cache/subscription"
+  printf 'cents,limits\0370\n' > "$_stub_cache/usage_spend"
+  : > "$_stub_cache/git/$(md5 -q -s /tmp)"
+  : > "$log"
+  printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  # 1 回であることの assert が到達証跡も兼ねる（0 なら「stat に到達していない」= テストが無意味）
+  local n; n=$(grep -c . "$log")
+  [[ "$n" == "1" ]] || { echo "stat の起動が $n 回（0 なら stat に到達していない = テストが無意味）" >&3; false; }
+}
+
+@test "キャッシュ: まとめ取りで欠損ファイルがあっても別ファイルの mtime を読まないこと" {
+  # `stat -f '%m' f1 f2 f3` は**欠損があると行がずれる**ので、パスも出して名前で
+  # 突き合わせないと別ファイルの mtime を読む（実測で確認済みの罠）。
+  # **観測対象は「欠損の直後にある引数」にする** — 欠損行は stdout に出ないので、ずれは
+  # 「後ろの値が前のスロットに入る」方向にしか起きない。prefetch の引数順は
+  # subscription, usage, git なので、**最後の git は構造的に誤った mtime を受け取れず**、
+  # git で assert すると位置引きの実装でも緑になる（この形で書いて pin できていなかった）。
+  # subscription を欠損 → usage は現行タグだが古い（取り直すべき）→ git は新鮮な実ファイル。
+  # 位置引きだと usage のスロットに git の新鮮な mtime が入り、300s の抑止が誤って効いて
+  # curl に到達しない。**3 つ目の git を置くのが load-bearing** — 無いと usage が map から
+  # 落ちて個別 `stat` の正しい値に戻り、mutation が緑に戻る。
+  # `NO_NET` も使えない（usage の取得ごと止まり唯一の観測窓が塞がる）。
+  _stub_env candmix ': > "$HOME/curl-called"; exit 1'
+  # subscription は**置かない** = 欠損（`stat` の先頭の引数。`_stub_env` はキャッシュ dir を作らない）
+  mkdir -p "$_stub_cache/git"
+  printf 'cents,limits\0370\n' > "$_stub_cache/usage_spend"
+  touch -t 202001010000 "$_stub_cache/usage_spend"      # 現行タグだが古い
+  : > "$_stub_cache/git/$(md5 -q -s /tmp)"              # 新鮮
+  printf '%s' '{"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_file "$_stub_home/curl-called" \
+    || { echo "古い usage キャッシュが取り直されていない = 別ファイルの mtime を読んだ" >&3; false; }
 }
 
 @test "Git facts: タグの違うキャッシュを使わず作り直すこと" {
@@ -2840,14 +2905,12 @@ print(r.stdout.split(chr(10))[2])
   # **偽 `date` を PATH に置いて呼び出し回数を数える** — 表示だけ見ても「メモが効いているか」は
   # 分からず、fork が戻っても緑のままになる。
   local bin="$BATS_TEST_TMPDIR/rbin" log="$BATS_TEST_TMPDIR/rlog" c="$BATS_TEST_TMPDIR/rcache"
-  mkdir -p "$bin"
-  printf '%s\n' '#!/bin/bash' 'echo "$*" >> "$FAKE_DATE_LOG"' 'exec /bin/date "$@"' > "$bin/date"
-  chmod +x "$bin/date"
+  _count_cmd "$bin" date "$log"
   local now j
   now=$(date +%s)
   j=$(jq -nc --argjson f $((now + 7200)) --argjson w $((now + 300000)) \
     '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:48},rate_limits:{five_hour:{used_percentage:45,resets_at:$f},seven_day:{used_percentage:9,resets_at:$w}}}')
-  _render() { printf '%s' "$j" | env PATH="$bin:$PATH" FAKE_DATE_LOG="$log" \
+  _render() { printf '%s' "$j" | env PATH="$bin:$PATH" \
     CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh"; }
   # 1 回目: _NOW + 5h + 週間 の 3 回
   : > "$log"; _render >/dev/null
