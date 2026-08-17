@@ -68,6 +68,42 @@ _wait_for_file() {
   return 1
 }
 
+# _strip — stdin から ANSI (SGR) を落とす。**このファイルで剥がし方を 1 つに保つ** —
+# `perl -pe` と `sed` の 2 記法が混ざると「どちらを直せばいいか」が読めなくなる (実際に分裂した)。
+_strip() { sed $'s/\033\\[[0-9;]*m//g'; }
+
+# _wait_for_mtime FILE EPOCH — FILE の mtime が EPOCH より新しくなるまで待つ。
+# 「内容は同じだが touch された」を見たいテスト用（`_wait_for_file` は存在/非空しか見られない）。
+# **刻みは既存 2 ヘルパーと同じ 2 段ラダー**（前半 0.01s）。`{1..N}` のまま — `$(seq)` にすると
+# 1 呼び出しごとに fork が増える。
+_wait_for_mtime() {
+  local f=$1 since=$2 i
+  for i in {1..50}; do
+    [[ -e "$f" ]] && (( $(stat -f %m "$f") > since )) && return 0
+    if (( i <= 20 )); then sleep 0.01; else sleep 0.1; fi
+  done
+  return 1
+}
+
+# _repo_at DIR — commit 1 個の git repo を作る（各テストが init+config+commit を書き写さない）
+_repo_at() {
+  mkdir -p "$1"
+  git -C "$1" init -q
+  git -C "$1" -c user.email=t@t -c user.name=t commit --allow-empty -qm init
+}
+
+# _line3_of JSON — JSON を渡して **cold → キャッシュ待ち → warm** の Line 3（ANSI つき）を返す。
+# この 4 行の手順が各テストに写されていたので 1 箇所に寄せた。色を見るテストがあるので**剥がさない**
+# （必要なら呼び出し側で `| _strip`）。`/bin/bash …statusline-command.sh` のリテラルはここに残す
+# — bash 3.2 メタテストが起動形を走査する対象なので、ヘルパー内でも同じ形で書く。
+_line3_of() {
+  local j=$1
+  rm -f "$CLAUDE_STATUSLINE_CACHE_DIR/git"/* 2>/dev/null
+  printf '%s' "$j" | /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$CLAUDE_STATUSLINE_CACHE_DIR/git"
+  printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p'
+}
+
 # _stub_env DIRNAME [CURL_BODY] — 密閉した HOME + PATH を組み、`env -i` に渡す前置きを _stub_pre に入れる。
 # statusline が fork するコマンドだけを PATH に置くので、`security` は**入らない** =
 # Keychain 経路を外してファイル fallback を必ず通る。CURL_BODY を渡すと偽 curl を置く。
@@ -359,20 +395,27 @@ _stub_env() {
 # ============================================================================
 # 統合テスト: Effort & Thinking — 推論努力と拡張思考が正しく表示されること
 # ============================================================================
-@test "Effort: effortレベル名がlight purple(38;5;105)で表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"high"}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *$'\033[38;5;105m'"high"* ]]
-  [[ "$result" != *"effort:"* ]]
-}
-
-@test "Effort: 全レベルで同色(level severityは文字で読み分け)になること" {
-  low=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"low"}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  max=$(echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"max"}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$low" == *$'\033[38;5;105m'"low"* ]]
-  [[ "$max" == *$'\033[38;5;105m'"max"* ]]
+@test "Effort: レベルごとに色が変わること(Claude Code の /effort ピッカー準拠)" {
+  # 旧「light purple で出ること」テストはこのランプ側に統合した (high の arm は下で pin される)。
+  # ラベル (`effort:`) を付けないことも同時に見る
+  # 単色だった頃は `high` と `max` を色で区別できなかった。
+  # low=gold → medium=green → high=薄紫 → xhigh=濃紫 → max=多色 のランプ。
+  # 色は**生のリテラル**で assert する — 定数で書くとどんな値でも通り、無断の再調整を検出できない。
+  _eff() { echo '{"model":{"id":"claude-opus-4-7","display_name":"Opus 4.7"},"version":"2.1.128","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"effort":{"level":"'"$1"'"}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1; }
+  [[ "$(_eff low)"    == *$'\033[38;5;178m'"low"*    ]]
+  [[ "$(_eff medium)" == *$'\033[38;5;71m'"medium"*  ]]
+  [[ "$(_eff high)"   == *$'\033[38;5;105m'"high"*   ]]
+  [[ "$(_eff xhigh)"  == *$'\033[38;5;99m'"xhigh"*   ]]
+  # max は多色 (1 文字ずつ ANSI が入るのでリテラル一致は効かない)。紫→桃→橙の 3 ストップ。
+  m=$(_eff max)
+  [[ "$m" == *$'\033[38;5;99m'"m"*   ]]
+  [[ "$m" == *$'\033[38;5;170m'"a"*  ]]
+  [[ "$m" == *$'\033[38;5;209m'"x"*  ]]
+  # 未知のレベルは既定の薄紫に落ちる (上流がレベルを増やしても無色にならない)
+  [[ "$(_eff someday)" == *$'\033[38;5;105m'"someday"* ]]
+  # ラベルは付けない (値だけ)
+  [[ "$(_eff high)" != *"effort:"* ]]
 }
 
 @test "Thinking: thinking.enabled=trueでlight cyan(38;5;117)のthinkが表示されること" {
@@ -465,9 +508,140 @@ _stub_env() {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   echo 214 > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   [[ "$result" == *'extra:$2.14'* ]]
+}
+
+@test "週間枠: limits[] 由来のモデル別枠が名前つきで出ること" {
+  # stdin の rate_limits は five_hour/seven_day だけなので、モデル別の週間制限は
+  # `/usage` の limits[] から来る (同じ curl の結果なので追加ネットワークゼロ)。
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  # 1 行目 = cents、2 行目以降 = 名前 US % US epoch
+  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  # **多色モデルは名前のリテラル一致が効かない** (1 文字ずつ ANSI が入る) ので ANSI を剥がす
+  local plain
+  plain=$(printf '%s' "$result" | _strip)
+  [[ "$plain" == *"Fable:39%"* ]]
+  # 色は Line 1 と同じ model_color。**生のリテラルで assert** する — 定数で書くと
+  # どんな値でも通り、無断の再調整を検出できない (FABLE_PAL の先頭 = 178)
+  [[ "$result" == *'38;5;178m'* ]]
+}
+
+@test "週間枠: /usage のレスポンスから枠を抽出できること(偽 curl で本番経路を通す)" {
+  # 他の枠テストは**キャッシュを直接置く**ので抽出 jq が一度も実行されず、壊しても全緑だった
+  # (v1.74.0 のレビューで発見)。ここだけ偽 curl で背景 fetch の経路を通し、jq 側を pin する。
+  # `06:59:59.987654` は**分丸めの pin** — 切り捨てだと 06:59 になり、実測でこの揺れが起きる
+  # (同じリセットが 06:59:59.987654 と 07:00:00.155204 の両方で返る)。
+  # `38.6` は `| round` の pin。weekly 以外の枠・% が数値でない枠が落ちることも同時に見る。
+  local fixture="$BATS_TEST_TMPDIR/usage.json"
+  printf '%s' '{"spend":{"used":{"amount_minor":214,"exponent":2}},"limits":[
+    {"kind":"weekly_scoped","group":"weekly","percent":38.6,"resets_at":"2026-08-15T06:59:59.987654+00:00","scope":{"model":{"display_name":"Fable"}},"is_active":true},
+    {"kind":"weekly_scoped","group":"weekly","percent":"bad","resets_at":"2026-08-15T07:00:00.000000+00:00","scope":{"model":{"display_name":"Broken"}}},
+    {"kind":"five_hour","group":"five_hour","percent":10,"resets_at":"2026-08-15T07:00:00.000000+00:00","scope":{"model":{"display_name":"Hourly"}}}]}' \
+    > "$fixture"
+  # 偽 curl は `cat` を使えない (PATH に置いていない) ので bash 組み込みだけで返す
+  _stub_env limits "$(printf 'printf "%%s" "$(< %s)"' "$fixture")"
+  echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_file "$_stub_cache/usage_spend" -s \
+    || { echo "背景 fetch がキャッシュに届いていない = テストが無意味" >&3; return 1; }
+  local cache exp
+  cache=$(< "$_stub_cache/usage_spend")
+  # 期待するリセット表示は TZ 依存なので、07:00Z を this machine のローカルに直して比べる
+  exp=$(date -j -f '%Y-%m-%dT%H:%M:%S %z' '2026-08-15T07:00:00 +0000' +'%a %H:%M')
+  [[ "$(printf '%s' "$cache" | sed -n '1p')" == "214" ]]        # cents (1 行目)
+  [[ "$cache" == *"Fable"$'\037'"39"$'\037'"$exp"* ]]           # 名前 US 丸めた% US 分丸めしたリセット
+  [[ "$cache" != *"Broken"* ]]                                  # 型不正の枠は落ちる
+  [[ "$cache" != *"Hourly"* ]]                                  # weekly 以外は入らない
+  # キャッシュが新鮮になったので、次の描画は refetch せずこの値を出す
+  local plain
+  plain=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh 2>/dev/null \
+    | sed -n '5p' | _strip)
+  [[ "$plain" == *"Fable:39% $exp"* ]]
+  [[ "$plain" == *'extra:$2.14'* ]]
+}
+
+@test "週間枠: 取得失敗で既存のキャッシュを消さないこと(延命する)" {
+  # Wi-Fi 断や `curl -m 4` のタイムアウトで空応答になったとき、上書きすると
+  # **ディスクに良い値があるのに extra:$ と全枠が 300s 消える** (code-review 指摘)。
+  # `fetch_subscription` と同じく touch で延命し、storm も防いだまま表示を保つ。
+  _stub_env usagefail 'exit 1'          # curl は失敗する
+  mkdir -p "$_stub_cache"
+  printf '214\nFable\03739\037Sat 16:00' > "$_stub_cache/usage_spend"
+  # cache_stale を必ず踏ませる (300s より古くする)
+  touch -t 202001010000 "$_stub_cache/usage_spend"
+  # 描画は背景 fetch を起こすためだけに 1 回走らせる (出力は見ない)
+  echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  # 背景の fetch が終わるのを待つ (mtime が新しくなる = touch された)
+  _wait_for_mtime "$_stub_cache/usage_spend" 1600000000 \
+    || { echo "背景 fetch が届いていない = テストが無意味" >&3; return 1; }
+  local rec
+  rec=$(< "$_stub_cache/usage_spend")
+  [[ "$rec" == "214"$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]   # 内容は消えていない (touch だけ)
+}
+
+@test "週間枠: 旧形式キャッシュ(cents 1行)でも extra が出て枠が0件になること" {
+  # 形式が 1 行 → 複数行に増えたが、旧キャッシュは最大 300s 残る。その間 extra:$ は出続け、
+  # 枠は 0 件になるだけ (ファイル名の版を上げない判断の pin)。
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend   # 旧形式
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  [[ "$result" == *'extra:$2.14'* ]]
+  [[ "$result" != *':39%'* ]]
+}
+
+@test "週間枠: 壊れた枠の行を落として他の枠とcentsが生き残ること" {
+  # 1 枠の形式不正で全体が消えないこと。cents は 1 行目にあるので枠の破損に巻き込まれない。
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  # 2 行目 = % が数値でない(落ちる) / 3 行目 = 正常 / 4 行目 = 名前が空(落ちる)
+  printf '214\nBroken\037abc\037Sat 16:00\nFable\03739\037Sat 16:00\n\03712\037Sat 16:00' \
+    > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  local plain
+  plain=$(printf '%s' "$result" | _strip)
+  [[ "$plain" == *"Fable:39%"* ]]      # 正常な枠は出る
+  [[ "$plain" != *"Broken"* ]]         # 壊れた枠は落ちる
+  [[ "$result" == *'extra:$2.14'* ]]   # cents は生きる
+}
+
+@test "週間枠: 枠のリセットと経過が別行になること" {
+  # 枠は dim のリセット時刻で終わるので、経過 (dim の `2h`) と同じ行に並ぶと
+  # 「枠の続き」に見えて属し先が消える。**行分割で構造的に起きなくなった**ことを pin する
+  # (v1.74.0。以前は同一行で、間に何が挟まるかに依存していた)。
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  out=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"cost":{"total_duration_ms":7200000}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | _strip)
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  sess=$(printf '%s' "$out" | sed -n '4p')
+  lim=$(printf '%s' "$out" | sed -n '5p')
+  # 経過はセッション行、枠とそのリセットは制限行 — 同じ行に並ばない
+  [[ "$sess" == *"2h"* ]]
+  [[ "$lim" == *"Fable"* ]]
+  [[ "$lim" == *"Sat 16:00"* ]]
+  [[ "$lim" != *"2h"* ]]
+  [[ "$sess" != *"Sat 16:00"* ]]
+}
+
+@test "週間枠: Bedrockではモデル別枠を出さないこと" {
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1:0","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  local plain
+  plain=$(printf '%s' "$result" | _strip)
+  [[ "$plain" != *":39%"* ]]
 }
 
 @test "Line4: extra-usage データがないとき extra: が表示されないこと" {
@@ -488,7 +662,7 @@ _stub_env() {
 
 @test "Line4: Anthropicでレートリミットが表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" == *"35%"* ]]
   [[ "$result" == *"week:12%"* ]]
 }
@@ -502,7 +676,7 @@ _stub_env() {
 
 @test "Line4: rate_limitsのused_percentageがfloatでもroundされること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" == *"36%"* ]]
 }
 
@@ -568,8 +742,9 @@ _stub_env() {
   _wait_for_cache "$cache_dir"
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$(pwd)"'"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
-  # gh: のみ dim、owner/repo は RST 後の通常輝度（ローカル dir 名と origin 名の食い違い判別用）
-  [[ "$result" == *"${DIM}gh:${RST}ist-j-ichikawa/claude-code-statusline"* ]]
+  # gh: のみ dim、値は RST 後の通常輝度（ローカル dir 名と origin 名の食い違い判別用）。
+  # このリポ自身は dir 名 = repo 名なので、v1.74.0 以降は repo 部が畳まれて owner だけになる
+  [[ "$result" == *"${DIM}gh:${RST}ist-j-ichikawa/"* ]]
   # gh: 部分が GIT オレンジのブランチ名より左にあること
   gh_pos="${result%%gh:*}"
   branch_pos="${result%%${GIT}*}"
@@ -617,6 +792,123 @@ _stub_env() {
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
   [[ "$result" == *"gh:${RST}acme/widgets"* ]]
+}
+
+@test "Git: パス末尾が owner/repo と一致するとき gh: を省くこと" {
+  # ghq 系のレイアウト (~/ghq/github.com/<owner>/<repo>) では Line 2 のパス末尾がそのまま
+  # owner/repo なので、Line 3 の gh: は同じ文字列の二度出しになる (v1.74.0 で省く)。
+  local d="$BATS_TEST_TMPDIR/ghq/github.com/acme/widgets"
+  _repo_at "$d"
+  result=$(_line3_of '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$d"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}')
+  [[ "$result" != *"gh:"* ]]
+  [[ "$result" != *"acme/widgets"* ]]   # 省くのは gh: ごと (プレフィックスだけ消して値が残らない)
+  [[ -n "$result" ]]                     # 行そのものは出る (ブランチ等が残る)
+}
+
+@test "Git: パス末尾が repo 名だけ一致するとき gh:owner/ に畳むこと" {
+  # `~/dev/<repo>` という最も普通の clone レイアウト。repo 名は真上の行にあるので owner だけ残す。
+  # **末尾の `/`** は「続きは真上の行の末尾」の標識 — 裸の `gh:acme` は「acme という repo」に誤読される。
+  local d="$BATS_TEST_TMPDIR/dev/widgets"
+  _repo_at "$d"
+  result=$(_line3_of '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$d"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}')
+  [[ "$result" == *"gh:${RST}acme/"* ]]
+  [[ "$result" != *"acme/widgets"* ]]   # repo 名は畳まれて残らない
+}
+
+@test "Git: worktree でも Line 2 が描いたパスと突き合わせて畳むこと" {
+  # worktree では Line 2 が `<repo>/.claude/worktrees/<name>` を repo root で切って
+  # `~/dev/myrepo 🌲wt` と描く。**画面に出ている末尾は repo 名**なので、`current_dir`
+  # (末尾 = worktree 名) と比べると畳めず、repo 名が縦に 2 回出たままになる (code-review 指摘)。
+  local root="$BATS_TEST_TMPDIR/wtrepo/widgets" wt
+  wt="$root/.claude/worktrees/fix-bug"
+  _repo_at "$wt"
+  result=$(_line3_of '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$root"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"worktree":{"name":"fix-bug","path":"'"$wt"'","original_branch":"main"},"context_window":{"used_percentage":10}}')
+  [[ "$result" == *"gh:${RST}acme/"* ]]
+  [[ "$result" != *"acme/widgets"* ]]
+}
+
+@test "Git: repo 名が上位文字列に含まれるだけでは畳まないこと(/ アンカー)" {
+  # `my-widgets` は `widgets` を含むが別の dir。アンカー無しの比較だと誤爆して owner だけになる
+  local d="$BATS_TEST_TMPDIR/anchor/my-widgets"
+  _repo_at "$d"
+  result=$(_line3_of '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$d"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}')
+  [[ "$result" == *"gh:${RST}acme/widgets"* ]]
+}
+
+@test "Git: ローカルdir名とorigin repo名が食い違うとき gh: を出すこと" {
+  # gh: の存在理由そのもの。一致しないケースは**出し続ける**側に倒す (大文字小文字差も含む)。
+  local d="$BATS_TEST_TMPDIR/case/acme/Widgets"   # 名前は同じで大文字小文字だけ違う
+  _repo_at "$d"
+  result=$(_line3_of '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$d"'","repo":{"host":"github.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}')
+  [[ "$result" == *"gh:${RST}acme/widgets"* ]]
+}
+
+@test "Git: untracked が上限を超えたら行数を数えないこと(全走査で毎レンダー再走査になるのを防ぐ)" {
+  # 数えるコストは untracked の総バイト数に比例するので、ignore 漏れの node_modules
+  # (実測 30,000 件で 5.17 秒) ではキャッシュ寿命 5s を超えて毎レンダー全走査 + 背景 job の
+  # 積み上がりになる (code-review 指摘)。上限超過では**要素ごと落とす** (中途半端な合計は
+  # 「間違った数」になるため)。上限は 500。
+  local d="$BATS_TEST_TMPDIR/capped" i plain
+  _repo_at "$d"
+  # 501 件の untracked (各 1 行) — 数えていれば +501 が出る
+  ( cd "$d" && for i in {1..501}; do printf 'x\n' > "u$i.txt"; done )
+  plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.146\",\"workspace\":{\"current_dir\":\"$d\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
+  [[ "$plain" != *"+501"* ]]
+  [[ "$plain" != *"+5"* ]]     # 途中まで数えた中途半端な合計も出さない
+}
+
+@test "Git: untracked が上限内なら行数を数えること" {
+  # 上限の実装で通常ケースを落としていないこと (上のテストだけだと「常に 0」でも緑になる)
+  local d="$BATS_TEST_TMPDIR/uncapped" plain
+  _repo_at "$d"
+  printf 'a\nb\nc\n' > "$d/u.txt"
+  plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.146\",\"workspace\":{\"current_dir\":\"$d\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
+  [[ "$plain" == *"+3"* ]]
+}
+
+@test "Git: rebase 中は進捗つきで先頭に出すこと(HEAD@sha と区別できるように)" {
+  # `HEAD@<sha>` だけでは「sha を直接 checkout した」と「rebase 中」が区別できず、
+  # 実際に「Line 3 の表示が変」と読まれた。**本物のコンフリクト付き rebase** を作って確認する。
+  local d="$BATS_TEST_TMPDIR/rebasing" plain
+  mkdir -p "$d"
+  ( cd "$d" && git init -q -b main \
+    && git config user.email t@t && git config user.name t \
+    && printf 'a\n' > f && git add f && git commit -qm base \
+    && git checkout -q -b topic && printf 'topic\n' > f && git commit -qam topic \
+    && git checkout -q main && printf 'main\n' > f && git commit -qam main \
+    && git checkout -q topic && git rebase main ) >/dev/null 2>&1 || true   # rebase は conflict で rc=1
+  # 前提の確認 — rebase が本当に中断していること (成功していたらテストが無意味)
+  [[ -d "$d/.git/rebase-merge" || -d "$d/.git/rebase-apply" ]] \
+    || { echo "rebase が中断していない = テストが無意味" >&3; return 1; }
+  plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.146\",\"workspace\":{\"current_dir\":\"$d\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
+  [[ "$plain" == "rebase 1/1"* ]]        # 先頭 = この行で最も行動に直結する事実
+  [[ "$plain" == *"HEAD@"* ]]            # detached の事実も残す
+  [[ "$plain" == *"!1"* ]]               # コンフリクトも並ぶ
+}
+
+@test "Git: merge 中は merge と出すこと" {
+  local d="$BATS_TEST_TMPDIR/merging" plain
+  mkdir -p "$d"
+  ( cd "$d" && git init -q -b main \
+    && git config user.email t@t && git config user.name t \
+    && printf 'a\n' > f && git add f && git commit -qm base \
+    && git checkout -q -b topic && printf 'topic\n' > f && git commit -qam topic \
+    && git checkout -q main && printf 'main\n' > f && git commit -qam main \
+    && git merge topic ) >/dev/null 2>&1 || true   # merge は conflict で rc=1
+  [[ -f "$d/.git/MERGE_HEAD" ]] \
+    || { echo "merge が中断していない = テストが無意味" >&3; return 1; }
+  plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.146\",\"workspace\":{\"current_dir\":\"$d\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
+  [[ "$plain" == "merge"* ]]
+  [[ "$plain" == *"main"* ]]   # merge 中はブランチに乗ったままなので branch も出る
+}
+
+@test "Git: 通常の状態では進行中の操作を出さないこと" {
+  # 常に何か出るなら差分シグナルにならない (このリポ自身は clean な状態で回る)
+  local plain
+  plain=$(_line3_of "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"version\":\"2.1.146\",\"workspace\":{\"current_dir\":\"$(pwd)\"},\"context_window\":{\"used_percentage\":10}}" | _strip)
+  [[ "$plain" != *"rebase"* ]]
+  [[ "$plain" != *"merge"* ]]
+  [[ "$plain" != *"cherry-pick"* ]]
 }
 
 @test "Git: detached HEADのcold startではgh:を表示しないこと(build_git detachedパスとgate統一)" {
@@ -695,23 +987,24 @@ _stub_env() {
 # ============================================================================
 # vim mode badge — NORMAL は非表示、INSERT/VISUAL/VISUAL LINE は bg 色付きで Line 1 最左に
 # ============================================================================
-@test "vim: INSERTモードで緑バッジが表示されること" {
+@test "vim: INSERTモードで青バッジが表示されること(gruvbox/airline の流儀)" {
   result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"INSERT"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
   # bg lime-green (48;5;148, gruvbox-ish) + bold + INSERT テキストが含まれること
-  [[ "$result" == *$'\033[1;30;48;5;148m INSERT '* ]]
+  # 緑にしない — 緑は gruvbox/airline では NORMAL/COMMAND の色でモードを誤読させる
+  [[ "$result" == *$'\033[1;30;48;5;109m INSERT '* ]]
 }
 
 @test "vim: VISUALモードで橙バッジが表示されること" {
   result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"VISUAL"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *$'\033[1;30;48;5;214m VISUAL '* ]]
+  [[ "$result" == *$'\033[1;30;48;5;208m VISUAL '* ]]
 }
 
 @test "vim: VISUAL LINEはV-LINEに短縮して同じ橙バッジで表示されること" {
   result=$(echo '{"model":{"id":"t","display_name":"T"},"version":"2.1.146","workspace":{"current_dir":"/tmp"},"vim":{"mode":"VISUAL LINE"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
-  [[ "$result" == *$'\033[1;30;48;5;214m V-LINE '* ]]
+  [[ "$result" == *$'\033[1;30;48;5;208m V-LINE '* ]]
   [[ "$result" != *"VISUAL LINE"* ]]
 }
 
@@ -1211,6 +1504,111 @@ _peer_json() {
 }
 
 # ============================================================================
+# 版の変化 — 前回見た版と違うときだけ立てること
+# ============================================================================
+# `_ver_run VERSION LATEST` — 偽 config dir に「最新は LATEST」の changelog を置いて Line 1 を出す。
+# LATEST を空にすると changelog 自体を置かない (読めないケース)。色を見るので ANSI は剥がさない。
+_ver_run() {
+  local _cd="$BATS_TEST_TMPDIR/cfg-$1-$2"
+  mkdir -p "$_cd/cache"
+  [[ -n "$2" ]] && printf '# Changelog\n\n## %s\n\n- x\n' "$2" > "$_cd/cache/changelog.md"
+  printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"'"$1"'","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | CLAUDE_CONFIG_DIR="$_cd" /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p'
+}
+
+@test "版: 最新版と同じなら弱め表示のままであること" {
+  # 色は**生のリテラル**で assert する (定数で書くとどんな値でも通り、無断の再調整を検出できない)
+  local result
+  result=$(_ver_run 2.1.240 2.1.240)
+  [[ "$result" == *'38;5;248m'*"v2.1.240"* ]]
+  [[ "$result" != *$'\033[31m'* ]]
+}
+
+@test "版: 最新版から遅れているとアラーム色(赤)で立つこと" {
+  # 最新は Claude Code 自身が置く changelog キャッシュの冒頭 `## X.Y.Z` から読む
+  # (ネットワークもキャッシュ書き込みも fork もゼロ)
+  local result
+  result=$(_ver_run 2.1.232 2.1.240)
+  # アラーム色 = 既存の赤 (ANSI 31)。**生のリテラル**で assert する
+  [[ "$result" == *$'\033[31m'"v2.1.232"* ]]
+}
+
+@test "版: 最新版が読めないときは立てずに弱め表示に落ちること" {
+  # changelog は未文書の内部ファイルなので、無ければ黙って dim (無表示 < 誤読させる表示)
+  local result
+  result=$(_ver_run 2.1.232 "")
+  [[ "$result" == *'38;5;248m'*"v2.1.232"* ]]
+  [[ "$result" != *$'\033[31m'* ]]
+}
+
+@test "版: 何も書き込まないこと(状態を持たない)" {
+  # 前の実装は「前回見た版」をキャッシュに書いていた。今は今の版と最新版だけで決まるので
+  # 書き込みが 1 つも無い = 並走ペインの競合も無い。
+  # **キャッシュ一覧の前後比較で見る** — 特定のファイル名を grep する形は、その名前を作る
+  # コードが無くなった時点で「どう壊しても緑」になる (`/simplify` 指摘)
+  # 版だけ違う 2 回の描画でキャッシュの中身（一覧）が変わらない = 版のための書き込みが無い。
+  # 描画自体は他のキャッシュ（git 等）を書きうるので、**版を変えても増えないこと**で見る
+  mkdir -p "$CLAUDE_STATUSLINE_CACHE_DIR"
+  local a b
+  _ver_run 2.1.232 2.1.240 >/dev/null
+  a=$(ls -1 "$CLAUDE_STATUSLINE_CACHE_DIR" 2>/dev/null)
+  _ver_run 2.1.240 2.1.240 >/dev/null
+  b=$(ls -1 "$CLAUDE_STATUSLINE_CACHE_DIR" 2>/dev/null)
+  [[ "$a" == "$b" ]]
+}
+
+@test "ver_older: 版を数値として比較すること(文字列比較では逆になる)" {
+  # `2.1.9` と `2.1.10` は辞書順だと大小が逆になる
+  ver_older 2.1.9 2.1.10
+  ! ver_older 2.1.10 2.1.9
+  ver_older 2.0.999 2.1.0
+  ! ver_older 2.1.240 2.1.240
+  ! ver_older 2.1.241 2.1.240
+  # 成分が足りない側は 0 扱い (`2.1` == `2.1.0`)
+  ! ver_older 2.1 2.1.0
+}
+
+@test "ver_older: 数値でない成分や空では古いと判定しないこと" {
+  # 上流が `2.2.0-rc.1` のような形を出したときに誤って立てるより、無表示に落ちる側へ倒す
+  ! ver_older "2.2.0-rc.1" 2.2.1
+  ! ver_older "" 2.1.240
+  ! ver_older 2.1.240 ""
+  ! ver_older "abc" "def"
+}
+
+# ============================================================================
+# output style — default 以外のときだけ出すこと
+# ============================================================================
+_os_run() {
+  printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.240","workspace":{"current_dir":"/tmp"},"output_style":{"name":"'"$1"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p'
+}
+
+@test "output style: default 以外の名前を Line 1 に出すこと" {
+  local result
+  result=$(_os_run "explanatory")
+  [[ "$result" == *'38;5;231m'"explanatory"* ]]
+  # **Agent 名のピンク (213) と被らないこと** — 最初この色にして実機で見分けが付かなかった
+  [[ "$result" != *'38;5;213m'"explanatory"* ]]
+  [[ "$result" != *'38;5;176m'"explanatory"* ]]
+}
+
+@test "output style: default では出さないこと" {
+  local result
+  result=$(_os_run "default")
+  [[ "$result" != *"default"* ]]
+}
+
+@test "output style: フィールドが無い旧 Claude Code では出さないこと" {
+  # `// ""` の既定値で空になるだけ (graceful degradation)
+  local result
+  result=$(printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.240","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p')
+  [[ -n "$result" ]]
+  [[ "$result" == *"v2.1.240"* ]]
+}
+
+# ============================================================================
 # 端末幅非依存 — 幅に関係なく4行かつexit 0で完走すること
 # ============================================================================
 @test "全体: COLUMNS=40でもバージョンは常時表示されること" {
@@ -1267,21 +1665,40 @@ _peer_json() {
 # ============================================================================
 # Line 4順番 — 5h limit, context, weekly の順であること
 # ============================================================================
-@test "Line4順番: 5hリミットがcontextより左に表示されること" {
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800}}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
-  # 35% (5h) should appear before 48% (context)
-  five_pos="${result%%35%*}"
-  ctx_pos="${result%%48%*}"
-  [[ ${#five_pos} -lt ${#ctx_pos} ]]
+@test "行分割: セッションが4行目・制限が5行目に分かれること" {
+  # スコープで行を割る (v1.74.0)。1 行に混ぜていた頃は「どこまでが制限の話で、どこからが
+  # このセッションの話か」が読めなかった。**同じ行に混在しないこと**を pin する —
+  # これが崩れると、以前のように弱め表示の時間が並んで属し先が消える症状に戻る。
+  out=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"cost":{"total_duration_ms":7200000,"total_cost_usd":1.5},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null)
+  sess=$(printf '%s' "$out" | sed -n '4p')
+  lim=$(printf '%s' "$out" | sed -n '5p')
+  # セッション行: context / 経過 / コスト
+  [[ "$sess" == *"48%"* ]]
+  [[ "$sess" == *"2h"* ]]
+  [[ "$sess" == *'$1.50'* ]]
+  # 制限行: 5h / week
+  [[ "$lim" == *"35%"* ]]
+  [[ "$lim" == *"week:12%"* ]]
+  # **混在しないこと** — 制限行に context/経過/コストが無く、セッション行に制限が無い
+  [[ "$lim" != *"48%"* ]]
+  [[ "$lim" != *'$1.50'* ]]
+  [[ "$sess" != *"week:"* ]]
+  [[ "$sess" != *"35%"* ]]
 }
 
-@test "Line4順番: weeklyがcontextより右に表示されること" {
+@test "行分割: 制限行の順序が 5h → week → モデル別枠 であること" {
+  # 「% → リセット」の並びが繰り返されるので、リセット時刻がどの制限のものか対比で読める。
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
-  ctx_pos="${result%%48%*}"
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  five_pos="${result%%35%*}"
   week_pos="${result%%week:*}"
-  [[ ${#ctx_pos} -lt ${#week_pos} ]]
+  scoped_pos="${result%%Fable*}"
+  [[ ${#five_pos} -lt ${#week_pos} ]]
+  [[ ${#week_pos} -lt ${#scoped_pos} ]]
 }
 
 # ============================================================================
@@ -1335,7 +1752,7 @@ _peer_json() {
   [[ "$c" != *"3 5.sonnet"* ]]
 }
 
-@test "Subagent: effortはレベル文字列をEFFORT色でモデルの直後に出すこと" {
+@test "Subagent: effortはレベル文字列をレベル毎の色でモデルの直後に出すこと" {
   # 位置まで pin する — 部分一致だけだと effort の add を status/worktree の後ろに動かしても緑のままで、
   # docs の「モデル → effort → 状態 → 🌲」の順序が固定されない
   c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-6","effort":"low","status":"needs_input","cwd":"/r/.claude/worktrees/wt"}]}' \
@@ -1344,7 +1761,7 @@ _peer_json() {
   # 色は Line 1 の effort と同じ light purple
   c2=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-sonnet-4-6","effort":"low"}]}' \
     | /bin/bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$c2" == *$'\033[38;5;105m'"low"* ]]
+  [[ "$c2" == *$'\033[38;5;178m'"low"* ]]   # low = gold (effort ランプ)
 }
 
 @test "Subagent: effortのゼロ埋め数値を8進数と誤解釈しないこと" {
@@ -1394,7 +1811,7 @@ _peer_json() {
   done
   # ネストした {"level":..} 形で来ても level を拾う (主 statusline の effort.level と同形)
   c=$(_c '{"level":"low"}')
-  [[ "$c" == *$'\033[38;5;105m'"low"* ]]
+  [[ "$c" == *$'\033[38;5;178m'"low"* ]]   # low = gold (effort ランプ)
   [[ "$c" != *'{'* ]]
 }
 
@@ -1733,7 +2150,6 @@ _peer_json() {
 
 @test "経過時間: 60秒未満とフィールド欠落では出さないこと" {
   # ANSI の reset (\033[0m) が "0m"/"m" に当たるので色を剥がしてから語で判定する
-  _strip() { sed $'s/\033\\[[0-9;]*m//g'; }
   short=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_duration_ms":45000}}' \
     | /bin/bash statusline-command.sh | tail -1 | _strip)
   [[ "$short" != *"m"* ]]
@@ -1831,11 +2247,15 @@ _peer_json() {
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
   _wait_for_file "$_stub_cache/subscription" -s
-  [[ "$(<"$_stub_cache/subscription")" == "enterprise" ]]
-  # 2 回目のレンダーでキャッシュから読んで表示に載ること
+  # キャッシュは `契約種別 US レート枠` の 2 フィールド (この fixture は rateLimitTier を持たないので枠は空)
+  local _cached _st
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached%%$'\037'*}"
+  [[ "$_st" == "enterprise" ]]
+  # 2 回目のレンダーでキャッシュから読んで表示に載ること。表記は公式名 (`Enterprise`)
   run env "${_stub_pre[@]:1}" /bin/bash -c \
     'printf "%s" "$1" | /bin/bash "$2"' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
-  [[ "$output" == *"Anthropic(enterprise)"* ]]
+  [[ "$output" == *"Anthropic(Enterprise)"* ]]
 }
 
 @test "credentials: CLAUDE_CONFIG_DIR 側の credentials から読むこと" {
@@ -1853,7 +2273,57 @@ _peer_json() {
   printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
   _wait_for_file "$_stub_cache/subscription" -s
   # `pro` = CLAUDE_CONFIG_DIR 側。`max` なら偽 HOME 側を読んでいる
-  [[ "$(<"$_stub_cache/subscription")" == "pro" ]]
+  # (キャッシュは `契約種別 US レート枠` の 2 フィールドなので先頭だけ見る)
+  local _cached
+  _cached=$(<"$_stub_cache/subscription")
+  [[ "${_cached%%$'\037'*}" == "pro" ]]
+}
+
+@test "plan: subscriptionType が公式表記に畳まれること" {
+  # 公式プラン名は Free / Pro / Max 5x / Max 20x / Team / Enterprise (claude.com/pricing)。
+  # 生値は小文字なので畳む。**リテラルで assert する** — 定数で書くとどんな値でも通る。
+  plan_label out "pro" ""        ; [[ "$out" == "Pro" ]]
+  plan_label out "max" ""        ; [[ "$out" == "Max" ]]
+  plan_label out "team" ""       ; [[ "$out" == "Team" ]]
+  plan_label out "enterprise" "" ; [[ "$out" == "Enterprise" ]]
+  plan_label out "free" ""       ; [[ "$out" == "Free" ]]
+  # 未知の契約種別は生のまま出す (旧/新 Claude Code の graceful degradation)
+  plan_label out "someday_plan" "" ; [[ "$out" == "someday_plan" ]]
+}
+
+@test "plan: レート枠を rateLimitTier の suffix から取り、値を列挙しないこと" {
+  # 未文書フィールドなので許可リストを持たない。suffix が `Nx` の形かだけを見る。
+  plan_label out "max" "default_claude_max_5x"        ; [[ "$out" == "Max 5x" ]]
+  plan_label out "max" "default_claude_max_20x"       ; [[ "$out" == "Max 20x" ]]
+  # `default_claude_ai` (Pro 相当、上流 issue #43639 で実在) は Nx を持たないので枠を出さない
+  plan_label out "pro" "default_claude_ai"            ; [[ "$out" == "Pro" ]]
+  # 枠は契約種別と独立 — 実測で Enterprise 契約が max_5x を持つ
+  plan_label out "enterprise" "default_claude_max_5x" ; [[ "$out" == "Enterprise 5x" ]]
+  plan_label out "team" "default_claude_max_5x"       ; [[ "$out" == "Team 5x" ]]
+  # **未知の枠でも prefix が変わっても動く** — ここが許可リストとの差
+  plan_label out "max" "brand_new_prefix_50x"         ; [[ "$out" == "Max 50x" ]]
+  # 枠が空 / null 相当でも契約名は出す
+  plan_label out "enterprise" ""                      ; [[ "$out" == "Enterprise" ]]
+  plan_label out "enterprise" "null"                  ; [[ "$out" == "Enterprise" ]]
+}
+
+@test "plan: 旧形式キャッシュ(US区切り無し)でも契約名が出てstderrが汚れないこと" {
+  # 形式が 1 フィールド → 2 フィールドに増えたが、旧キャッシュは最大 3600s 残るので
+  # その間も契約名だけは出る必要がある (枠が空になるだけ)。ファイル名の版は上げない判断の pin。
+  local d="$BATS_TEST_TMPDIR/oldsubcache"
+  mkdir -p -m 700 "$d"
+  printf 'max' > "$d/subscription"          # 旧形式: US 区切りが無い
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  # NO_NET だと種別を空に倒す経路に入ってしまうので、**キャッシュを読む経路を通すため
+  # NO_NET を外して**確認する (偽 HOME で Keychain/credentials も読めない状態にする)
+  run env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome" /bin/bash -c \
+    'printf "%s" "$1" | /bin/bash "$2"' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
+  [[ "$output" == *"Anthropic(Max)"* ]]
+  # stderr が空であること — `2>/dev/null` で捨てると gate を外しても緑のままになる
+  run env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome" /bin/bash -c \
+    'printf "%s" "$1" | /bin/bash "$2" 2>&1 >/dev/null' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
+  [[ -z "$output" ]]
 }
 
 @test "credentials: 読めない credentials で stderr を汚さないこと" {
@@ -1911,10 +2381,158 @@ _peer_json() {
   p='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'
   CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'$p'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$d/git"
-  local facts; facts=$(cat "$d"/git/*-v2)
+  local facts; facts=$(cat "$d"/git/*-v4)
   [[ "$facts" != *$'\033'* ]]        # レンダリング済み ANSI を置かない
   [[ "$facts" != *"approved"* ]]     # stdin 由来値 (PR state) を置かない = 別セッションに漏れない
   [[ "$facts" == *$'\037'* ]]        # US 区切りの facts である
+}
+
+@test "dirty state: 行数の増減が +N -N で出ること" {
+  # Claude Desktop の code 画面と同じ単位 (行数) と色 (緑/赤)。旧 `A3 M2 ?1` の
+  # ファイル状態ごとの件数は出さない (v1.74.0、ユーザー選択)。
+  local w="$BATS_TEST_TMPDIR/ins1" c="$BATS_TEST_TMPDIR/insc1"
+  mkdir -p "$w"; git -C "$w" init -q
+  printf 'a\nb\nc\nd\ne\n' > "$w/f"
+  git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  # 2 行消して 3 行足す → +3 -2
+  printf 'a\nX\nY\nZ\nd\ne\nF\n' > "$w/f"   # b,c を消し X,Y,Z,F を足す
+  _l3() { CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p; }
+  _l3 >/dev/null
+  _wait_for_cache "$c/git"
+  local raw plain want
+  raw=$(_l3)
+  plain=$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')
+  # git の実値と突き合わせる (リテラルの数字を書くと git の差分判定に依存して脆くなる)
+  want=$(git -C "$w" diff HEAD --numstat | awk -F'\t' '$1 ~ /^[0-9]+$/ {i+=$1; d+=$2} END {print "+"i" -"d}')
+  [[ "$plain" == *"$want"* ]]
+  # 色は**生のリテラル**で assert — 定数で書くとどんな値でも通る。緑 32 / 赤 31
+  [[ "$raw" == *$'\033[32m+'* ]]
+  [[ "$raw" == *$'\033[31m-'* ]]
+  # 旧形式のファイル件数は出さない
+  [[ "$plain" != *"M1"* ]]
+  [[ "$plain" != *"A1"* ]]
+}
+
+@test "dirty state: untrackedの行が追加側に畳まれること" {
+  # Desktop は untracked を `added` として扱い専用の記号を持たない。`git diff` は untracked を
+  # 含まないので別途数えて足す。**空白入りパス**も落とさない (`-z` / `xargs -0`)。
+  local w="$BATS_TEST_TMPDIR/ut1" c="$BATS_TEST_TMPDIR/utc1"
+  mkdir -p "$w"; git -C "$w" init -q
+  echo x > "$w/f"; git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  printf '1\n2\n3\n' > "$w/new.txt"                    # untracked 3 行
+  mkdir -p "$w/sub dir"; printf '4\n5\n' > "$w/sub dir/with space.txt"   # untracked 2 行
+  CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+  _wait_for_cache "$c/git"
+  local plain
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  # tracked の変更は無いので +5 (untracked 3+2) だけになる
+  [[ "$plain" == *"+5"* ]]
+  # 旧 `?N` (untracked 件数) は出さない
+  [[ "$plain" != *"?2"* ]]
+}
+
+@test "dirty state: untrackedの罠(ハイフン名/バイナリ/symlink)で数が狂わないこと" {
+  # 素朴な `xargs -0 cat | grep -c` は 3 つとも stderr も出さずに黙って壊れる:
+  #  ① `-n` という名のファイルは `cat -n` に化けてその分の行が消える (実測 5 → 3)
+  #  ② `--bogus` は illegal option で untracked 全体が 0 になる (実測 4 → 0)
+  #  ③ FIFO を指す symlink で読み込みが永久にブロックし、背景 job が毎レンダー積む
+  local w="$BATS_TEST_TMPDIR/utrap" c="$BATS_TEST_TMPDIR/utrapc"
+  mkdir -p "$w"; git -C "$w" init -q
+  echo base > "$w/f"; git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  printf 'a\nb\nc\n'   > "$w/plain.txt"      # 3 行
+  printf 'x\ny\n'      > "$w/-n"             # 2 行（①）
+  printf 'z\n'         > "$w/--bogus"        # 1 行（②）
+  printf '\x00\x01\n\n\n' > "$w/blob.bin"    # バイナリ = 数えない
+  mkfifo "$w/thefifo"; ln -sf thefifo "$w/link-to-fifo"   # ③
+  mkdir -p "$w/sub dir"; printf 'p\nq\n' > "$w/sub dir/with space.txt"   # 2 行（空白入り）
+  # **タイムアウト付きで実行する** — ③ が再発するとここで固まる。`timeout` は macOS に無いので python で
+  run python3 -c '
+import subprocess, sys
+cwd, cache, script = sys.argv[1], sys.argv[2], sys.argv[3]
+j = "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"%s\"}}" % cwd
+env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/tmp", "CLAUDE_STATUSLINE_CACHE_DIR": cache}
+subprocess.run(["/bin/bash", script], input=j, capture_output=True, text=True, env=env, timeout=20)
+# 背景の build_git 完走を待つ（cache が書かれるまで）
+import glob, time
+for _ in range(200):
+    if glob.glob(cache + "/git/*-v4"): break
+    time.sleep(0.05)
+else:
+    print("CACHE_NEVER_WRITTEN"); sys.exit(1)
+r = subprocess.run(["/bin/bash", script], input=j, capture_output=True, text=True, env=env, timeout=20)
+print(r.stdout.split(chr(10))[2])
+' "$w" "$c" "$BATS_TEST_DIRNAME/statusline-command.sh"
+  [[ "$status" -eq 0 ]]
+  local plain
+  plain=$(printf '%s' "$output" | sed $'s/\033\\[[0-9;]*h//g;s/\033\\[[0-9;]*m//g')
+  # 3 + 2 + 1 + 2 = 8。バイナリ(改行3)と symlink は数えない
+  [[ "$plain" == *"+8"* ]]
+  rm -f "$w/thefifo" "$w/link-to-fifo"
+}
+
+@test "dirty state: 0の側を出さないこと" {
+  # 追加だけの作業で `-0` が出るとノイズ。
+  local w="$BATS_TEST_TMPDIR/z1" c="$BATS_TEST_TMPDIR/zc1"
+  mkdir -p "$w"; git -C "$w" init -q
+  printf 'a\n' > "$w/f"; git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  printf 'a\nb\nc\n' > "$w/f"      # 2 行追加、削除 0
+  CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+  _wait_for_cache "$c/git"
+  local plain
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$plain" == *"+2"* ]]
+  [[ "$plain" != *"-0"* ]]
+}
+
+@test "dirty state: コンフリクトが !N (赤) で出ること" {
+  # 記号は Desktop の状態一覧に無いので自前で決めた。**`+`/`-` と同じ ASCII の 1 桁**が選定条件
+  # (`×` は East Asian Ambiguous 幅で ambiguous-width=2 の端末だと桁が崩れる)。
+  # マージ中は最優先の情報なので、行数の増減とは独立して残す。
+  local w="$BATS_TEST_TMPDIR/cf1" c="$BATS_TEST_TMPDIR/cfc1"
+  mkdir -p "$w"; git -C "$w" init -q
+  printf 'base\n' > "$w/f"; git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  git -C "$w" checkout -qb other
+  printf 'other\n' > "$w/f"; git -C "$w" -c user.email=a@b -c user.name=a commit -qam other
+  git -C "$w" checkout -q -    # 元のブランチへ (master/main どちらでも)
+  printf 'mine\n' > "$w/f"; git -C "$w" -c user.email=a@b -c user.name=a commit -qam mine
+  git -C "$w" merge other -q 2>/dev/null || true    # 衝突させる (rc は非 0)
+  CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+  _wait_for_cache "$c/git"
+  local raw plain
+  raw=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p)
+  plain=$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$plain" == *"!1"* ]]
+  # 色は**生のリテラル**で assert (赤 31)
+  [[ "$raw" == *$'\033[31m!'* ]]
+  # 旧記号 `U` と、幅が環境依存の `×` は使わない
+  [[ "$plain" != *"U1"* ]]
+  [[ "$plain" != *"×"* ]]
+}
+
+@test "dirty state: binaryを行数に数えないこと" {
+  # `numstat` は binary に `-` を出す。**このテストは型ガードを pin していない** —
+  # ガードを外しても `((ins += -))` は rc=1 の非致死エラーで、ループも Line 3 も生き、
+  # 加算もされないので数値まで同じになる（mutation で確認済み）。ガードの実益は
+  # 「stderr を汚さない」と「将来 numstat が数値に見える別値を出したときの防御」で、
+  # ここで pin できるのは **binary が混ざっても Line 3 が出て行数に混ざらない**ことだけ。
+  local w="$BATS_TEST_TMPDIR/bin1" c="$BATS_TEST_TMPDIR/binc1"
+  mkdir -p "$w"; git -C "$w" init -q
+  printf 'a\n' > "$w/f"; git -C "$w" add f
+  git -C "$w" -c user.email=a@b -c user.name=a commit -qm base
+  printf '\x00\x01\x02\x03' > "$w/blob.bin"; git -C "$w" add blob.bin
+  printf 'a\nb\n' > "$w/f"        # tracked は +1
+  CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
+  _wait_for_cache "$c/git"
+  local plain
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  # binary が混ざっても Line 3 が出る (ブランチ名が残っている) こと自体が要点
+  [[ "$plain" == *"master"* || "$plain" == *"main"* ]]
+  [[ "$plain" == *"+1"* ]]
 }
 
 @test "Git facts: 何日前のコミットでも age と msg の両方を出すこと" {
@@ -1969,7 +2587,8 @@ _peer_json() {
   _run() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'","repo":{"host":"github.com","owner":"ist-j-ichikawa","name":"claude-code-statusline"}},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p; }
   cold=$(_run); _wait_for_cache "$d/git"; warm=$(_run)
   for o in "$cold" "$warm"; do
-    [[ "$o" == *"gh:"*"ist-j-ichikawa/claude-code-statusline"* ]]
+    # このリポ自身は dir 名 = repo 名なので repo 部は畳まれる (owner は残る)
+    [[ "$o" == *"gh:"*"ist-j-ichikawa/"* ]]
     [[ "$o" == *"approved"* ]]
   done
 }
@@ -2008,19 +2627,83 @@ _peer_json() {
 }
 
 # ============================================================================
-# リセット時刻の整形 (format_reset_remaining / format_reset_absolute)
+# リセット時刻の整形 (format_reset + _memo_reset)
 # main script 内の関数なので統合テストで pin する
 # ============================================================================
-@test "リセット残: 5h制限の残り時間が H:MM で出ること" {
+@test "リセット時刻: 2回目以降はdateを叩かずメモから出すこと" {
+  # リセットの epoch はリセットまで動かないのに、毎レンダー `date` を 2 回叩いていた
+  # (実測 `date -j` 1 回 4.15ms、warm render の 15%)。epoch が一致する限り `date` を呼ばない。
+  # **偽 `date` を PATH に置いて呼び出し回数を数える** — 表示だけ見ても「メモが効いているか」は
+  # 分からず、fork が戻っても緑のままになる。
+  local bin="$BATS_TEST_TMPDIR/rbin" log="$BATS_TEST_TMPDIR/rlog" c="$BATS_TEST_TMPDIR/rcache"
+  mkdir -p "$bin"
+  printf '%s\n' '#!/bin/bash' 'echo "$*" >> "$FAKE_DATE_LOG"' 'exec /bin/date "$@"' > "$bin/date"
+  chmod +x "$bin/date"
+  local now j
   now=$(date +%s)
-  _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45,"resets_at":'"$1"'}}}' \
+  j=$(jq -nc --argjson f $((now + 7200)) --argjson w $((now + 300000)) \
+    '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:48},rate_limits:{five_hour:{used_percentage:45,resets_at:$f},seven_day:{used_percentage:9,resets_at:$w}}}')
+  _render() { printf '%s' "$j" | env PATH="$bin:$PATH" FAKE_DATE_LOG="$log" \
+    CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh"; }
+  # 1 回目: _NOW + 5h + 週間 の 3 回
+  : > "$log"; _render >/dev/null
+  [[ "$(grep -c . "$log")" == "3" ]]
+  [[ "$(grep -c -- '-j -r' "$log")" == "2" ]]
+  # 2 回目: _NOW の 1 回だけ (`-j -r` はゼロ)
+  : > "$log"; local out2; out2=$(_render)
+  [[ "$(grep -c . "$log")" == "1" ]]
+  [[ "$(grep -c -- '-j -r' "$log")" == "0" ]]
+  # メモから出しても表示は同じであること (fork を消して値まで消えていないか)
+  local want plain
+  want=$(date -j -r $((now + 7200)) +"%H:%M")
+  plain=$(printf '%s' "$out2" | sed $'s/\033\\[[0-9;]*m//g')
+  [[ "$plain" == *"$want"* ]]
+  # epoch が変われば再取得すること (リセットを跨いだ場合)
+  j=$(jq -nc --argjson f $((now + 99999)) --argjson w $((now + 300000)) \
+    '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:48},rate_limits:{five_hour:{used_percentage:45,resets_at:$f},seven_day:{used_percentage:9,resets_at:$w}}}')
+  : > "$log"; _render >/dev/null
+  [[ "$(grep -c -- '-j -r' "$log")" == "1" ]]   # 5h だけ再取得、週間はメモ命中
+}
+
+@test "リセット時刻: 5h制限が絶対時刻(曜日なし)で出ること" {
+  # **残り時間ではなく「何時まで」を出す** (v1.74.0、ユーザー選択)。曜日を付けないのが
+  # 週間制限 (`土 16:00`) との区別になる。窓が最大 5 時間なので曜日は要らない。
+  # `date -j` の出力と突き合わせる — リテラルの時刻を書くとテスト実行時刻に依存して flaky になる。
+  now=$(date +%s)
+  _lim() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45,"resets_at":'"$1"'}}}' \
     | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
-  # オフセットは**分の中央**に置く。統一秒は 2 回読まれる (テストの date と
-  # statusline-command.sh の readonly _NOW) ので、境界ちょうど (+300) だと 1 秒ずれて
-  # 0:04 に落ちて flaky になる。format_reset_remaining は切り捨てなので余裕を取る
-  [[ "$(_l4 $((now + 3750)))" == *"1:02"* ]]    # 1時間2分30秒後
-  [[ "$(_l4 $((now + 330)))"  == *"0:05"* ]]    # 5分30秒後 → 0 埋め
-  [[ "$(_l4 $((now - 60)))"   == *"now"* ]]     # 過ぎていたら now
+  ep=$((now + 3750))
+  want=$(date -j -r "$ep" +"%H:%M")
+  [[ "$(_lim "$ep")" == *"$want"* ]]
+  # 曜日は付かない (週間制限との区別)
+  wday=$(date -j -r "$ep" +"%a")
+  [[ "$(_lim "$ep")" != *"$wday"* ]]
+}
+
+@test "リセット時刻: 5h制限が既に過ぎていたら now と出すこと" {
+  # 過ぎた epoch を絶対時刻だけで出すと `14:03` が「これから 14:03 にリセット」と読めてしまい、
+  # 実際は過ぎているのに「あと 23 時間」と誤読させる (残り時間表記だった頃の `now` を引き継ぐ)。
+  # **メモには入れない** — 時間で変わる値を覚えると、過ぎた後も古い時刻が出続ける。
+  local now past out
+  now=$(date +%s); past=$((now - 60))
+  _lim() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45,"resets_at":'"$1"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | sed $'s/\033\\[[0-9;]*m//g'; }
+  out=$(_lim "$past")
+  [[ "$out" == *"now"* ]]
+  # 過ぎた時刻そのものは出さない
+  [[ "$out" != *"$(date -j -r "$past" +"%H:%M")"* ]]
+}
+
+@test "リセット時刻: 週間制限が既に過ぎていても now と出すこと(5h と非対称にしない)" {
+  # 曜日つきの `土 16:00` は数日前でも「これから」と読めるので、5h より誤読が強い。
+  # arm を複製していた間はここに `now` が入っていなかった (`/simplify` 指摘)。
+  local past out
+  past=$(( $(date +%s) - 3600 ))
+  out=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":9,"resets_at":'"$past"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$out" == *"week:9%"* ]]
+  [[ "$out" == *"now"* ]]
+  [[ "$out" != *"$(date -j -r "$past" +"%a %H:%M")"* ]]
 }
 
 @test "リセット残: resets_at が無い/不正なら何も出さないこと" {

@@ -27,14 +27,51 @@ readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ
 # なる (v1.53.0 までの 5 ストップ版は 130/166 と 173/209 が各 8.5 差でほぼ同色。実質 3 段だった)。
 readonly OPUS5_PAL=(130 $CORAL_N 215)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
-readonly EFFORT=$'\033[38;5;105m' THINK=$'\033[38;5;117m'
+# 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
+# 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
+# 「注意すべき状態」の語彙（detached / conflicts / 削除行 / behind / コンテキスト 90%+）なので、
+# 新しい色相を増やさずにアラームの強さだけを借りる。Line 1 に赤はこれが初出。
+# 非ブランド色なので可読性で調整して良い（もっと強くするなら 196、弱めるなら 214）。
+readonly VEROLD="$RED"
+# output style (`/output-style`) — `default` 以外の時だけ出す。**白 = Line 1 に唯一残っていた
+# 「色相を持たない」枠**（ユーザー選択 2026-08-17）。最初の light orchid (176) は Agent 名の
+# ピンク (213) とほぼ同色で、`claude agents` 経由のセッションで実際に見分けが付かなかった。
+# 色相が無いので**将来モデル色が増えても衝突しない**のが白を選ぶ理由（think 117 / fast 190 の
+# 隣に寒色や黄緑を足すと系統が混む）。宛名の無色（既定前景色）とは Agent 名を挟んで離れて並ぶ。
+readonly OSTYLE=$'\033[38;5;231m'
+readonly BOLD=$'\033[1m'
+# effort は **Claude Code 自身の `/effort` ピッカーの配色に合わせる**（実測 2026-08-15）。
+# 単色だった頃はレベルが上がっても見た目が変わらず、`high` と `max` を色で区別できなかった。
+# low=gold → medium=green → high=薄紫 → xhigh=濃紫 → max=多色 のランプで、
+# **上がるほど彩度と派手さが増す**ので位置関係が色だけで読める。非ブランド色なので調整可。
+readonly EFFORT_LOW=$'\033[38;5;178m'      # gold
+readonly EFFORT_MED=$'\033[38;5;71m'       # green
+readonly EFFORT_HIGH=$'\033[38;5;105m'     # 薄紫（periwinkle）
+# **リテラルは 1 箇所** — 既定/未知のレベルは high と同じ薄紫。両方に 105 を書くと
+# 片方だけ調整したときに「未知は high と同色」という意図が黙って崩れる
+readonly EFFORT="$EFFORT_HIGH"
+readonly EFFORT_XHIGH=$'\033[38;5;99m'     # 濃紫（violet）
+# max だけ多色。ピッカーでも `m`/`a`/`x` が紫→桃→橙に振られているので、順序に意味がある
+# gradient（1 回スイープ）で描く。
+readonly EFFORT_MAX_PAL=(99 170 209)
+
+readonly THINK=$'\033[38;5;117m'
 readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
-readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) 実課金額 — gold, 非ブランド
+readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) **実課金額** — 明るい gold, 非ブランド
+# セッションコスト — 落ち着いた金色 (ブロンズ)。**SPEND と同じ色相で明度だけ下げる**のが要点:
+# 同系色なので「どちらも金額」と読め、明度差で「実課金 (明) / 参考値 (暗)」の序列が付く。
+# v1.74.0 まで無色だったのは SPEND と隣接して混同するからで、Line 4/5 の行分割で
+# コスト (セッション行) と extra (アカウント行) が別行になり、その前提が消えた。
+readonly COST=$'\033[38;5;136m'
 readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
-# Colors follow gruvbox / vim-airline convention (lime green + gold) for instant recognition.
-readonly VIM_INSERT=$'\033[1;30;48;5;148m'  # bold black on lime-green (gruvbox-ish INSERT)
-readonly VIM_VISUAL=$'\033[1;30;48;5;214m'  # bold black on gold (gruvbox-ish VISUAL)
+# **vim 側の慣習に合わせる: INSERT=青 / VISUAL=橙**。lualine の gruvbox_dark（`insert.a.bg`
+# = `#83a598` 青 / `visual.a.bg` = `#fe8019` 橙）と vim-airline 既定が一致する流儀で、
+# 256 色の近似は 109 / 208。**緑にしない** — 緑は lightline 系（lualine 16color）では INSERT だが、
+# gruvbox/airline では NORMAL または COMMAND の色なので、モードを誤読させる。
+# NORMAL は非表示なので緑は使わない（REPLACE も Claude Code の `vim.mode` に無い）。
+readonly VIM_INSERT=$'\033[1;30;48;5;109m'  # bold black on gruvbox blue (INSERT)
+readonly VIM_VISUAL=$'\033[1;30;48;5;208m'  # bold black on gruvbox orange (VISUAL / V-LINE)
 
 # Claude Code worktree レイアウトの marker（外部契約文字列）。両 statusline が参照し drift を防ぐ。
 readonly WT_MARKER='/.claude/worktrees/'
@@ -145,8 +182,8 @@ model_color() {
 # fmt_elapsed SECONDS VARNAME — 経過秒を "41m" / "4h" / "27h" にする (no subshell)。
 # 単位は常に 1 つ。**m/h 帯は Line 3 の commit age と同表記だが 24h 以降は分かれる** —
 # 経過は `27h` のまま (何時間回してるかが知りたい)、commit age は `1d` に丸める。
-# **H:MM にはしない** — 同じ Line 4 の 5h 残り (`format_reset_remaining` = `4:01`) と
-# 区別できなくなる。経緯は CHANGELOG 1.60.0。
+# **H:MM にはしない** — リセット時刻（`19:31` / `土 16:00`）と桁の形が似て区別できなくなる。
+# 経緯は CHANGELOG 1.60.0（当時は 5h が残り時間 `4:01` で、H:MM が 2 個並ぶ問題だった）。
 fmt_elapsed() {
   local s=$1
   [[ "$s" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' ''; return; }
@@ -160,6 +197,69 @@ fmt_ctx_size() {
   format_tokens "$1" "$2"
   local _v="${!2}"
   printf -v "$2" '%s' "${_v/.0/}"
+}
+
+# plan_label VARNAME SUB_TYPE RATE_TIER — 契約種別 + レート枠を公式表記で組む (fork ゼロ)。
+# 公式プラン名は Free / Pro / **Max 5x** / **Max 20x** / Team / Enterprise (claude.com/pricing、
+# support.claude.com の Max プラン記事)。`subscriptionType` の生値は小文字なので正式表記に畳む。
+# **`${var^}` は使わない** (bash 4+)。case が写像そのものなので不要。
+#
+# **`rateLimitTier` の値を列挙しない** — 未文書で増えうるフィールドなので、suffix が `Nx` の形かだけを
+# 見る。`default_claude_max_5x` → `5x`、`default_claude_max_20x` → `20x`、`default_claude_ai` (Pro 相当、
+# 上流 issue #43639 で実在) → 枠なし。値を許可リストで受けると v1.69.0 の `nameSource` と同じ
+# 「未文書フィールドを列挙して実物で無言に壊れる」を繰り返す。
+# 枠は契約種別と**独立**に付く — 実測で Enterprise 契約が `default_claude_max_5x` を持つ (= 契約が
+# Enterprise でもレート枠は Max 5x 相当)。だから Team/Enterprise 専用の値を知らなくても壊れない。
+plan_label() {
+  local _st="$2" _rt="$3" _name _tier=""
+  case "$_st" in
+    free)       _name="Free" ;;
+    pro)        _name="Pro" ;;
+    max)        _name="Max" ;;
+    team)       _name="Team" ;;
+    enterprise) _name="Enterprise" ;;
+    *)          _name="$_st" ;;   # 未知の契約種別は生のまま出す (旧/新 Claude Code の graceful degradation)
+  esac
+  case "${_rt##*_}" in
+    [0-9]x|[0-9][0-9]x) _tier=" ${_rt##*_}" ;;
+  esac
+  printf -v "$1" '%s%s' "$_name" "$_tier"
+}
+
+# effort_color VARNAME LEVEL — sets VARNAME to LEVEL rendered in its effort color (no subshell)。
+# Line 1 と subagent 行の両方から呼び、語彙と配色を揃える。
+# **未知のレベルは既定の薄紫に落とす** — 上流がレベルを増やしても無色にならず、色だけが既知の
+# ランプから外れる（旧 Claude Code / 新レベルの両方で graceful degradation）。
+# `effort` は数値のトークン予算で来ることもある（subagent 側）ので、その場合も既定色に落ちる。
+effort_color() {
+  case "$2" in
+    low)    printf -v "$1" '%s' "${EFFORT_LOW}$2${RST}" ;;
+    medium) printf -v "$1" '%s' "${EFFORT_MED}$2${RST}" ;;
+    high)   printf -v "$1" '%s' "${EFFORT_HIGH}$2${RST}" ;;
+    xhigh)  printf -v "$1" '%s' "${EFFORT_XHIGH}$2${RST}" ;;
+    max)    gradient "$1" "$2" ${EFFORT_MAX_PAL[@]+"${EFFORT_MAX_PAL[@]}"} ;;
+    *)      printf -v "$1" '%s' "${EFFORT}$2${RST}" ;;
+  esac
+}
+
+# ver_older A B — A が B より古ければ rc=0 (fork ゼロ・純パラメータ展開)。
+# **文字列比較にしない** — `2.1.9` と `2.1.10` の大小が逆になる（辞書順では `9` > `1`）。
+# **数値として読めない成分が 1 つでもあれば「古くない」に倒す** — 上流が `2.2.0-rc.1` のような
+# 形を出したときに「遅れている」と誤って立てるより、無表示（dim）に落ちるほうを選ぶ。
+# 成分は 3 つまで見る（4 つ目以降が付いた形では 3 つ目までの比較に落ちる = 誤検出しない側）。
+ver_older() {
+  local i av bv arest="$1" brest="$2"
+  # 空文字は `av=""` が数値マッチに落ちるので、別途の空判定は要らない
+  for i in 1 2 3; do
+    av="${arest%%.*}" bv="${brest%%.*}"
+    [[ "$av" =~ ^[0-9]+$ && "$bv" =~ ^[0-9]+$ ]] || return 1
+    ((av < bv)) && return 0
+    ((av > bv)) && return 1
+    # 次の成分へ。残りが無い側は 0 として扱う（`2.1` と `2.1.0` は同じ）
+    [[ "$arest" == *.* ]] && arest="${arest#*.}" || arest=0
+    [[ "$brest" == *.* ]] && brest="${brest#*.}" || brest=0
+  done
+  return 1
 }
 
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)

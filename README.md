@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.73.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.231-purple)
+![Version](https://img.shields.io/badge/version-1.74.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -15,12 +15,14 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 
 | 行 | 内容 |
 |---|---|
-| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
+| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style (`default` 以外) · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
-| **Line 3** | `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · `base:`親ブランチ · dirty state · ahead/behind · last commit |
-| **Line 4** | 5h レート制限 · コンテキストバー (分母付き `/200k` `/1M`) · weekly レート制限 · extra-usage 実課金 · セッション経過 · セッションコスト |
+| **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit |
+| **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
+| **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · extra-usage 実課金 — **アカウント** |
 
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。
+
 > 代わりに**セッションの出自**を黄で出します — `/branch` した会話は `branch`、`/fork` した複製は `fork`。
 > `fork` が出ているときは親セッションが並走しています。Claude Code 2.1.221 以前は複製が親と同じ checkout で走るため、Line 3 の変更が自分のものとは限りません（2.1.222 で `/fork` は自前の worktree を作るようになり、この衝突は解消）。
 > `branch` は transcript の `forkedFrom` で裏取りするので、元の会話に戻れば消えます（Claude Code は元セッションの名前にも `(Branch)` を書き込むため、名前だけでは見分けられません）。
@@ -28,6 +30,8 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 > id は切り詰めず全体を出します — `--resume` は先頭 8 桁のような短縮形を受け付けない（`is not a UUID` で弾かれる）ので、短くするとコピーしても戻れません。
 > `fork` には添えません。`/fork` の元は同じ端末に残り、`←` の detach で戻れるためです。
 > 端末幅による表示切替は行いません。すべての要素が常時フル表示されます。
+
+> Version は通常グレーですが、**最新版から遅れているときだけ赤く**なります。最新版は Claude Code 自身が置いている changelog キャッシュから読むので、ネットワーク取得はしません (キャッシュが読めなければグレーのままです)。
 
 `my-project-41` は**このセッション自身の宛名**です。これをコピーして別のセッションに渡せば、そちらからこのセッションへメッセージを送れます。記号を付けずに置いているので、`my-project-41` のように空白を含まない名前ならダブルクリックだけで選択できます（背景セッションのように空白を含む名前になる場合は範囲選択してください）。
 
@@ -42,17 +46,54 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(enterprise)  Opus 5  high  think  fast  my-project-41  v2.1.231
+Anthropic(Max 20x)  Opus 5  high  think  fast  my-project-41  v2.1.233
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
-gh:acme/my-project  feature/x  approved  base:main  A3 M2 ?1 ↑2 1h fix: update logic..
-⣶     16%  2:20  ⣿⣿⣄   48%/1M  week:9%  金 12:00  extra:$2.14  3h  $4.83
+gh:acme/  feature/x  approved  +42 -17 ↑2 1h fix: update logic..
+⣿⣶   60%/1M  3h  $4.83
+⣶     16%  19:31  week:9%  金 12:00  Fable:39%  土 16:00  extra:$2.14
 ```
+
+Line 3 の `gh:acme/` が owner だけなのは、repo 名 (`my-project`) が Line 2 のパス末尾に既に出ているためです (下の表を参照)。
 
 コンテキストバーの分母は使用率と同じ色で、`%` と一体で読めます (200k のモデルでは `48%/200k`)。
 
+### 変更の表示
+
+Line 3 の変更表示は **Claude Desktop の code 画面と同じ単位と色**です。ファイル数ではなく**行数**で、追加が緑・削除が赤。
+
+| 記号 | 意味 | 色 | 単位 |
+|---|---|---|---|
+| `+42` | 追加された行 | 緑 | 行 |
+| `-17` | 削除された行 | 赤 | 行 |
+| `!2` | コンフリクト中のファイル | 赤 | ファイル |
+| `↑2` | origin より進んでいるコミット | 緑 | コミット |
+| `↓1` | origin より遅れているコミット | 赤 | コミット |
+
+行数に畳まれるもの:
+
+| 状態 | 扱い |
+|---|---|
+| ステージ済み / 未ステージ | **合算**して `+` `-` に出る（Claude Desktop のワーキングツリー表示と同じ範囲） |
+| 未追跡ファイル | 全行を**追加として** `+` に畳む（Claude Desktop も未追跡を「追加」として扱います） |
+| リネーム | 移動に伴う差分が `+` `-` に出る |
+| 削除 | `-` に出る |
+| バイナリ | 行数を持たないので**数えません** |
+
+`+0` `-0` は出しません。追加だけの作業では `+42` だけが出ます。
+
+コンフリクトの `!` は Claude Desktop に対応する表示が無いため独自に決めた記号です（`+` `-` と同じ ASCII の 1 桁なので、どの端末でも桁が揃います）。マージ中は最優先の情報なので、行数とは独立して出しています。
+
 origin 未設定 / 非 GitHub remote (GitLab 等) では `gh:` 部分が省略され、Line 3 はブランチ名から始まります。
+
+**`gh:` は Line 2 のパスと重複した成分だけを削ります** — 同じ文字列が 2 行に並ばないようにするためです。
+
+| Line 2 のパス末尾 | Line 3 の表示 |
+|---|---|
+| `owner/repo` と一致 (ghq 等) | `gh:` ごと出さない |
+| repo 名だけ一致 (`~/dev/<repo>` 等) | `gh:owner/` に畳む (末尾の `/` は「続きは上の行」の意) |
+| 不一致 | `gh:owner/repo` を全部出す |
 「まだ GitHub に上げてないリポ」がひと目でわかります。
-`gh:` プレフィックスは dim、`owner/repo` は通常輝度です — ローカルのディレクトリ名と origin のリポジトリ名が食い違っていても、どこの repo かがここで判別できます。
+`gh:` プレフィックスは dim、`owner/repo` は通常輝度です — ローカルのディレクトリ名と origin のリポジトリ名が食い違っていても、どこの repo かがここで判別できます (一致していれば上のとおり省略されるので、**出ているときは必ず何か違う**ということです)。
 
 worktree セッションで `<repo>/.claude/worktrees/<名前>` 配下にいる場合、パスはリポジトリ root までで切り、worktree 名を 🌲 の直後に表示します。
 パス末尾がランダムな worktree 名で占領されず、リポジトリのディレクトリ名がパス末尾に残ります。
@@ -66,7 +107,7 @@ master  0m initial commit
 プロバイダー別の表示:
 
 ```
-Anthropic(enterprise)  Opus 5  ...                ← Anthropic直接 (サンドベージュ + サブスク種別)
+Anthropic(Max 20x)  Opus 5  ...                ← Anthropic直接 (サンドベージュ + プラン名/レート枠)
 Bedrock  global.anthropic.claude-opus-5-v1  ...   ← AWS Bedrock (ティールグリーン)
 Vertex  Opus 5  ...                               ← Google Vertex AI (ブルー)
 Foundry  Opus 5  ...                              ← Microsoft Foundry (Azureブルー)
@@ -224,7 +265,7 @@ Claude Code 運用で特に便利な機能:
 - **Quick Terminal** — `toggle_quick_terminal` を任意のキーバインドに割り当てるとドロップダウン式の即時セッションが使える (デフォルトキーは未設定)
 - **Config Hot-reload** — `⌘⇧,` で設定即時反映、ステータスラインのテーマ調整が高速
 - **Metal GPU レンダリング** — `refreshInterval` (30s) ごとの再描画でもフリッカーなし
-- **SGR 2 (faint) 対応** — 二次情報を弱めて出す表示（`base:`・`week:`・コミットメッセージ等）がそのまま効く。faint 未対応の端末ではこれらが通常輝度に潰れ、情報の階層が失われます
+- **SGR 2 (faint) 対応** — 二次情報を弱めて出す表示（`from:`・`week:`・コミットメッセージ等）がそのまま効く。faint 未対応の端末ではこれらが通常輝度に潰れ、情報の階層が失われます
 
 設定ファイル (macOS): `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`
 

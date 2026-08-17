@@ -4,7 +4,7 @@
 
 ## ファイル構成
 
-- **`statusline-command.sh`** — メイン statusLine (プロンプト直下の 4 行)。`settings.json` の `statusLine` から参照。
+- **`statusline-command.sh`** — メイン statusLine (プロンプト直下の 5 行)。`settings.json` の `statusLine` から参照。
 - **`subagent-statusline-command.sh`** — agent panel の各サブエージェント行 (`subagentStatusLine`、v1.45.0 追加)。`settings.json` の `subagentStatusLine` から参照。
 - **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_key`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`/`fmt_ctx_size`/`fmt_elapsed`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。tier 判定は `model_key` が display_name / id / Bedrock inference-profile を `opus 5` 等の正規形に畳み、`model_color` はその完全一致で分岐する（新モデルはパレット 1 行 + arm 1 行で足せる）。**色の対象は 4.x 以降**（3.x 系は全廃止済み。下限未満は generic tier 色に落ちるだけで壊れない）。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。`osc8` は URL 側だけ `%` `;` `#` `?` を percent-encode する（表示テキストは素のまま。理由と `%` を先に処理する必要は `lib.sh` のコメント）。
 
@@ -27,10 +27,11 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — git の「事実」を US 区切りで返す（ANSI も stdin 由来値も含めない。5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
-├── Line 1           [vim mode バッジ (INSERT=ライムグリーン bg / VISUAL・V-LINE=ゴールド bg、NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（light purple）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
+├── Line 1           [vim mode バッジ (INSERT=青 bg / VISUAL・V-LINE=橙 bg、vim 側の流儀。NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（レベルごとの色。low=gold / medium=green / high=薄紫 / xhigh=濃紫 / max=多色）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ output style（白、`default` 以外のときだけ = 既定と違うことがシグナル）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
-├── Line 3           Git ([gh: (dim) + owner/repo (通常輝度)、GitHub origin あり時のみ] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + base:親ブランチ (reflog) + dirty state + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
-├── Line 4           5hレート制限 + コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + weeklyレート制限 (Anthropic のみ) + extra-usage実課金 ($、gold、Anthropic のみ) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、通常輝度)
+├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [gh: (dim) + owner/repo (通常輝度)。GitHub origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
+├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値)
+├── Line 5           **アカウント**: 5hレート制限 + weeklyレート制限 + モデル別weekly制限 (`Fable:39%`) + extra-usage実課金 ($、gold)。全要素 Anthropic 限定なので Bedrock 等ではこの行が出ない (空行は挟まない)
 └── Output           printf で各行を出力
 ```
 
@@ -55,7 +56,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 - **状態** (`status`): **「実行中」表示は Claude Code のネイティブ chrome (行頭の `○`/スピナー) に委ね、行本文に独自グリフは出さない**（自前の tick 駆動アニメは CC の本物と重複・劣化するため）。`running` / `completed`(行はまもなく消える) / 無しは無表示、それ以外 (`needs_input` 等の注意状態) だけ**黄で status 語**を出す (PR review_state と同じ色付き単語作法)。
 - **worktree** (`cwd` が `.claude/worktrees` 配下の時だけ `🌲名`、Line 2 と協調)。
 - **context% と経過は出さない** (v1.51.0 で撤去)。並走する subagent は同じタスクを分担するのでどれも似た値になり (実測 5-9% / 5-6m)、行が伸びるだけで判断に効かなかった。撤去に伴い `tokenCount`/`contextWindowSize`/`startTime` の抽出、`fmt_elapsed`、`date` fork がまとめて落ちた (残る fork は jq 2 回のみ)。差を見たい時は Claude Code 既定描画のトークン数か `/context` を使う。
-- **`effort`** (`EFFORT` light purple、2.1.214+): **セッションの effort を継承している行では absent** なので、出るのは「この subagent だけ effort が違う」時だけ = 差分そのものがシグナルになる (v1.61.0 で採用)。撤去した context%/経過とは性質が逆で、あちらは全行に出て値が揃っていた (だから情報量が無かった)。値はレベル文字列 (`low`/`medium`/`high`/`xhigh`/`max`) か**数値のトークン予算**で、数値は `fmt_ctx_size` で `8k` 形に畳む。docs は「設定された値をそのまま報告する」と明記しており、モデルが非対応レベルなら実際に適用される effort と異なりうる。
+- **`effort`** (レベルごとの色。Line 1 と同じ `effort_color` を使う、2.1.214+): **セッションの effort を継承している行では absent** なので、出るのは「この subagent だけ effort が違う」時だけ = 差分そのものがシグナルになる (v1.61.0 で採用)。撤去した context%/経過とは性質が逆で、あちらは全行に出て値が揃っていた (だから情報量が無かった)。値はレベル文字列 (`low`/`medium`/`high`/`xhigh`/`max`) か**数値のトークン予算**で、数値は `fmt_ctx_size` で `8k` 形に畳む。docs は「設定された値をそのまま報告する」と明記しており、モデルが非対応レベルなら実際に適用される effort と異なりうる。
 
 実装の要点:
 - **単一 jq で抽出**: `tasks[]` を US (`0x1f`) 区切りで連結。`read` の `IFS=tab` は空フィールドを潰す (tab は IFS 空白扱い) ため桁ずれする → 非空白の US を区切りに使う。全 text フィールド (`id`/`label`/`model`/`status`/`cwd`/`effort`) の改行・タブは jq `gsub` で空白化し 1 行 = 1 task を保つ。抽出は配列 index をせず、`effort` のように非スカラーが来うるフィールドは `if type == "string" or type == "number"` の型ガードを通してから `tostring` するので、1 task のフィールド型不正でも jq が abort せず全行が消えることはない (ガード無しで新フィールドを足すと全パネルが既定描画に戻る)。
@@ -66,8 +67,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 | 指標 | 色 | ANSIコード |
 |---|---|---|
-| vim mode `INSERT` | 黒文字 / ライムグリーン bg (bold) | 1;30;48;5;148 |
-| vim mode `VISUAL` / `V-LINE` | 黒文字 / ゴールド bg (bold) | 1;30;48;5;214 |
+| vim mode `INSERT` | 黒文字 / 青 bg (bold)。**gruvbox/airline の流儀**（緑は NORMAL/COMMAND なので使わない） | 1;30;48;5;109 |
+| vim mode `VISUAL` / `V-LINE` | 黒文字 / 橙 bg (bold) | 1;30;48;5;208 |
 | コンテキスト使用率 | < 80% lime green / 80-89% 黄 / >= 90% 赤 | 38;5;82 / 33 / 31 |
 | Fable | 多色・蝶標本 (文字ごとに循環) | `rainbow()` 178/172/130/167/143/107/66 |
 | Opus 5 | coral 一族の暗→明スイープ orange→coral→gold | `gradient()` 130→173→215 |
@@ -77,11 +78,16 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | Sonnet 4.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
 | Anthropic / 5hレート制限 | サンドベージュ | 38;5;180 |
-| extra-usage 実課金額 | gold | 38;5;220 |
+| extra-usage **実課金額** | 明るい gold + **太字** | 1 / 38;5;220 |
+| セッションコスト | ブロンズ (extra と同色相で明度だけ下げる = 参考値) | 38;5;136 |
 | Bedrock | ティールグリーン | 38;5;72 |
 | Vertex | Google ブルー | 38;5;33 |
 | Foundry | Azure ブルー | 38;5;39 |
-| effort (`low`/`high`/`max`) | light purple | 38;5;105 |
+| effort `low` | gold | 38;5;178 |
+| effort `medium` | green | 38;5;71 |
+| effort `high` / 未知のレベル | 薄紫 (periwinkle) | 38;5;105 |
+| effort `xhigh` | 濃紫 (violet) | 38;5;99 |
+| effort `max` | 多色・紫→桃→橙 (文字ごとにスイープ) | `gradient()` 99→170→209 |
 | think | light cyan | 38;5;117 |
 | fast (`/fast` 有効時、`fast_mode`) | greenyellow | 38;5;190 |
 | Agent 名 | ピンク | 38;5;213 |
@@ -89,14 +95,14 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | セッション出自のラベル (`branch:` / `fork`) | 黄 | 33 |
 | セッション出自に添える元セッション id (full uuid) | 通常輝度 (`gh:` と同じ「ラベルだけ色、値は一次情報」の作法。コピーして `--resume` に渡す値なので弱めない) | - |
 | version (`v2.1.x`。Line 1 の最後) | グレー | 38;5;248 |
+| version (最新版から遅れている間だけ。追いつけば 248 に戻る) | 赤 (アラーム色。既存の「注意すべき状態」の語彙を借りる) | 31 |
+| output style (`default` 以外のときだけ) | 白 (Line 1 に唯一残っていた「色相を持たない」枠。Agent 名のピンク 213 と被らせないため) | 38;5;231 |
+| 進行中の git 操作 (`rebase 2/5` / `merge` / `cherry-pick` / `revert` / `bisect`、Line 3 の先頭) | 赤 (detached / conflicts と同じ「特別な git 状態」) | 31 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
-| Git staged `A` / ahead `↑` | 緑 | 32 |
-| Git modified `M` | 黄 | 33 |
-| Git untracked `?` | グレー | 38;5;248 |
-| Git conflicts `U` / behind `↓` / Detached HEAD | 赤 | 31 |
+| Git 追加行 `+N` / ahead `↑` | 緑 | 32 |
+| Git 削除行 `-N` / conflicts `!N` / behind `↓` / Detached HEAD | 赤 | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
-| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git branch parent (`base:`)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
-| セッションコスト (`$X.XX`) | 通常輝度 (色を付けない — Line 4 の 3 系統の色に 4 つ目を足さない。金色は extra-usage の実課金と混同するため不可) | - |
+| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
 | コンテキストの分母 (`/200k`・`/1M` 等を常時表示。値が来ていない旧 CC のみ無印) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |
 | Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
@@ -196,17 +202,35 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 - **単一 jq 呼び出し**: stdin JSON を `eval` + `@sh` で一括抽出（フィールドごとの再パースなし）
 - **共有タイムスタンプ**: `_NOW=$(date +%s)` を1回だけ呼び、全キャッシュ判定で再利用
 - **キャッシュ**: `${TMPDIR:-/tmp}/claude-statusline-$UID/{git,subscription,usage_spend}` (mkdir 700、親も含めて owner-only) に保存。`CLAUDE_STATUSLINE_CACHE_DIR` で差し替え可 (テスト密閉の seam)。固定の共有パスは共有 Mac で書けず curl storm になるため v1.52.0 でユーザー単位に変更
+- **未追跡の行数には件数上限 (500)**: 数えるコストは未追跡の**総バイト数**に比例するので、`node_modules` などを無視設定に入れていないリポ (実測 30,000 件で **5.17 秒**) では `GIT_CACHE_MAX_AGE=5` を超えて「書き終えた時点で既に stale」= 毎レンダー全走査 + 背景 job の積み上がりになる。超えたら未追跡ぶんを数えない (途中までの合計は「間違った数」なので要素ごと落とす)。**上限は件数なので近似指標**（コストはバイト数側）
+- **最新版の取得はローカル読みだけ**: Claude Code 自身が `<config dir>/cache/changelog.md` に changelog をキャッシュしているので、その冒頭の `## X.Y.Z` を読めば最新リリースが分かる (ネットワーク・キャッシュ書き込み・fork すべてゼロ)。**読む行数に上限 (20 行)** — 見出し形式が変わった瞬間に 513KB を毎レンダー読み切り、描画が実測 42ms → 110-121ms になる (上限つきなら 41ms)
 - **Git worktree 対応**: stdin JSON の `worktree.name` または `workspace.git_worktree` (Claude Code 2.1.97+) を検出して 🌲 を表示。`.claude/worktrees` 配下ではパスをリポ root で切り worktree 名を 🌲 直後に表示（パス末尾のランダム名でリポ dir が埋まるのを防ぐ）
 
-## Line 4: レート制限 + コンテキストバー + コスト
+## Line 4 / Line 5: セッション と アカウント
 
 **Anthropic** (rate_limits が届く場合)
 - Claude Code 2.1.80+ の stdin JSON `rate_limits` フィールドから直接取得
-- 表示: 5hバー + % + リセット残(H:MM `4:01`) → コンテキストバー + % → week:% + リセット曜日時刻 → extra-usage実課金 → セッション経過時間(単位1つ `41m`/`4h`。m/h 帯は Line 3 の commit age と同表記、24h 以降は経過が `27h` / age が `1d` で分かれる) → セッションコスト
+- 表示は **2 行**: **Line 4 (このセッション)** = コンテキストバー + % + 分母 → セッション経過時間(単位1つ `41m`/`4h`。m/h 帯は Line 3 の commit age と同表記、24h 以降は経過が `27h` / age が `1d` で分かれる) → セッションコスト。**Line 5 (アカウント)** = 5hバー + % + リセット時刻(`19:31`、曜日なし) → week:% + リセット(`土 16:00`、曜日つき) → モデル別週間枠 → extra-usage実課金
+- **リセット時刻はメモ化する** — epoch は次のリセットまで動かないので `${CACHE_BASE}/resets<config dir>` に `epoch US 表示文字列` を持ち、epoch が一致する限り `date` を呼ばない（実測 `date -j` 1 回 4.15ms。呼び出しは 1 描画 3 回 → 1 回で、レート制限あり/なしの描画時間差 約 8ms が消えた）。使用率は使うたび変わるのでメモしない。**epoch 一致時しか cache の値を使わない**ので誤表示の経路が無く、ファイル名に config dir を混ぜて複数アカウント併用時の書き合いを避ける
+- **スコープで行を分ける**（v1.74.0）。1 行に混在していた頃は 7 要素・弱め表示が 7 割で「どこまでが制限の話でどこからがこのセッションの話か」が読めなかった。特に週間リセット（dim の時刻）の直後にセッション経過（dim の時刻）が並び、経過が「週間制限の続き」に見えて属し先が消えていた。区切り記号を足すのではなく意味の境界で行を割った。**セッション行を上（4 行目）**に置くのは毎ターン変わるのがこちらだから（制限は数時間〜1 週間単位）。`extra:` は枠を超えた分の課金なのでアカウント行、セッションコストはこのセッションの API 換算額なのでセッション行
 - Pre-2.1.80 ではレート制限部分が非表示（graceful degradation）
 
 **Bedrock / Vertex AI / Foundry**
 - `rate_limits` フィールドは届かないため、コンテキストバーとコストのみ表示（extra-usage も Anthropic 限定なので非表示）
+
+**モデル別の週間制限** (`Fable:39% 土 16:00`、Anthropic のみ)
+- **stdin には来ない** — docs の完全 JSON スキーマで `rate_limits` は `five_hour` と `seven_day` の 2 つだけ。モデル別の枠は `/usage` レスポンスの `limits[]` にある（`extra:$` と同じ curl の結果なので**追加のネットワークも fork もゼロ**）
+- 実測した要素の形: `{"kind":"weekly_scoped","group":"weekly","percent":39,"severity":"normal","resets_at":"2026-08-15T07:00:00.346608+00:00","scope":{"model":{"id":null,"display_name":"Fable"}},"is_active":true}` — claude.ai の「週間制限 / Fable / 39% 使用済み」と一致
+- **読むのは `limits[]` だけ** — レスポンスのトップレベルには `nimbus_quill` / `amber_ladder` / `tangelo` / `iguana_necktie` 等のコードネーム鍵があるが feature flag 名で churn するので使わない。`limits[]` は消費者向けに整形済み
+- **`is_active` / `severity` で絞らない** — 各 1 観測しかなく意味論が不明（未文書フィールドを列挙する罠）
+- **`resets_at` は ISO8601 文字列**で epoch ではない。jq の `fromdateiso8601` は小数秒（`.346608`）と `+00:00` オフセットを受け付けないので剥がしてから渡し、`?` と `// ""` で形式が変わった枠だけ落とす
+- **リセット時刻は背景側で表示文字列まで作る** — epoch をキャッシュして描画側で `format_reset` を呼ぶと **枠 1 つあたり `date` 1 fork** がレンダーごとに乗る（枠は複数ありうるうえ `refreshInterval` で 30s ごとに再実行される。値は 300s しか変わらない）。`strflocaltime` の出力は `date -j -r EPOCH +"%a %H:%M"` と一致する（`Sat 16:00` / `土 16:00` の両方で実測）。これで `render_scoped_limits` は **fork ゼロ**
+- **分単位に丸める** — `resets_at` は毎リクエスト再計算されて**分境界をまたぐ**（実測: 同じリセットが `06:59:59.987654+00:00` と `07:00:00.155204+00:00` の両方で返る）。切り捨てだけだと表示分が `15:59` / `16:00` で揺れ、300s キャッシュのたびに変わる。表示は `%H:%M` なので分丸めが必要な精度そのもの。stdin 由来の `week:` は安定した epoch が来るのでこの問題は無い
+- **`display_name` に空白が入ると 2 語のトークンになる**（`Opus 5:12%` — 後半の語が `:12%` を抱える）。宛名でやったダブルクリック選択の条件は満たさないが、コピーして使う値ではないので許容している（表示専用）
+- **型ガードを通す** — 1 枠の型不正で jq が abort すると同じ jq が運ぶ cents まで消える（subagent の全 abort と同じクラス）
+- 表示は `Fable:39%`。**モデル名は Line 1 と同じ `model_color`**（Fable なら FABLE_PAL の多色、flat 色のモデルはその色）。`:39%` は無色の通常輝度（数値が沈むため dim は却下）、リセット時刻は `week:` と同じ dim — どちらも週間制限で二次情報という位置づけを揃える
+- 全体の週間制限（stdin の `seven_day`）と**併存**する。別の制限なので置き換えない
+- 再検討条件は **stdin が per-model の `rate_limits` を渡してきたとき**（`/check-claude-code-update` の確認項目に入れてある）
 
 **extra-usage 実課金** (`extra:$X.XX`、gold `38;5;220`、Anthropic のみ)
 - `fetch_usage_spend()` が `/usage` OAuth エンドポイント (`api.anthropic.com/api/oauth/usage`) の `spend.used` を取得 — **stdin に無い唯一の課金情報**で、usage-credits の実消費額（参考値の session cost と別物）
@@ -228,3 +252,19 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 | Vertex AI | `CLAUDE_CODE_USE_VERTEX=1` |
 | Foundry | `CLAUDE_CODE_USE_FOUNDRY=1` |
 | Anthropic | 上記以外 |
+
+### プラン名とレート枠 (`Anthropic(Max 5x)`)
+
+Anthropic 直接利用のときだけ、`fetch_subscription()` が Keychain（fallback は `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json`）の `claudeAiOauth` から 2 つを **1 回の jq** で取り、US 区切りで 3600s キャッシュする。
+
+| フィールド | 用途 | 実測値 |
+|---|---|---|
+| `subscriptionType` | 契約種別 → 公式プラン名に畳む | `pro` / `max` / `team` / `enterprise` |
+| `rateLimitTier` | レート枠 → suffix が `Nx` なら添える | `default_claude_max_5x` / `default_claude_max_20x` / `default_claude_ai`（Pro 相当、`Nx` 無し）/ 欠損 |
+
+公式プラン名は Free / Pro / **Max 5x** / **Max 20x** / Team / Enterprise（[claude.com/pricing](https://claude.com/pricing)、[Max プラン](https://support.claude.com/en/articles/11049741-what-is-the-max-plan)）。生値は小文字なので `plan_label`（lib.sh、fork ゼロ）が畳む。
+
+- **`rateLimitTier` の値は列挙しない** — 未文書フィールドなので suffix が `Nx` の形かだけを見る。`default_claude_ai` は枠なしに落ち、未知の `50x` や prefix 変更でも動く
+- **枠は契約種別と独立** — 実測で Enterprise 契約が `default_claude_max_5x` を持つ（契約は Enterprise、レート枠は Max 5x 相当）。Team/Enterprise 専用の値を知らなくても壊れない
+- 未知の契約種別は生のまま出す（graceful degradation）。credentials が読めなければ `Anthropic` だけ
+- 旧形式キャッシュ（1 フィールド）を読んでも契約名だけ出て枠が空になるので、ファイル名の版は上げていない

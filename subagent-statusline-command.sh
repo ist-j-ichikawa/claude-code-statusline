@@ -65,7 +65,7 @@ while IFS=$'\037' read -r id label model status cwd effort; do
   fi
   # effort (2.1.214+): **セッションの effort を継承している行では absent** なので、出るのは
   # 「この subagent だけ effort が違う」時だけ = 差分そのものがシグナルになる (撤去した context%/経過は
-  # 逆に全行に出て値が揃っていた)。色は Line 1 の effort と同じ EFFORT で語彙を揃える。
+  # 逆に全行に出て値が揃っていた)。色は Line 1 と同じ `effort_color`（lib.sh）でレベルごとに変える — 語彙と配色を 1 箇所に集約している。
   # 値はレベル文字列 (low/medium/high/xhigh/max) か**数値のトークン予算**なので数値だけ 8k 形に畳む
   # (`10#` で明示基数 — `08` のようなゼロ埋めを 8 進数と解釈させない)。
   # docs: 「設定された値をそのまま報告する」ので、モデル非対応レベルでは実際の適用値と異なりうる。
@@ -73,7 +73,8 @@ while IFS=$'\037' read -r id label model status cwd effort; do
   # 「effort 語だけ」で上書きしてしまい、Claude Code 既定描画 (名前 · 説明 · トークン数) より情報が減る。
   if [[ -n "$row" ]] && has_val "$effort"; then
     if [[ "$effort" =~ ^[0-9]+$ ]]; then fmt_ctx_size "$((10#$effort))" _ef; else _ef="$effort"; fi
-    add "${EFFORT}${_ef}${RST}"
+    effort_color _ef_col "$_ef"
+    add "$_ef_col"
   fi
   # 「実行中」表示は Claude Code のネイティブ chrome (行頭 ○/スピナー) に委ね、行本文に独自グリフは出さない。
   # running / completed(行はまもなく消える) / 無し は無表示、それ以外(入力待ち等)だけ黄で status 語を出す。
