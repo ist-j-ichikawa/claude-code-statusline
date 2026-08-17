@@ -2805,18 +2805,17 @@ print(r.stdout.split(chr(10))[2])
   [[ "$(_lim "$ep")" != *"$wday"* ]]
 }
 
-@test "リセット時刻: 5h だけタイムゾーンを添えること(行の代表として 1 回)" {
-  # 同じ行の時刻は全部このマシンのローカル TZ なので、**先頭の 5h に 1 回**出せば代表になる。
-  # 4 箇所に付けると同じ語が並ぶだけ（ユーザー選択 2026-08-17）。
+@test "リセット時刻: タイムゾーン名を出さないこと(全部ローカル TZ なので冗長)" {
+  # v1.78.0 で `JST 19:31` と出していたのをやめた（ユーザー選択）— 画面の時刻は例外なく
+  # このマシンのローカル TZ なので、ゾーン名は情報を増やさない。どのゾーンかは docs に書く。
   # **リテラルの `JST` を書かない** — 実行環境の TZ に依存して flaky になるので `date` と比べる。
   local now fe se out zone
   now=$(date +%s); fe=$(( now + 3600 )); se=$(( now + 200000 ))
   zone=$(date -j -r "$fe" +"%Z")
   out=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":16,"resets_at":'"$fe"'},"seven_day":{"used_percentage":9,"resets_at":'"$se"'}}}' \
     | /bin/bash statusline-command.sh | tail -1 | _strip)
-  [[ "$out" == *"$(date -j -r "$fe" +"%Z %H:%M")"* ]]        # 5h には付く（**時刻の前**）
-  # 週間側には付かない = 行に同じ語が 2 回出ない
-  [[ "$(printf '%s' "$out" | grep -c "$zone")" == "1" ]]
+  [[ "$out" == *"$(date -j -r "$fe" +"%H:%M")"* ]]           # 時刻そのものは出る
+  [[ "$out" != *"$zone"* ]]                                  # ゾーン名は出ない
 }
 
 @test "リセット時刻: 5h制限が既に過ぎていたら now と出すこと" {
