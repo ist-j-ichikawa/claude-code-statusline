@@ -1610,10 +1610,14 @@ _os_run() {
   [[ "$result" != *'38;5;176m'"explanatory"* ]]
 }
 
-@test "output style: default では出さないこと" {
+@test "output style: default でも出すこと(ただし dim)" {
+  # v1.76.0 でユーザー選択: 「default のときも default と出してほしい」。
+  # 既定値は「特に設定していない」を示すプレースホルダ側なので dim（`no git` と同じ扱い）で、
+  # 非既定の白 231 との差で「違う」が読める
   local result
   result=$(_os_run "default")
-  [[ "$result" != *"default"* ]]
+  [[ "$result" == *$'\033[2m'"default"* ]]
+  [[ "$result" != *'38;5;231m'"default"* ]]
 }
 
 @test "output style: フィールドが無い旧 Claude Code では出さないこと" {

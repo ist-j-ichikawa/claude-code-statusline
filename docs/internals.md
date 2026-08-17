@@ -27,7 +27,7 @@ statusline-command.sh
 ├── JSON extraction  単一の jq 呼び出しで全フィールドを抽出
 ├── Git info         build_git() — git の「事実」を US 区切りで返す（ANSI も stdin 由来値も含めない。5秒バックグラウンドキャッシュ、atomic mv 書き込み）
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
-├── Line 1           [vim mode バッジ (INSERT=青 bg / VISUAL・V-LINE=橙 bg、vim 側の流儀。NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（レベルごとの色。low=gold / medium=green / high=薄紫 / xhigh=濃紫 / max=多色）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ output style（白、`default` 以外のときだけ = 既定と違うことがシグナル）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
+├── Line 1           [vim mode バッジ (INSERT=青 bg / VISUAL・V-LINE=橙 bg、vim 側の流儀。NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（レベルごとの色。low=gold / medium=green / high=薄紫 / xhigh=濃紫 / max=多色）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ output style（常に出す。`default` は dim = 「特に設定していない」プレースホルダ扱い、非既定は白で立つ）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [gh: (dim) + owner/repo (通常輝度)。GitHub origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (age は m/h/d/w/mo/y の単位 1 つ。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値)
@@ -96,7 +96,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | セッション出自に添える元セッション id (full uuid) | 通常輝度 (`gh:` と同じ「ラベルだけ色、値は一次情報」の作法。コピーして `--resume` に渡す値なので弱めない) | - |
 | version (`v2.1.x`。Line 1 の最後) | グレー | 38;5;248 |
 | version (最新版から遅れている間だけ。追いつけば 248 に戻る) | 赤 (アラーム色。既存の「注意すべき状態」の語彙を借りる) | 31 |
-| output style (`default` 以外のときだけ) | 白 (Line 1 に唯一残っていた「色相を持たない」枠。Agent 名のピンク 213 と被らせないため) | 38;5;231 |
+| output style (非既定) | 白 (Line 1 に唯一残っていた「色相を持たない」枠。Agent 名のピンク 213 と被らせないため) | 38;5;231 |
+| output style (`default`) | dim (既定値はプレースホルダ扱い。`no git` と同じ) | 2 |
 | 進行中の git 操作 (`rebase 2/5` / `merge` / `cherry-pick` / `revert` / `bisect`、Line 3 の先頭) | 赤 (detached / conflicts と同じ「特別な git 状態」) | 31 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
 | Git 追加行 `+N` / ahead `↑` | muted green (**ANSI 32 ではなく 256 色を明示** — ANSI は端末テーマが olive に化かす実測) | 38;5;71 |

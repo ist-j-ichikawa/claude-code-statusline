@@ -758,13 +758,18 @@ fi
 # fast mode (Claude Code 2.1.216 docs で確認、fast_mode boolean) — /fast 有効時のみ。false/欠落は非表示
 [[ "$fast_mode" == "true" ]] && line1+=("${FAST}fast${RST}")
 
-# output style (`output_style.name`) — **`default` 以外のときだけ**出す。
-# output style は応答の挙動を根本から変えるのに Claude Code に常設表示が無く、
-# 「あのセッション explanatory のままだった」に気づく口が無い。既定では出ないので
-# **出ていること自体が「既定と違う」のシグナル**（subagent の effort を出したのと同じ基準）。
-# 旧 Claude Code / 未設定では空になり何も出ない（`// ""` の既定値）。
-if has_val "$output_style" && [[ "$output_style" != "default" ]]; then
-  line1+=("${OSTYLE}${output_style}${RST}")
+# output style (`output_style.name`) — **常に出す**（v1.76.0、ユーザー選択。`default` 以外だけ
+# 出していたが「default のときも default と出してほしい」）。output style は応答の挙動を根本から
+# 変えるのに Claude Code に常設表示が無く、`/output-style` を開かないと今どれなのか分からない。
+# **`default` だけ dim** — 既定値は「特に設定していない」を示すプレースホルダ側なので、
+# `no git` / `(empty)` / `-%` と同じ扱いにする。非既定は白で立つので「違う」は一目で分かる。
+# 旧 Claude Code / フィールド欠落では空になり何も出ない（`// ""` の既定値）。
+if has_val "$output_style"; then
+  if [[ "$output_style" == "default" ]]; then
+    line1+=("${DIM}${output_style}${RST}")
+  else
+    line1+=("${OSTYLE}${output_style}${RST}")
+  fi
 fi
 
 # Agent name

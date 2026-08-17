@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.75.0-blue)
+![Version](https://img.shields.io/badge/version-1.76.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -15,7 +15,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 
 | 行 | 内容 |
 |---|---|
-| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style (`default` 以外) · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
+| **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
 | **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit |
 | **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
