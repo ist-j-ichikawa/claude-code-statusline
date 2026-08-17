@@ -70,7 +70,7 @@ _wait_for_file() {
 
 # _strip — stdin から ANSI (SGR) を落とす。**このファイルで剥がし方を 1 つに保つ** —
 # `perl -pe` と `sed` の 2 記法が混ざると「どちらを直せばいいか」が読めなくなる (実際に分裂した)。
-_strip() { _strip; }
+_strip() { sed $'s/\033\\[[0-9;]*m//g'; }
 
 # _wait_for_mtime FILE EPOCH — FILE の mtime が EPOCH より新しくなるまで待つ。
 # 「内容は同じだが touch された」を見たいテスト用（`_wait_for_file` は存在/非空しか見られない）。
