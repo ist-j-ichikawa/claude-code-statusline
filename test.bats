@@ -104,6 +104,18 @@ _line3_of() {
   printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p'
 }
 
+# _wait_for_change FILE GLOB — FILE の内容が GLOB に一致しなくなるまで待つ。
+# 「新鮮だが形式が違うファイルが、取り直しで置き換わる」ことを見たいテスト用
+# （mtime は既に新しいので `_wait_for_mtime` では見られない）。刻みは他の待ちヘルパーと同じ。
+_wait_for_change() {
+  local f=$1 pat=$2 i
+  for i in {1..50}; do
+    [[ -r "$f" ]] && [[ "$(< "$f")" != $pat ]] && return 0
+    if (( i <= 20 )); then sleep 0.01; else sleep 0.1; fi
+  done
+  return 1
+}
+
 # _stub_env DIRNAME [CURL_BODY] — 密閉した HOME + PATH を組み、`env -i` に渡す前置きを _stub_pre に入れる。
 # statusline が fork するコマンドだけを PATH に置くので、`security` は**入らない** =
 # Keychain 経路を外してファイル fallback を必ず通る。CURL_BODY を渡すと偽 curl を置く。
@@ -506,10 +518,10 @@ _stub_env() {
 
 @test "Line4: extra-usage キャッシュがあると extra:\$X.XX が表示されること" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  echo 214 > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\037214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   [[ "$result" == *'extra:$2.14'* ]]
 }
 
@@ -518,10 +530,10 @@ _stub_env() {
   # `/usage` の limits[] から来る (同じ curl の結果なので追加ネットワークゼロ)。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   # 1 行目 = cents、2 行目以降 = 名前 US % US epoch
-  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   # **多色モデルは名前のリテラル一致が効かない** (1 文字ずつ ANSI が入る) ので ANSI を剥がす
   local plain
   plain=$(printf '%s' "$result" | _strip)
@@ -547,13 +559,13 @@ _stub_env() {
   _stub_env limits "$(printf 'printf "%%s" "$(< %s)"' "$fixture")"
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
-  _wait_for_file "$_stub_cache/usage_spend-v2" -s \
+  _wait_for_file "$_stub_cache/usage_spend" -s \
     || { echo "背景 fetch がキャッシュに届いていない = テストが無意味" >&3; return 1; }
   local cache exp
-  cache=$(< "$_stub_cache/usage_spend-v2")
+  cache=$(< "$_stub_cache/usage_spend")
   # 期待するリセット表示は TZ 依存なので、07:00Z を this machine のローカルに直して比べる
   exp=$(date -j -f '%Y-%m-%dT%H:%M:%S %z' '2026-08-15T07:00:00 +0000' +'%a %H:%M')
-  [[ "$(printf '%s' "$cache" | sed -n '1p')" == "214" ]]        # cents (1 行目)
+  [[ "$(printf '%s' "$cache" | sed -n '1p')" == "cents,limits"$'\037'"214" ]]   # 1 行目 = タグ US cents
   [[ "$cache" == *"Fable"$'\037'"39"$'\037'"$exp"* ]]           # 名前 US 丸めた% US 分丸めしたリセット
   [[ "$cache" != *"Broken"* ]]                                  # 型不正の枠は落ちる
   [[ "$cache" != *"Hourly"* ]]                                  # weekly 以外は入らない
@@ -572,58 +584,65 @@ _stub_env() {
   # `fetch_subscription` と同じく touch で延命し、storm も防いだまま表示を保つ。
   _stub_env usagefail 'exit 1'          # curl は失敗する
   mkdir -p "$_stub_cache"
-  printf '214\nFable\03739\037Sat 16:00' > "$_stub_cache/usage_spend-v2"
+  printf 'cents,limits\037214\nFable\03739\037Sat 16:00' > "$_stub_cache/usage_spend"
   # cache_stale を必ず踏ませる (300s より古くする)
-  touch -t 202001010000 "$_stub_cache/usage_spend-v2"
+  touch -t 202001010000 "$_stub_cache/usage_spend"
   # 描画は背景 fetch を起こすためだけに 1 回走らせる (出力は見ない)
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
   # 背景の fetch が終わるのを待つ (mtime が新しくなる = touch された)
-  _wait_for_mtime "$_stub_cache/usage_spend-v2" 1600000000 \
+  _wait_for_mtime "$_stub_cache/usage_spend" 1600000000 \
     || { echo "背景 fetch が届いていない = テストが無意味" >&3; return 1; }
   local rec
-  rec=$(< "$_stub_cache/usage_spend-v2")
-  [[ "$rec" == "214"$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]   # 内容は消えていない (touch だけ)
+  rec=$(< "$_stub_cache/usage_spend")
+  [[ "$rec" == "cents,limits"$'\037'"214"$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]   # 内容は消えていない (touch だけ)
 }
 
-@test "週間枠: 旧形式キャッシュ(cents 1行)でも extra が出て枠が0件になること" {
-  # フィールドが少ないキャッシュを読んでも `read` が壊れないこと (cents だけ出て枠は 0 件)。
-  # **アップグレード経路そのものは下の「旧ファイル名」テストが見る** — 版付きの名前にしたので、
-  # v1.73.0 が書いたファイルはもう読まれない。
+@test "週間枠: タグの無いキャッシュ(旧形式)を使わないこと" {
+  # 形式タグはレコードの先頭にあるので、v1.73.0 が書いた `214` だけのファイルは
+  # **cents として読まれない**（`214` がタグ位置に来るので不一致）。誤った金額を出すより出さない。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2   # 旧形式
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
-  [[ "$result" == *'extra:$2.14'* ]]
+  local j='{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}'
+  printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend   # 旧形式（タグ無し）
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  [[ "$result" != *'extra:$2.14'* ]]
+  [[ "$result" != *':39%'* ]]
+  # **タグだけ違って中身は現行と同じ形**のケースも使わない（値の捨て忘れを pin する）
+  printf 'OLD_FMT\037214\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  [[ "$result" != *'extra:$2.14'* ]]
   [[ "$result" != *':39%'* ]]
 }
 
-@test "週間枠: 旧ファイル名のキャッシュを読まないこと(アップグレード経路)" {
+@test "週間枠: タグ不一致なら TTL を待たずに取り直すこと(アップグレード経路)" {
   # **テストは常に空のキャッシュから始まるので、アップグレード経路を一度も通らない** —
-  # v1.74.0 で subscription / usage_spend の形式を変えたのにファイル名の版を上げず、
-  # **既存ユーザー全員が旧形式を新コードで読む**状態を出荷した (利用者からの報告で判明)。
-  # 版付きの名前にしたので旧ファイルは無視される。ここを pin すると次に形式を変えたとき
-  # 版の付け忘れが赤くなる。
-  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend        # v1.73.0 が書く名前と形式
-  local result
-  result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  [[ "$result" != *'extra:$2.14'* ]]                                # 旧ファイルは読まれない
-  [[ -f "$CLAUDE_STATUSLINE_CACHE_DIR/usage_spend" ]]               # 触らない (孤児として残す)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  # v1.74.0 は形式を変えたのにファイル名を据え置き、**既存ユーザー全員が旧形式を新コードで読む**
+  # 状態を出荷した（利用者からの報告で判明）。タグ方式では「不一致 = 古い」と同じ扱いにするので、
+  # TTL（300s）を待たずにその場で取り直す。ここを pin すると、次に形式を変えたときの
+  # 「タグを直し忘れた」ではなく「不一致を stale 扱いにし忘れた」を捕まえられる。
+  _stub_env usagefmt 'printf "%s" "{\"spend\":{\"used\":{\"amount_minor\":777,\"exponent\":2}}}"'
+  mkdir -p "$_stub_cache"
+  # 新鮮（TTL 内）だがタグが違うファイルを置く。TTL だけを見る実装なら取り直しは起きない
+  printf 'OLD_FMT\037214\n' > "$_stub_cache/usage_spend"
+  echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  # **mtime では見られない** — 置いたファイルは既に新鮮なので、内容が変わるのを待つ
+  _wait_for_change "$_stub_cache/usage_spend" 'OLD_FMT*' \
+    || { echo "取り直しが走っていない = タグ不一致が stale 扱いになっていない" >&3; return 1; }
+  local rec; rec=$(< "$_stub_cache/usage_spend")
+  [[ "$rec" == "cents,limits"$'\037'"777"* ]]   # 現行タグで上書きされている
 }
 
 @test "週間枠: 壊れた枠の行を落として他の枠とcentsが生き残ること" {
   # 1 枠の形式不正で全体が消えないこと。cents は 1 行目にあるので枠の破損に巻き込まれない。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   # 2 行目 = % が数値でない(落ちる) / 3 行目 = 正常 / 4 行目 = 名前が空(落ちる)
-  printf '214\nBroken\037abc\037Sat 16:00\nFable\03739\037Sat 16:00\n\03712\037Sat 16:00' \
-    > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\037214\nBroken\037abc\037Sat 16:00\nFable\03739\037Sat 16:00\n\03712\037Sat 16:00' \
+    > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   local plain
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" == *"Fable:39%"* ]]      # 正常な枠は出る
@@ -636,10 +655,10 @@ _stub_env() {
   # 「枠の続き」に見えて属し先が消える。**行分割で構造的に起きなくなった**ことを pin する
   # (v1.74.0。以前は同一行で、間に何が挟まるかに依存していた)。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   out=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"cost":{"total_duration_ms":7200000}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | _strip)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   sess=$(printf '%s' "$out" | sed -n '4p')
   lim=$(printf '%s' "$out" | sed -n '5p')
   # 経過はセッション行、枠とそのリセットは制限行 — 同じ行に並ばない
@@ -652,10 +671,10 @@ _stub_env() {
 
 @test "週間枠: Bedrockではモデル別枠を出さないこと" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1:0","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   local plain
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" != *":39%"* ]]
@@ -670,10 +689,10 @@ _stub_env() {
 
 @test "Line4: Bedrockでは extra-usage を取得も表示もしないこと" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  echo 500 > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\037500\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   [[ "$result" != *'extra:'* ]]
 }
 
@@ -1711,10 +1730,10 @@ _os_run() {
 @test "行分割: 制限行の順序が 5h → week → モデル別枠 であること" {
   # 「% → リセット」の並びが繰り返されるので、リセット時刻がどの制限のものか対比で読める。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf '0\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend-v2
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   five_pos="${result%%35%*}"
   week_pos="${result%%week:*}"
   scoped_pos="${result%%Fable*}"
@@ -2120,18 +2139,21 @@ _os_run() {
   [ -z "$bad" ] || { printf 'PATH の bash で起動している箇所:\n%s\n' "$bad" >&2; false; }
 }
 
-@test "cache: 形式を持つキャッシュのファイル名が版付きであること(アップグレード経路の保護)" {
-  # 形式を変えたのに名前を据え置くと、**既存ユーザーだけが旧形式を新コードで読む**（新規
-  # インストールでは正しいので気づけない）。v1.74.0 で subscription / usage_spend の 2 つを
-  # 踏んだので、版の付け忘れを grep で禁じる。resets は v1.74.0 新規なので版を持たない。
-  local bad=""
-  for v in SUB_CACHE USAGE_CACHE; do
-    grep -qE "^readonly ${v}=\"\\\$\{CACHE_BASE\}/[a-z_]+-v[0-9]+\"" \
-      "$BATS_TEST_DIRNAME/statusline-command.sh" || bad+="$v "
+@test "cache: 形式タグを定義して読み側で検証していること(アップグレード経路の保護)" {
+  # 形式を変えたのに旧キャッシュを読むと、**既存ユーザーだけが壊れる**（新規インストールでは
+  # 正しいので気づけない）。v1.74.0 で subscription / usage_spend の 2 つを踏んだ。
+  # タグ方式では ① タグ定数が在ること ② 読み側が**その定数と比較**していること を強制する
+  # （比較を消すと旧形式が黙って通るので、定数の存在だけでは足りない）。
+  local sl="$BATS_TEST_DIRNAME/statusline-command.sh" bad=""
+  local v
+  for v in GIT_FMT SUB_FMT USAGE_FMT RESET_FMT; do
+    grep -qE "^readonly ${v}='" "$sl" || bad+="${v}(未定義) "
+    # 定義行以外に**比較で 1 回以上**出てくること
+    [ "$(grep -c "\$${v}\|\${${v}}" "$sl")" -ge 1 ] || bad+="${v}(未使用) "
   done
-  # git cache はファイル名を関数内で組むので別に見る
-  grep -qE '\-v[0-9]+"$' "$BATS_TEST_DIRNAME/statusline-command.sh" || bad+="GIT_CACHE "
-  [ -z "$bad" ] || { printf '版が付いていないキャッシュ: %s\n' "$bad" >&2; false; }
+  # ファイル名に版を持たせない（名前は安定させ、判定はタグに寄せる）
+  grep -qE 'CACHE_BASE\}/[a-z_]+-v[0-9]+' "$sl" && bad+="ファイル名に版が残っている "
+  [ -z "$bad" ] || { printf 'タグ方式の不備: %s\n' "$bad" >&2; false; }
 }
 
 @test "config dir: ~/.claude を直に書いた箇所が無いこと(CLAUDE_CONFIG_DIR の取りこぼし防止)" {
@@ -2230,11 +2252,12 @@ _os_run() {
   run env -u CLAUDE_STATUSLINE_NO_NET HOME="$BATS_TEST_TMPDIR/fakehome" \
     PATH="$BATS_TEST_TMPDIR/bin:$PATH" CLAUDE_STATUSLINE_CACHE_DIR="$d" \
     /bin/bash -c 'printf "%s" "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"'"$BATS_TEST_DIRNAME"'\"}}" | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"'
-  for i in {1..20}; do [[ -f "$d/subscription-v2" ]] && break; sleep 0.1; done
+  for i in {1..20}; do [[ -f "$d/subscription" ]] && break; sleep 0.1; done
   # ファイルを書かないと cache_stale が「不在=stale」で毎レンダー背景 fetch を起こし、
   # Keychain 読みの storm になる (extra-usage が 0 でも必ず書くのと同じ理由)
-  [[ -f "$d/subscription-v2" ]]
-  [[ ! -s "$d/subscription-v2" ]]        # 空でよい — display は has_val で非表示に倒れる
+  [[ -f "$d/subscription" ]]
+  # タグ + 空値が入る（storm を防ぐために「書く」ことが要件。値は空でよく display は非表示に倒れる）
+  [[ "$(< "$d/subscription")" == "type,tier"$'\037'$'\037'* || "$(< "$d/subscription")" == "type,tier"$'\037' ]]
   [[ "$output" == *"Anthropic"* ]]    # 種別が無くても provider 表示は出る
   [[ "$output" != *"Anthropic("* ]]   # 空の括弧は出さない
 }
@@ -2281,11 +2304,11 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription-v2" -s
-  # キャッシュは `契約種別 US レート枠` の 2 フィールド (この fixture は rateLimitTier を持たないので枠は空)
+  _wait_for_file "$_stub_cache/subscription" -s
+  # キャッシュは `形式タグ US 契約種別 US レート枠` (この fixture は rateLimitTier を持たないので枠は空)
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription-v2")
-  _st="${_cached%%$'\037'*}"
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   [[ "$_st" == "enterprise" ]]
   # 2 回目のレンダーでキャッシュから読んで表示に載ること。表記は公式名 (`Enterprise`)
   run env "${_stub_pre[@]:1}" /bin/bash -c \
@@ -2306,12 +2329,13 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription-v2" -s
+  _wait_for_file "$_stub_cache/subscription" -s
   # `pro` = CLAUDE_CONFIG_DIR 側。`max` なら偽 HOME 側を読んでいる
-  # (キャッシュは `契約種別 US レート枠` の 2 フィールドなので先頭だけ見る)
-  local _cached
-  _cached=$(<"$_stub_cache/subscription-v2")
-  [[ "${_cached%%$'\037'*}" == "pro" ]]
+  # (レコードは `形式タグ US 契約種別 US レート枠` なので 2 番目を見る)
+  local _cached _st2
+  _cached=$(<"$_stub_cache/subscription")
+  _st2="${_cached#*$'\037'}"; _st2="${_st2%%$'\037'*}"
+  [[ "$_st2" == "pro" ]]
 }
 
 @test "plan: subscriptionType が公式表記に畳まれること" {
@@ -2342,13 +2366,31 @@ _os_run() {
   plan_label out "enterprise" "null"                  ; [[ "$out" == "Enterprise" ]]
 }
 
-@test "plan: 旧ファイル名の subscription キャッシュを読まないこと(アップグレード経路)" {
-  # v1.73.0 が書く `subscription`（単一値）を新コードが読むと、契約名は出るが**レート枠が空**に
-  # なり、`Anthropic(Max 5x)` が `Anthropic(Max)` に退化する。この状態が 3600s 続いていた。
-  # 版付きの名前 (`subscription-v2`) にしたので旧ファイルは読まれない。
+@test "plan: タグだけ違う subscription キャッシュを読まないこと" {
+  # タグ無し（`max` 単体）はフィールドが空になるので値の捨て忘れを検出できない。
+  # **タグだけ違って中身は現行の形**のファイルで pin する（捨て忘れると枠まで出てしまう）。
+  local d="$BATS_TEST_TMPDIR/wrongfmtsub"
+  mkdir -p -m 700 "$d"
+  printf 'OLD_FMT\037max\037default_claude_max_5x' > "$d/subscription"
+  local j out
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  # **NO_NET は使わない** — あれは Keychain 読みごと止めるので、タグ検証を外しても契約名が
+  # 出ず「常に緑」になる（実際にこの形で書いて pin できていなかった）。偽 HOME で
+  # credentials を読めなくし、**キャッシュだけが情報源**の状態にする
+  out=$(printf '%s' "$j" | env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_STATUSLINE_CACHE_DIR="$d" \
+    HOME="$BATS_TEST_TMPDIR/nohome-wrongfmt" /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p' | _strip)
+  [[ "$out" != *"Max"* ]]
+  [[ "$out" != *"5x"* ]]
+  [[ "$out" == *"Anthropic"* ]]
+}
+
+@test "plan: タグの無い subscription キャッシュを読まないこと(アップグレード経路)" {
+  # v1.73.0 が書く単一値 `max` を新コードが読むと、契約名は出るが**レート枠が空**になり
+  # `Anthropic(Max 5x)` が `Anthropic(Max)` に退化する。この状態が 3600s 続いていた。
+  # 形式タグを見るようにしたので、タグの無い中身は使わない（`max` はタグ位置で不一致になる）。
   local d="$BATS_TEST_TMPDIR/upgradesub"
   mkdir -p -m 700 "$d"
-  printf 'max' > "$d/subscription"          # v1.73.0 が書く名前と形式
+  printf 'max' > "$d/subscription"          # v1.73.0 の形式（タグ無し）
   local j out
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   # 偽 HOME で Keychain も credentials も読めない状態にし、「旧ファイルだけが情報源」にする
@@ -2356,22 +2398,23 @@ _os_run() {
     HOME="$BATS_TEST_TMPDIR/nohome-upgrade" /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p' | _strip)
   [[ "$out" != *"Max"* ]]                   # 旧ファイルは読まれない
   [[ "$out" == *"Anthropic"* ]]             # 行そのものは出る (provider は stdin 由来)
-  [[ -f "$d/subscription" ]]                # 触らない (孤児として残す)
+  [[ -f "$d/subscription" ]]                # ファイル自体は残る（NO_NET なので取り直しは走らない）
 }
 
-@test "plan: 旧形式キャッシュ(US区切り無し)でも契約名が出てstderrが汚れないこと" {
-  # フィールドが少ないキャッシュを読んでも `read` が壊れず、契約名だけは出ること (枠が空になる)。
-  # **アップグレード経路は下の「旧ファイル名」テストが見る**。
+@test "plan: タグの無いキャッシュを読んでも stderr が汚れないこと" {
+  # 使わないだけで、エラーも警告も出さないこと（読み手に見えるのは「枠が出ない」だけ）。
   local d="$BATS_TEST_TMPDIR/oldsubcache"
   mkdir -p -m 700 "$d"
-  printf 'max' > "$d/subscription-v2"          # 旧形式: US 区切りが無い
+  printf 'max' > "$d/subscription"          # 旧形式: US 区切りが無い
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   # NO_NET だと種別を空に倒す経路に入ってしまうので、**キャッシュを読む経路を通すため
   # NO_NET を外して**確認する (偽 HOME で Keychain/credentials も読めない状態にする)
   run env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome" /bin/bash -c \
     'printf "%s" "$1" | /bin/bash "$2"' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
-  [[ "$output" == *"Anthropic(Max)"* ]]
+  # タグが無いので**契約名も出ない**（誤った枠を出すより出さない）。行そのものは出る
+  [[ "$output" == *"Anthropic"* ]]
+  [[ "$output" != *"Anthropic("* ]]
   # stderr が空であること — `2>/dev/null` で捨てると gate を外しても緑のままになる
   run env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome" /bin/bash -c \
     'printf "%s" "$1" | /bin/bash "$2" 2>&1 >/dev/null' _ "$j" "$BATS_TEST_DIRNAME/statusline-command.sh"
@@ -2428,15 +2471,34 @@ _os_run() {
 # ============================================================================
 # build_git のデータ/表示分離 (v1.53.0) — 3 パス問題と cross-session 汚染の構造的解消
 # ============================================================================
+@test "Git facts: タグの違うキャッシュを使わず作り直すこと" {
+  # レコードは位置で読むので、形式が変わった旧キャッシュをそのまま解釈すると**別の値が
+  # 別のフィールドとして表示される**（v1.74.0 の subscription と同じクラスの破綻で、
+  # あちらは「枠が空」で済んだがこちらは誤表示になりうる）。タグ不一致は捨てて作り直す。
+  local d="$BATS_TEST_TMPDIR/gitfmt" w="$BATS_TEST_TMPDIR/gitfmtrepo"
+  _repo_at "$w"
+  mkdir -p "$d/git"
+  # 新鮮（TTL 内）だがタグが違うレコードを置く。TTL だけを見る実装なら fakebranch が出てしまう
+  printf 'OLD_FMT\037fakebranch\0370\037\037\0370\0370\0370\0370\0370\037\037\037\n' \
+    > "$d/git/$(md5 -q -s "$w")"
+  local out
+  out=$(printf '%s' "{\"model\":{\"id\":\"test\",\"display_name\":\"Test\"},\"workspace\":{\"current_dir\":\"$w\"},\"context_window\":{\"used_percentage\":10}}" \
+    | CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p' | _strip)
+  [[ "$out" != *"fakebranch"* ]]        # タグ不一致のレコードは使わない
+  [[ -n "$out" ]]                       # cold-start に落ちて行は出る
+}
+
 @test "Git facts: キャッシュにANSIもstdin由来値も入らないこと" {
   d="$BATS_TEST_TMPDIR/factcache"
   p='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'
   CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'$p'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$d/git"
-  local facts; facts=$(cat "$d"/git/*-v4)
+  local facts; facts=$(cat "$d"/git/*)
   [[ "$facts" != *$'\033'* ]]        # レンダリング済み ANSI を置かない
   [[ "$facts" != *"approved"* ]]     # stdin 由来値 (PR state) を置かない = 別セッションに漏れない
   [[ "$facts" == *$'\037'* ]]        # US 区切りの facts である
+  # 先頭は形式タグ (フィールド一覧)。一致しないレコードは読み側が捨てて取り直す
+  [[ "$facts" == "branch,detached,repo,remote,ins,del,conf,ahead,behind,age,msg,op"$'\037'* ]]
 }
 
 @test "dirty state: 行数の増減が +N -N で出ること" {
@@ -2514,7 +2576,8 @@ subprocess.run(["/bin/bash", script], input=j, capture_output=True, text=True, e
 # 背景の build_git 完走を待つ（cache が書かれるまで）
 import glob, time
 for _ in range(200):
-    if glob.glob(cache + "/git/*-v4"): break
+    # 名前は md5 のみ（形式判定はレコード先頭のタグ）。**`.tmp-<pid>` を完成と誤認しない**
+    if [g for g in glob.glob(cache + "/git/*") if ".tmp" not in g]: break
     time.sleep(0.05)
 else:
     print("CACHE_NEVER_WRITTEN"); sys.exit(1)

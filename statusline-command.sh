@@ -48,14 +48,29 @@ cache_stale() {
   ((age > max_age))
 }
 
+# --- キャッシュの形式タグ ---
+# **フィールド一覧そのものをタグにして、レコードの先頭に入れる**（v1.77.0）。
+# 読み側はタグが一致しなければ「キャッシュ無し」として扱い、**その場で取り直す**。
+#
+# 以前はファイル名に `-vN` を付けていたが 3 つ問題があった: ① 製品版 (`version-1.76.0`) と
+# 紛らわしい ② git が `-v4` / 他が `-v2` で**意味のない序列**が見える ③ **番号を上げるのは
+# 手作業で、実際に忘れて出荷した**（v1.74.0 の subscription。既存ユーザー全員が旧形式を
+# 新コードで読み、レート枠が最大 1 時間欠けた）。さらに旧ファイルが孤児として並ぶので、
+# どれが現行か名前から読めなかった。
+#
+# タグを中に入れると: 名前が安定して**孤児が出ない**（同じ名前を上書き）/ 形式を変える人は
+# **必ずこの一覧を編集する**ので番号より忘れにくい / 一致しなければ即取り直すので
+# 「古い形式のファイルが TTL 分だけ表示を欠かせる」が起きない。読みは fork ゼロのまま。
+readonly GIT_FMT='branch,detached,repo,remote,ins,del,conf,ahead,behind,age,msg,op'
+readonly SUB_FMT='type,tier'
+readonly USAGE_FMT='cents,limits'
+readonly RESET_FMT='e5,t5,e7,t7'
+
 # git_cache_file DIR — sets _gc (no subshell)
 git_cache_file() {
   [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
-  # ファイル名に版を入れて、レコード形式が変わったときに旧キャッシュを誤読しないようにする
-  # (移行処理は不要 — 版が違えば別ファイルなので次のレンダーで作り直される)。
-  # -v2: レンダリング済み ANSI → US 区切りの facts / -v3: `base` 撤去 /
-  # -v4: ファイル状態の件数 (staged/modified/untracked) → 行数 (ins/del)。
-  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")-v4"
+  # 名前はディレクトリの md5 だけ。形式の判定はレコード先頭のタグ (`GIT_FMT`) が行う
+  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
 }
 
 # --- Credentials blob (Keychain → file fallback) ---
@@ -78,13 +93,10 @@ get_credentials_blob() {
 }
 
 # --- Subscription type (cached, background refresh) ---
-# **形式を変えたらファイル名の版を上げる** (git cache の `-vN` と同じ作法) — `-v2` は
-# 「契約種別 1 値」→「契約種別 US レート枠」の 2 値化。版を据え置いていた v1.74.0 では、
-# 旧形式を読んだ **既存ユーザー全員が最大 1 時間 `Anthropic(Max)`**（枠が欠けた形）になった。
-# 「display が空を非表示に倒すので実害なし」と判断していたが、**アップグレードは全員が通る経路**
-# なので実害だった (利用者からの報告で判明)。旧ファイルは孤児として残るが、git cache で既に
-# 「移行処理は不要」と割り切っており TMPDIR は OS が掃除する。
-readonly SUB_CACHE="${CACHE_BASE}/subscription-v2"
+# 形式の判定はレコード先頭のタグ (`SUB_FMT`) が行うので、**ファイル名は安定**（孤児が出ない）。
+# v1.74.0 は形式を変えたのに名前を据え置き、旧形式を読んだ**既存ユーザー全員が最大 1 時間
+# `Anthropic(Max)`**（枠が欠けた形）になった。v1.74.1 で `-v2` を付け、v1.77.0 でタグ方式へ。
+readonly SUB_CACHE="${CACHE_BASE}/subscription"
 readonly SUB_CACHE_MAX_AGE=3600
 
 # fetch_subscription — sets _sub_type (no subshell)
@@ -92,9 +104,19 @@ readonly SUB_CACHE_MAX_AGE=3600
 # (ネットワークではないが、macOS のアクセス許可ダイアログを出しうる外部参照。install.sh の試走・テストが
 # ユーザーの Keychain に触らないための入口でもある)
 fetch_subscription() {
-  [[ -n "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && { _sub_type=""; _rate_tier=""; return; }
+  _sub_type="" _rate_tier=""
+  [[ -n "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && return
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-  if cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
+  # **先にキャッシュを読んでタグを検証する** — 形式が違えば値を捨てるだけでなく
+  # **「古い」と同じ扱いにして即取り直す**（TTL 3600s を待たせない = v1.74.0 の症状を作らない）。
+  # **read の rc は見ない** — 末尾改行が無く rc=1 でも内容は入る (宛名スキャンと同じ罠)。
+  # gate は `-r`（`read < "$f" 2>/dev/null` は入力側の失敗を黙らせられない）。
+  local _fmt=""
+  if [[ -r "$SUB_CACHE" ]]; then
+    IFS=$'\037' read -r _fmt _sub_type _rate_tier < "$SUB_CACHE"
+  fi
+  if [[ "$_fmt" != "$SUB_FMT" ]]; then _sub_type="" _rate_tier=""; fi
+  if [[ "$_fmt" != "$SUB_FMT" ]] || cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
     (
       local blob record="" sub_type="" _stf="${SUB_CACHE}.tmp-$$"
       blob=$(get_credentials_blob)
@@ -110,10 +132,14 @@ fetch_subscription() {
       # env 運用のユーザーは恒常的に踏む)。空を書いても display は has_val で非表示に倒れる。
       # 既存値があるときは潰さず touch で延命する (Keychain が一時的に読めないだけで表示が消えるのを防ぐ)。
       # 延命判定は **契約種別が取れたか**で見る (レート枠だけ欠けても契約名は出せる)。
-      if [[ -z "$sub_type" && -f "$SUB_CACHE" ]]; then
+      # 延命は**現行タグのファイルに対してだけ** — 形式違いのファイルを touch すると
+      # 「新鮮だが使えない」状態を維持してしまい、表示が TTL 分だけ欠ける
+      local _cur_fmt=""
+      [[ -r "$SUB_CACHE" ]] && IFS=$'\037' read -r _cur_fmt _ < "$SUB_CACHE"
+      if [[ -z "$sub_type" && "$_cur_fmt" == "$SUB_FMT" ]]; then
         touch "$SUB_CACHE"          # 既存値は潰さず延命する
       else
-        printf '%s' "$record" > "$_stf" && mv "$_stf" "$SUB_CACHE"
+        printf '%s\037%s' "$SUB_FMT" "$record" > "$_stf" && mv "$_stf" "$SUB_CACHE"
       fi
     # `>/dev/null 2>&1` が **背景化の必須条件** — 付けないと subshell が親の stdout を継承したまま
     # 生き続け、statusline を捕捉する側 (Claude Code) は最後の fd 保持者が終わるまで EOF を見ない。
@@ -122,22 +148,13 @@ fetch_subscription() {
     # 背景の警告 (Keychain 不許可等) が statusline 出力に混ざらないようにするため。
     ) >/dev/null 2>&1 & disown
   fi
-  # 旧形式 (契約種別のみ、US 区切り無し) のキャッシュを読んでも契約名だけ埋まり枠が空になるだけなので
-  # ファイル名の版は上げない (最大 3600s で自然回復する)。**read の rc は見ない** — このファイルは
-  # 末尾改行が無く rc=1 でも内容は入る (宛名スキャンと同じ罠)。gate は `-r` で、
-  # `read < "$f" 2>/dev/null` にはしない (リダイレクトは左から適用されるので入力側の失敗を黙らせられない)。
-  _sub_type="" _rate_tier=""
-  if [[ -r "$SUB_CACHE" ]]; then
-    IFS=$'\037' read -r _sub_type _rate_tier < "$SUB_CACHE"
-  fi
 }
 
 # --- Extra-usage spend (usage-credits, cached, background refresh) ---
 # stdin に無い唯一の課金情報。/usage OAuth エンドポイントの spend.used を cents で取得。
 # `CLAUDE_STATUSLINE_NO_NET` を設定するとネットワーク取得を止める (オフライン/プライバシー用)。
-# `-v2`: 「cents 1 行」→「cents + モデル別週間枠の行」。版を上げる理由は SUB_CACHE と同じ
-# (こちらは TTL 300s なので欠けるのは最大 5 分だが、欠陥の質は同じ)。
-readonly USAGE_CACHE="${CACHE_BASE}/usage_spend-v2"
+# 形式の判定は 1 行目のタグ (`USAGE_FMT`) が行うので、**ファイル名は安定**（孤児が出ない）。
+readonly USAGE_CACHE="${CACHE_BASE}/usage_spend"
 readonly USAGE_CACHE_MAX_AGE=300
 
 # fetch_usage_spend — sets _usage_cents と _scoped_limits (background curl; hot path はキャッシュ読みのみ)
@@ -157,7 +174,15 @@ readonly USAGE_CACHE_MAX_AGE=300
 fetch_usage_spend() {
   _usage_cents=""; _scoped_limits=""
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-  if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; then
+  # 1 行目 = `タグ US cents`、2 行目以降 = モデル別週間枠。**タグが違えば値を捨てて即取り直す**
+  # (SUB_CACHE と同じ作法。TTL を待つと形式変更のたびに 300s 欠ける)
+  local _u_fmt=""
+  if [[ -r "$USAGE_CACHE" ]]; then
+    { IFS=$'\037' read -r _u_fmt _usage_cents; IFS= read -r -d '' _scoped_limits; } < "$USAGE_CACHE"
+  fi
+  if [[ "$_u_fmt" != "$USAGE_FMT" ]]; then _usage_cents=""; _scoped_limits=""; fi
+  if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] \
+     && { [[ "$_u_fmt" != "$USAGE_FMT" ]] || cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; }; then
     (
       local blob token out cents=0 limits=""
       blob=$(get_credentials_blob)
@@ -213,23 +238,18 @@ fetch_usage_spend() {
       # 中間ファイル名に PID を入れる — 固定名だと同一 dir の並走セッション (refreshInterval で
       # 定期再実行 × 複数ペイン) が同じ .tmp に同時書き込みし、mv が atomic でも内容が混ざる
       # 1 行目 = cents、2 行目以降 = モデル別週間枠。枠が 0 件でも 1 行目は必ず書く。
-      if [[ -z "$out" && -f "$USAGE_CACHE" ]]; then
+      # 延命は**現行タグのファイルに対してだけ**（形式違いを touch すると使えない値が居座る）
+      local _cur_fmt=""
+      [[ -r "$USAGE_CACHE" ]] && IFS=$'\037' read -r _cur_fmt _ < "$USAGE_CACHE"
+      if [[ -z "$out" && "$_cur_fmt" == "$USAGE_FMT" ]]; then
         touch "$USAGE_CACHE"
       else
-        printf '%s\n%s' "$cents" "$limits" > "${USAGE_CACHE}.tmp-$$" \
+        printf '%s\037%s\n%s' "$USAGE_FMT" "$cents" "$limits" > "${USAGE_CACHE}.tmp-$$" \
           && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
       fi
     # `>/dev/null 2>&1` は必須 (継承 stdout で捕捉側の EOF が遅れる。fetch_subscription の注記参照)。
     # ここが最も効く — `curl -s -m 4` は最大 4 秒粘るので、無いとレンダーが 4 秒止まる
     ) >/dev/null 2>&1 & disown
-  fi
-  # 1 行目 = cents、2 行目以降 = 枠。旧形式 (cents 1 行だけ) では枠が 0 件になるだけ。
-  # **`$(<file)` は使わない** — bash 3.2 ではコマンド置換なので fork する (実測 0.585ms 対
-  # `read` 0.103ms = 描画あたり 0.48ms)。`fetch_subscription` 側は既に `read` にしてあるので、
-  # ここだけ取り残していた (`/simplify` 指摘)。**read の rc は見ない** — 末尾改行が無いので
-  # rc=1 でも内容は入る (宛名スキャンと同じ罠)。
-  if [[ -r "$USAGE_CACHE" ]]; then
-    { IFS= read -r _usage_cents; IFS= read -r -d '' _scoped_limits; } < "$USAGE_CACHE"
   fi
 }
 
@@ -314,16 +334,19 @@ resolve_resets() {
   _memo_dirty=0
   # **read の rc は見ない** — 末尾改行が無いので rc=1 でも内容は入る (宛名スキャンと同じ罠)。
   # gate は `-r`（`read < "$f" 2>/dev/null` は入力側の失敗を黙らせられない）。
+  local mfmt=""
   if [[ -r "$RESET_CACHE" ]]; then
-    IFS=$'\037' read -r c5 t5 c7 t7 < "$RESET_CACHE"
+    IFS=$'\037' read -r mfmt c5 t5 c7 t7 < "$RESET_CACHE"
   fi
+  # 形式が違えばメモを空扱いにする（`date` に落ちるだけなので誤表示の経路は無い）
+  [[ "$mfmt" == "$RESET_FMT" ]] || { c5="" t5="" c7="" t7=""; }
   _memo_reset "$fe" "$c5" "$t5" "%H:%M"    _five_txt
   _memo_reset "$se" "$c7" "$t7" "%a %H:%M" _seven_txt
   # 書くのはリセットを跨いだ時だけ。atomic mv は 1 fork だが 5h に 1 回なので影響しない
   # (中間ファイル名に PID を入れるのは並走ペインが同じ .tmp を潰し合わないため)。
   if ((_memo_dirty)); then
     [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-    printf '%s\037%s\037%s\037%s' "$fe" "$_five_txt" "$se" "$_seven_txt" \
+    printf '%s\037%s\037%s\037%s\037%s' "$RESET_FMT" "$fe" "$_five_txt" "$se" "$_seven_txt" \
       > "${RESET_CACHE}.tmp-$$" && mv "${RESET_CACHE}.tmp-$$" "$RESET_CACHE"
   fi
 }
@@ -590,11 +613,10 @@ build_git() {
 
   # 事実に区切り文字が混ざると桁がずれる。`op` は自前で組んだ固定語彙 + 数字なので加工は不要
   local US=$'\037'
-  # **レコードは append-only** — 位置で読むので、末尾に足す限り旧キャッシュ (フィールドが少ない) を
-  # 読んでも新しい項目が空になるだけで桁がずれない。**並べ替え・意味/単位の変更は版を上げる**
-  # (`git_cache_file` の `-vN`)。`op` は v4 へ上げた同じ版の中で足したので、旧 v2/v3 は別名として
-  # 読まれず、append-only の効き目が問われるのは次の版から。
-  printf '%s\n' "${branch}${US}${detached}${US}${repo_id}${US}${remote}${US}${ins}${US}${del}${US}${conflicts}${US}${ahead}${US}${behind}${US}${age}${US}${msg}${US}${op}"
+  # **先頭に形式タグ (`GIT_FMT`)** — 読み側はこれが一致しないレコードを捨てて取り直す。
+  # フィールドを足す / 並べ替える / 意味や単位を変えるときは `GIT_FMT` の一覧も直すこと
+  # (一覧がそのままタグなので、直せば旧キャッシュは自動的に無効になる)。
+  printf '%s\n' "${GIT_FMT}${US}${branch}${US}${detached}${US}${repo_id}${US}${remote}${US}${ins}${US}${del}${US}${conflicts}${US}${ahead}${US}${behind}${US}${age}${US}${msg}${US}${op}"
 }
 
 # render_git FACTS — facts (build_git の出力 / cold-start の合成) + stdin 由来値から line_git を組む。
@@ -970,14 +992,19 @@ line_git=()
 
 # Git info (background refresh)
 git_cache_file "$current_dir"
-if cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
+# **タグを検証してから使う** — 一致しなければ「無い」扱いにして cold-start に落ち、同時に背景 build を
+# 起こす (TTL を待たない)。読みは `read` で fork ゼロ (`$(<file)` は bash 3.2 でコマンド置換 = fork)
+_git_facts="" _gc_raw=""
+if [[ -r "$_gc" ]]; then
+  IFS= read -r _gc_raw < "$_gc"
+  [[ "$_gc_raw" == "${GIT_FMT}"$'\037'* ]] && _git_facts="${_gc_raw#*$'\037'}"
+fi
+if [[ -z "$_git_facts" ]] || cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
   # 末尾の `>/dev/null 2>&1` は**内側の `> tmp` と別物で、外せない** — subshell が親の stdout を
   # 保持し続けると捕捉側の EOF が遅れる (docs/internals.md「バックグラウンド更新」/ fetch_subscription の注記)
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
     build_git "$current_dir" > "${_gc}.tmp-$$" && mv "${_gc}.tmp-$$" "$_gc" ) >/dev/null 2>&1 & disown
 fi
-[[ -f "$_gc" ]] && _git_facts=$(<"$_gc") || _git_facts=""
-
 if [[ -z "$_git_facts" ]]; then
   # キャッシュ未populate — non-git かどうかは pure bash で判定 (fork ゼロ)
   if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
