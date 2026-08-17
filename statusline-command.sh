@@ -41,6 +41,17 @@ pr_state_color() {
   esac
 }
 
+# cache_fmt_is FILE TAG — FILE の先頭フィールドが TAG なら rc=0（`read` のみ = fork ゼロ）。
+# **延命 touch の前に必ず通す** — 形式違いのファイルを touch すると「新鮮だが使えない値」が
+# 居座り、表示が TTL 分だけ欠ける。subscription と usage で同じ判定を別々に書いていたので
+# 1 本に寄せた（`/simplify` 指摘）。
+cache_fmt_is() {
+  local _f=$1 _tag=$2 _cur=""
+  [[ -r "$_f" ]] || return 1
+  IFS=$'\037' read -r _cur _ < "$_f"
+  [[ "$_cur" == "$_tag" ]]
+}
+
 cache_stale() {
   local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE}
   [[ ! -f "$cache" ]] && return 0
@@ -132,11 +143,8 @@ fetch_subscription() {
       # env 運用のユーザーは恒常的に踏む)。空を書いても display は has_val で非表示に倒れる。
       # 既存値があるときは潰さず touch で延命する (Keychain が一時的に読めないだけで表示が消えるのを防ぐ)。
       # 延命判定は **契約種別が取れたか**で見る (レート枠だけ欠けても契約名は出せる)。
-      # 延命は**現行タグのファイルに対してだけ** — 形式違いのファイルを touch すると
-      # 「新鮮だが使えない」状態を維持してしまい、表示が TTL 分だけ欠ける
-      local _cur_fmt=""
-      [[ -r "$SUB_CACHE" ]] && IFS=$'\037' read -r _cur_fmt _ < "$SUB_CACHE"
-      if [[ -z "$sub_type" && "$_cur_fmt" == "$SUB_FMT" ]]; then
+      # 延命は**現行タグのファイルに対してだけ**（`cache_fmt_is` が判定を持つ）
+      if [[ -z "$sub_type" ]] && cache_fmt_is "$SUB_CACHE" "$SUB_FMT"; then
         touch "$SUB_CACHE"          # 既存値は潰さず延命する
       else
         printf '%s\037%s' "$SUB_FMT" "$record" > "$_stf" && mv "$_stf" "$SUB_CACHE"
@@ -243,12 +251,10 @@ fetch_usage_spend() {
       # 中間ファイル名に PID を入れる — 固定名だと同一 dir の並走セッション (refreshInterval で
       # 定期再実行 × 複数ペイン) が同じ .tmp に同時書き込みし、mv が atomic でも内容が混ざる
       # 1 行目 = cents、2 行目以降 = モデル別週間枠。枠が 0 件でも 1 行目は必ず書く。
-      # 延命は**現行タグのファイルに対してだけ**（形式違いを touch すると使えない値が居座る）
-      local _cur_fmt=""
-      [[ -r "$USAGE_CACHE" ]] && IFS=$'\037' read -r _cur_fmt _ < "$USAGE_CACHE"
-      # 延命の判定は **パース結果**（`fetch_subscription` と同じ作法）— 応答が空でも、
+      # 延命は**現行タグのファイルに対してだけ**（`cache_fmt_is` が判定を持つ）。
+      # 判定は **パース結果**（`fetch_subscription` と同じ作法）— 応答が空でも、
       # エラー本文が来た場合でも「使えなかった」なら既存値を残す
-      if [[ -z "$_usable" && "$_cur_fmt" == "$USAGE_FMT" ]]; then
+      if [[ -z "$_usable" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
         touch "$USAGE_CACHE"
       else
         printf '%s\037%s\n%s' "$USAGE_FMT" "$cents" "$limits" > "${USAGE_CACHE}.tmp-$$" \
@@ -503,11 +509,15 @@ build_git() {
   local _gd _cf="" _tf="" _cur _tot
   _gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
   if [[ -n "$_gd" ]]; then
-    # `rebase-apply` は `git am` でも作られる — **`applying` があれば am**（`git rebase --abort` を
-    # 打とうとして「am には無い」と気づく手戻りを防ぐ。`/code-review` 指摘）
+    # **arm はディスクレイアウト 1 つに 1 本**。操作名は arm の中で導出する — `rebase-apply` を
+    # 2 arm に分けると進捗ファイルの組（`next`/`last`）が複製され、名前が変わったとき片方だけ
+    # 直す事故になる（`/simplify` 指摘）
     if   [[ -d "$_gd/rebase-merge" ]]; then op="rebase"; _cf="$_gd/rebase-merge/msgnum"; _tf="$_gd/rebase-merge/end"
-    elif [[ -f "$_gd/rebase-apply/applying" ]]; then op="am"; _cf="$_gd/rebase-apply/next"; _tf="$_gd/rebase-apply/last"
-    elif [[ -d "$_gd/rebase-apply" ]]; then op="rebase"; _cf="$_gd/rebase-apply/next";   _tf="$_gd/rebase-apply/last"
+    elif [[ -d "$_gd/rebase-apply" ]]; then
+      # `rebase-apply` は `git am` でも作られる。`applying` があれば am（`git rebase --abort` を
+      # 打とうとして「am には無い」と気づく手戻りを防ぐ）
+      if [[ -f "$_gd/rebase-apply/applying" ]]; then op="am"; else op="rebase"; fi
+      _cf="$_gd/rebase-apply/next"; _tf="$_gd/rebase-apply/last"
     elif [[ -f "$_gd/MERGE_HEAD" ]];        then op="merge"
     elif [[ -f "$_gd/CHERRY_PICK_HEAD" ]];  then op="cherry-pick"
     elif [[ -f "$_gd/REVERT_HEAD" ]];       then op="revert"
@@ -636,7 +646,6 @@ build_git() {
   # 事実の中に区切り文字や改行が混ざると桁がずれる (branch 名は改行を持てないが msg は持てる)
   msg="${msg//$'\n'/ }"; msg="${msg//$'\037'/ }"
 
-  # 事実に区切り文字が混ざると桁がずれる。`op` は自前で組んだ固定語彙 + 数字なので加工は不要
   local US=$'\037'
   # **先頭に形式タグ (`GIT_FMT`)** — 読み側はこれが一致しないレコードを捨てて取り直す。
   # フィールドを足す / 並べ替える / 意味や単位を変えるときは `GIT_FMT` の一覧も直すこと

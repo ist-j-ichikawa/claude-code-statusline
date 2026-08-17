@@ -516,7 +516,7 @@ _stub_env() {
   [[ "$result" != *'$'* ]]
 }
 
-@test "Line4: extra-usage キャッシュがあると extra:\$X.XX が表示されること" {
+@test "Line5: extra-usage キャッシュがあると extra:\$X.XX が表示されること" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   printf 'cents,limits\037214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
@@ -697,10 +697,12 @@ _stub_env() {
   [[ "$plain" != *":39%"* ]]
 }
 
-@test "Line4: extra-usage データがないとき extra: が表示されないこと" {
-  # setup() で usage_spend は削除済み・NO_NET で fetch も走らない
+@test "Line5: extra-usage データがないとき extra: が表示されないこと" {
+  # setup() で usage_spend は削除済み・NO_NET で fetch も走らない。
+  # **制限行（5 行目）で見る** — Line 4 には extra が元々出ないので、4 行目を見る形は
+  # どう壊しても緑になる（Bedrock 側で同じ穴を踏んだ。`/code-review` 指摘）
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '4p')
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" != *'extra:'* ]]
 }
 
@@ -713,7 +715,7 @@ _stub_env() {
   [[ "$result" != *'extra:'* ]]
 }
 
-@test "Line4: Anthropicでレートリミットが表示されること" {
+@test "Line5: Anthropicでレートリミットが表示されること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" == *"35%"* ]]
@@ -727,7 +729,7 @@ _stub_env() {
   [[ "$line_count" -eq 4 ]]
 }
 
-@test "Line4: rate_limitsのused_percentageがfloatでもroundされること" {
+@test "Line5: rate_limitsのused_percentageがfloatでもroundされること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" == *"36%"* ]]
@@ -1640,7 +1642,7 @@ _ver_run() {
 }
 
 # ============================================================================
-# output style — default 以外のときだけ出すこと
+# output style — 常に出し、default だけ dim にすること
 # ============================================================================
 _os_run() {
   printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.240","workspace":{"current_dir":"/tmp"},"output_style":{"name":"'"$1"'"},"context_window":{"used_percentage":10}}' \
@@ -2513,18 +2515,22 @@ _os_run() {
   # `build_git` は非 git では何も出さないので **0 バイトのキャッシュ**が残る。タグ不一致と
   # 同じ扱いにすると `cache_stale` の 5s 抑止を通らず**毎レンダー背景 build が spawn される**
   # (storm。表示は正常なので沈黙する。`/code-review` が実測で捕まえた)。
-  local d="$BATS_TEST_TMPDIR/nogit" j m1 m2 f
-  mkdir -p "$d"
-  j='{"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}'
-  printf '%s' "$j" | CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash statusline-command.sh >/dev/null 2>&1
-  _wait_for_cache "$d/git" || { echo "キャッシュが書かれていない = テストが無意味" >&3; return 1; }
-  f=$(ls "$d"/git/* | grep -v tmp | head -1)
-  m1=$(stat -f %m "$f")
-  sleep 1
-  printf '%s' "$j" | CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash statusline-command.sh >/dev/null 2>&1
-  sleep 0.3
-  m2=$(stat -f %m "$f")
-  [[ "$m1" == "$m2" ]] || { echo "5s 以内なのに書き直された (mtime $m1 → $m2)" >&3; false; }
+  # **偽 `git` の起動回数で見る** — mtime は秒精度なので「書き込みが起きないこと」を表せず、
+  # 秒を跨がせる固定 sleep も要る（実測 1.5s でスイート最遅だった。`/simplify` 指摘）。
+  local bin="$BATS_TEST_TMPDIR/nogitbin" log="$BATS_TEST_TMPDIR/nogitlog" d="$BATS_TEST_TMPDIR/nogitcache"
+  mkdir -p "$bin" "$d"
+  printf '%s\n' '#!/bin/bash' 'echo called >> "$FAKE_GIT_LOG"' 'exec /usr/bin/git "$@"' > "$bin/git"
+  chmod +x "$bin/git"
+  local j='{"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}'
+  _render() { printf '%s' "$j" | env "PATH=$bin:$PATH" "FAKE_GIT_LOG=$log" \
+    "CLAUDE_STATUSLINE_CACHE_DIR=$d" /bin/bash statusline-command.sh >/dev/null 2>&1; }
+  : > "$log"; _render
+  _wait_for_file "$d/git/$(md5 -q -s /tmp)" \
+    || { echo "キャッシュが書かれていない = テストが無意味" >&3; return 1; }
+  (( $(grep -c . "$log") > 0 )) || { echo "1 回目で git に到達していない = テストが無意味" >&3; return 1; }
+  # 2 回目: 5s 以内なので背景 build は起きない（起きるなら偽 git が呼ばれる）
+  : > "$log"; _render; sleep 0.3
+  [[ "$(grep -c . "$log")" == "0" ]] || { echo "5s 以内に再 spawn した" >&3; false; }
 }
 
 @test "Git facts: git am 中は rebase ではなく am と出すこと" {
@@ -2563,7 +2569,8 @@ _os_run() {
   p='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$BATS_TEST_DIRNAME"'"},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'
   CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'$p'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$d/git"
-  local facts; facts=$(cat "$d"/git/*)
+  # 決定形で開く（`cat "$d"/git/*` は並走の中間ファイルを拾いうる）
+  local facts; facts=$(< "$d/git/$(md5 -q -s "$BATS_TEST_DIRNAME")")
   [[ "$facts" != *$'\033'* ]]        # レンダリング済み ANSI を置かない
   [[ "$facts" != *"approved"* ]]     # stdin 由来値 (PR state) を置かない = 別セッションに漏れない
   [[ "$facts" == *$'\037'* ]]        # US 区切りの facts である
@@ -2615,7 +2622,7 @@ _os_run() {
   CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$c/git"
   local plain
-  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | _strip)
   # tracked の変更は無いので +5 (untracked 3+2) だけになる
   [[ "$plain" == *"+5"* ]]
   # 旧 `?N` (untracked 件数) は出さない
@@ -2673,7 +2680,7 @@ print(r.stdout.split(chr(10))[2])
   CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$c/git"
   local plain
-  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | _strip)
   [[ "$plain" == *"+2"* ]]
   [[ "$plain" != *"-0"* ]]
 }
@@ -2719,7 +2726,7 @@ print(r.stdout.split(chr(10))[2])
   CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' >/dev/null
   _wait_for_cache "$c/git"
   local plain
-  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g')
+  plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | _strip)
   # binary が混ざっても Line 3 が出る (ブランチ名が残っている) こと自体が要点
   [[ "$plain" == *"master"* || "$plain" == *"main"* ]]
   [[ "$plain" == *"+1"* ]]
@@ -2743,14 +2750,15 @@ print(r.stdout.split(chr(10))[2])
     CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' \
       | sed -n 3p | _strip
   }
-  local now want
+  # **境界の 2 件だけ見る** — arm は 180 日で 2 つしかないので、同じ arm の中を複数試しても
+  # pin は増えず repo 構築が 1 件 660ms 乗るだけ（`/simplify` 実測）。179/181 は境界値なので
+  # 「どちらの arm に落ちるか」を直接押さえる
+  local now want l
   now=$(date +%s)
-  for d in 2 20 60; do                                    # 180 日以内 = MM-DDTHH:MM (ISO 風)
-    want=$(date -j -r $(( now - d * 86400 )) +"%m-%dT%H:%M")
-    l=$(_age_of "$d"); [[ "$l" == *"$want msg-marker"* ]] || { echo "d=$d want=$want got=$l" >&3; false; }
-  done
-  want=$(date -j -r $(( now - 400 * 86400 )) +"%Y-%m-%d")  # 180 日超 = 年つき・時刻なし
-  l=$(_age_of 400); [[ "$l" == *"$want msg-marker"* ]]     # 旧実装はここで msg ごと消えた
+  want=$(date -j -r $(( now - 179 * 86400 )) +"%m-%dT%H:%M")   # 180 日以内 = ISO 風・時刻つき
+  l=$(_age_of 179); [[ "$l" == *"$want msg-marker"* ]] || { echo "179d want=$want got=$l" >&3; false; }
+  want=$(date -j -r $(( now - 181 * 86400 )) +"%Y-%m-%d")      # 180 日超 = 年つき・時刻なし
+  l=$(_age_of 181); [[ "$l" == *"$want msg-marker"* ]]         # 旧実装はここで msg ごと消えた
 }
 
 @test "Git facts: 同一dirの別セッションが相手のPR stateを表示しないこと(cross-session汚染)" {
@@ -2770,7 +2778,7 @@ print(r.stdout.split(chr(10))[2])
   git -C "$w" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   git -C "$w" checkout -q --detach
   d="$BATS_TEST_TMPDIR/detcache"
-  _run() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'","repo":{"host":"github.com","owner":"o","name":"r"}},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g'; }
+  _run() { CLAUDE_STATUSLINE_CACHE_DIR="$d" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'","repo":{"host":"github.com","owner":"o","name":"r"}},"pr":{"review_state":"approved"},"context_window":{"used_percentage":48}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | _strip; }
   cold=$(_run); _wait_for_cache "$d/git"; warm=$(_run)
   # detached ではどちらの経路でも gh: / PR state を出さない (gate が presenter 1 箇所にある)
   [[ "$cold" == *"HEAD@"* ]]; [[ "$warm" == *"HEAD@"* ]]
@@ -2915,7 +2923,7 @@ print(r.stdout.split(chr(10))[2])
   [[ "$out" != *"$(date -j -r "$past" +"%a %H:%M")"* ]]
 }
 
-@test "リセット残: resets_at が無い/不正なら何も出さないこと" {
+@test "リセット時刻: resets_at が無い/不正なら何も出さないこと" {
   _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45'"$1"'}}}' \
     | /bin/bash statusline-command.sh | tail -1 | _strip; }
   [[ "$(_l4 '')" == *"45%"* ]]; [[ "$(_l4 '')" != *":"* ]]            # resets_at 欠落
