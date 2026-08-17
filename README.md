@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.77.0-blue)
+![Version](https://img.shields.io/badge/version-1.78.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -17,7 +17,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 |---|---|
 | **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
-| **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit |
+| **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit (`08-17T13:13`) |
 | **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
 | **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · extra-usage 実課金 — **アカウント** |
 
@@ -48,14 +48,16 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ```
 Anthropic(Max 20x)  Opus 5  high  think  fast  my-project-41  v2.1.233
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
-gh:acme/  feature/x  approved  +42 -17 ↑2 1h fix: update logic..
+gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83
-⣶     16%  19:31  week:9%  金 12:00  Fable:39%  土 16:00  extra:$2.14
+⣶     16%  JST 19:31  week:9%  金 12:00  Fable:39%  土 16:00  extra:$2.14
 ```
 
 Line 3 の `gh:acme/` が owner だけなのは、repo 名 (`my-project`) が Line 2 のパス末尾に既に出ているためです (下の表を参照)。
 
 コンテキストバーの分母は使用率と同じ色で、`%` と一体で読めます (200k のモデルでは `48%/200k`)。
+
+時刻はすべて**このマシンのローカルタイムゾーン**です (Claude Code 自身も専用の TZ 設定を持たず OS のゾーンを使います)。ゾーン名は 5h リセットの**時刻の前**に 1 回だけ置いています — 同じ行の時刻はすべて同じゾーンなので、4 箇所に付けても情報が増えないためです。
 
 ### 変更の表示
 

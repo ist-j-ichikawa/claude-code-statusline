@@ -2654,10 +2654,12 @@ print(r.stdout.split(chr(10))[2])
   [[ "$plain" == *"+1"* ]]
 }
 
-@test "Git facts: 何日前のコミットでも age と msg の両方を出すこと" {
+@test "Git facts: 何日前のコミットでも時刻と msg の両方を出すこと" {
   # 7 日超で age を空にしていた頃は render_git の gate (`-n age && -n msg` / `elif -n age`) を
   # どちらも通らず **msg も連鎖して落ち Line 3 がブランチ名だけ**になっていた。
-  # 単位は常に 1 つで m/h/d/w/mo/y。
+  # v1.78.0 で相対表記 (`2d`) → **ISO 8601 風の絶対時刻**に変更（ユーザー選択）。
+  # 180 日以内は `08-17T13:13`、それより古ければ `2025-08-17`（古いコミットに分単位の意味は無い）。
+  # **リテラルの日付を書かない** — 実行日に依存して flaky になるので `date` の出力と突き合わせる。
   _age_of() {  # $1=何日前
     local w="$BATS_TEST_TMPDIR/age$1" c="$BATS_TEST_TMPDIR/agec$1" e
     mkdir -p "$w"; git -C "$w" init -q
@@ -2670,10 +2672,14 @@ print(r.stdout.split(chr(10))[2])
     CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' \
       | sed -n 3p | sed $'s/\033\\[[0-9;]*m//g'
   }
-  l=$(_age_of 2);   [[ "$l" == *" 2d msg-marker"* ]]
-  l=$(_age_of 20);  [[ "$l" == *" 2w msg-marker"* ]]    # 旧実装はここで msg ごと消えた
-  l=$(_age_of 60);  [[ "$l" == *" 2mo msg-marker"* ]]
-  l=$(_age_of 400); [[ "$l" == *" 1y msg-marker"* ]]
+  local now want
+  now=$(date +%s)
+  for d in 2 20 60; do                                    # 180 日以内 = MM-DDTHH:MM (ISO 風)
+    want=$(date -j -r $(( now - d * 86400 )) +"%m-%dT%H:%M")
+    l=$(_age_of "$d"); [[ "$l" == *"$want msg-marker"* ]] || { echo "d=$d want=$want got=$l" >&3; false; }
+  done
+  want=$(date -j -r $(( now - 400 * 86400 )) +"%Y-%m-%d")  # 180 日超 = 年つき・時刻なし
+  l=$(_age_of 400); [[ "$l" == *"$want msg-marker"* ]]     # 旧実装はここで msg ごと消えた
 }
 
 @test "Git facts: 同一dirの別セッションが相手のPR stateを表示しないこと(cross-session汚染)" {
@@ -2797,6 +2803,20 @@ print(r.stdout.split(chr(10))[2])
   # 曜日は付かない (週間制限との区別)
   wday=$(date -j -r "$ep" +"%a")
   [[ "$(_lim "$ep")" != *"$wday"* ]]
+}
+
+@test "リセット時刻: 5h だけタイムゾーンを添えること(行の代表として 1 回)" {
+  # 同じ行の時刻は全部このマシンのローカル TZ なので、**先頭の 5h に 1 回**出せば代表になる。
+  # 4 箇所に付けると同じ語が並ぶだけ（ユーザー選択 2026-08-17）。
+  # **リテラルの `JST` を書かない** — 実行環境の TZ に依存して flaky になるので `date` と比べる。
+  local now fe se out zone
+  now=$(date +%s); fe=$(( now + 3600 )); se=$(( now + 200000 ))
+  zone=$(date -j -r "$fe" +"%Z")
+  out=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":16,"resets_at":'"$fe"'},"seven_day":{"used_percentage":9,"resets_at":'"$se"'}}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$out" == *"$(date -j -r "$fe" +"%Z %H:%M")"* ]]        # 5h には付く（**時刻の前**）
+  # 週間側には付かない = 行に同じ語が 2 回出ない
+  [[ "$(printf '%s' "$out" | grep -c "$zone")" == "1" ]]
 }
 
 @test "リセット時刻: 5h制限が既に過ぎていたら now と出すこと" {
