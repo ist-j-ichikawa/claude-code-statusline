@@ -78,7 +78,13 @@ get_credentials_blob() {
 }
 
 # --- Subscription type (cached, background refresh) ---
-readonly SUB_CACHE="${CACHE_BASE}/subscription"
+# **形式を変えたらファイル名の版を上げる** (git cache の `-vN` と同じ作法) — `-v2` は
+# 「契約種別 1 値」→「契約種別 US レート枠」の 2 値化。版を据え置いていた v1.74.0 では、
+# 旧形式を読んだ **既存ユーザー全員が最大 1 時間 `Anthropic(Max)`**（枠が欠けた形）になった。
+# 「display が空を非表示に倒すので実害なし」と判断していたが、**アップグレードは全員が通る経路**
+# なので実害だった (利用者からの報告で判明)。旧ファイルは孤児として残るが、git cache で既に
+# 「移行処理は不要」と割り切っており TMPDIR は OS が掃除する。
+readonly SUB_CACHE="${CACHE_BASE}/subscription-v2"
 readonly SUB_CACHE_MAX_AGE=3600
 
 # fetch_subscription — sets _sub_type (no subshell)
@@ -129,7 +135,9 @@ fetch_subscription() {
 # --- Extra-usage spend (usage-credits, cached, background refresh) ---
 # stdin に無い唯一の課金情報。/usage OAuth エンドポイントの spend.used を cents で取得。
 # `CLAUDE_STATUSLINE_NO_NET` を設定するとネットワーク取得を止める (オフライン/プライバシー用)。
-readonly USAGE_CACHE="${CACHE_BASE}/usage_spend"
+# `-v2`: 「cents 1 行」→「cents + モデル別週間枠の行」。版を上げる理由は SUB_CACHE と同じ
+# (こちらは TTL 300s なので欠けるのは最大 5 分だが、欠陥の質は同じ)。
+readonly USAGE_CACHE="${CACHE_BASE}/usage_spend-v2"
 readonly USAGE_CACHE_MAX_AGE=300
 
 # fetch_usage_spend — sets _usage_cents と _scoped_limits (background curl; hot path はキャッシュ読みのみ)

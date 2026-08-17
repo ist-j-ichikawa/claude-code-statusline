@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.74.0-blue)
+![Version](https://img.shields.io/badge/version-1.74.1-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
