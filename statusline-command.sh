@@ -184,7 +184,7 @@ fetch_usage_spend() {
   if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] \
      && { [[ "$_u_fmt" != "$USAGE_FMT" ]] || cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; }; then
     (
-      local blob token out cents=0 limits=""
+      local blob token out cents=0 limits="" _usable=""
       blob=$(get_credentials_blob)
       # here-string ではなくパイプ — bash 3.2 の `<<<` は一時ファイルを作るので、
       # トークンを含む blob をディスクに落とさない (argv 露出を避けるのと同じ理由)
@@ -197,8 +197,13 @@ fetch_usage_spend() {
         # ディレクティブとして読まれる面そのものを無くす方針 (install.sh の `printf %q` と同じ)。
         out=$(printf 'Authorization: Bearer %s\nanthropic-beta: oauth-2025-04-20\n' "$token" \
           | curl -s -m 4 -H @- https://api.anthropic.com/api/oauth/usage 2>/dev/null)
-        cents=$(jq -r '(.spend.used // {}) | ((.amount_minor // 0) / pow(10; (.exponent // 2) - 2)) | round' <<< "$out" 2>/dev/null)
-        [[ "$cents" =~ ^[0-9]+$ ]] || cents=0
+        # **`NA` を返させて「使える応答か」を判別する** — `curl -s` は `-f` を付けていないので
+        # 401/429/5xx の**エラー JSON も本文として来る**。`// 0` の既定値があるため、それでも
+        # 数値 `0` が出てしまい「取得成功・課金 0」と区別できない（`/code-review` 指摘）。
+        # `.spend.used.amount_minor` の有無で分岐すれば追加の fork なしで判別できる。
+        cents=$(jq -r 'if (.spend.used.amount_minor? // null) == null then "NA"
+                       else ((.spend.used.amount_minor) / pow(10; (.spend.used.exponent // 2) - 2)) | round end' <<< "$out" 2>/dev/null)
+        if [[ "$cents" =~ ^[0-9]+$ ]]; then _usable=1; else cents=0; fi
         # モデル別の週間枠。**`resets_at` は ISO8601 文字列**で epoch ではない。jq の
         # `fromdateiso8601` は小数秒 (`.346608`) と `+00:00` オフセットを受け付けないので剥がしてから
         # 渡し、`?` と `// ""` で形式が変わった枠だけ落とす (全体を abort させない)。
@@ -241,7 +246,9 @@ fetch_usage_spend() {
       # 延命は**現行タグのファイルに対してだけ**（形式違いを touch すると使えない値が居座る）
       local _cur_fmt=""
       [[ -r "$USAGE_CACHE" ]] && IFS=$'\037' read -r _cur_fmt _ < "$USAGE_CACHE"
-      if [[ -z "$out" && "$_cur_fmt" == "$USAGE_FMT" ]]; then
+      # 延命の判定は **パース結果**（`fetch_subscription` と同じ作法）— 応答が空でも、
+      # エラー本文が来た場合でも「使えなかった」なら既存値を残す
+      if [[ -z "$_usable" && "$_cur_fmt" == "$USAGE_FMT" ]]; then
         touch "$USAGE_CACHE"
       else
         printf '%s\037%s\n%s' "$USAGE_FMT" "$cents" "$limits" > "${USAGE_CACHE}.tmp-$$" \
@@ -459,6 +466,9 @@ fi
 # --- Git info (5s cached) ---
 # build_git DIR — git の「事実」だけを US(0x1f) 区切りで 1 行に出す (ANSI も stdin 由来値も混ぜない)。
 # 表示は render_git() が一手に引き受ける。事実だけをキャッシュするのが要点:
+#  - レコードは **`GIT_FMT` タグ + 12 フィールド**: branch detached repo_id remote ins del
+#    conflicts ahead behind age msg op（位置で読むので、この一覧と `GIT_FMT` と `render_git` の
+#    `read` は常に同時に直す）
 #  - 3 経路 (非 detached / detached / cold-start) で gate を揃える必要が消える
 #    — cold-start は「多くのフィールドが空の facts」に退化するだけで、判断は presenter に 1 箇所化される
 #  - cache key は md5(dir) だけなので、stdin 由来値 (pr.review_state 等) を混ぜると同一 dir の
@@ -493,7 +503,10 @@ build_git() {
   local _gd _cf="" _tf="" _cur _tot
   _gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
   if [[ -n "$_gd" ]]; then
+    # `rebase-apply` は `git am` でも作られる — **`applying` があれば am**（`git rebase --abort` を
+    # 打とうとして「am には無い」と気づく手戻りを防ぐ。`/code-review` 指摘）
     if   [[ -d "$_gd/rebase-merge" ]]; then op="rebase"; _cf="$_gd/rebase-merge/msgnum"; _tf="$_gd/rebase-merge/end"
+    elif [[ -f "$_gd/rebase-apply/applying" ]]; then op="am"; _cf="$_gd/rebase-apply/next"; _tf="$_gd/rebase-apply/last"
     elif [[ -d "$_gd/rebase-apply" ]]; then op="rebase"; _cf="$_gd/rebase-apply/next";   _tf="$_gd/rebase-apply/last"
     elif [[ -f "$_gd/MERGE_HEAD" ]];        then op="merge"
     elif [[ -f "$_gd/CHERRY_PICK_HEAD" ]];  then op="cherry-pick"
@@ -503,7 +516,7 @@ build_git() {
     # rebase 以外は `_cf`/`_tf` が空なので `-r` が偽 = 素通り。読めない/数値でなければ操作名だけ出す
     if [[ -r "$_cf" && -r "$_tf" ]]; then
       _cur=$(<"$_cf"); _tot=$(<"$_tf")
-      [[ "$_cur" =~ ^[0-9]+$ && "$_tot" =~ ^[0-9]+$ ]] && op="rebase ${_cur}/${_tot}"
+      [[ "$_cur" =~ ^[0-9]+$ && "$_tot" =~ ^[0-9]+$ ]] && op="${op} ${_cur}/${_tot}"
     fi
   fi
 
@@ -561,9 +574,12 @@ build_git() {
   #     `node_modules` や `venv` を ignore していないリポ (実測 30,000 件) では **5.17 秒**かかる。
   #     `GIT_CACHE_MAX_AGE=5` を超えるので書き終えた時点で既に stale = 毎レンダー全走査し直し、
   #     しかも背景 job が重なって積もる (symlink→FIFO で踏んだのと同じ形の破綻)。
-  #     上限を超えたら**untracked を数えない** (0 に倒す) — 途中まで数えた中途半端な合計は
-  #     「間違った数」になるので、このリポの「無表示 < 誤読させる表示」に従って要素ごと落とす。
-  #     tracked 側 (`diff HEAD`) は git が数えるので影響しない。
+  #     上限を超えたら**untracked を数えない** (0 に倒す)。途中まで数えた合計は「間違った数」に
+  #     なるので、部分集計はしない。**`+N` 要素そのものは残る** — tracked 側は git が数えた正確な
+  #     値なので落とす理由が無く、落とすとかえって情報が減る（`/code-review` の指摘を受けて明文化）。
+  #     つまり上限超過時の `+N` は「tracked の増減」であって「全変更」ではない。500 件超は
+  #     ignore 設定の漏れなので、その状態を直すほうが先という判断。印を付ける案は却下 —
+  #     Line 3 に新しい記号を増やす価値が、この稀なケースに見合わない。
   local _utl
   _utl=$( cd "$dir" 2>/dev/null || exit 0
           _paths=()
@@ -605,8 +621,8 @@ build_git() {
     # 「19 分前」ではなく「何時のコミットか」を知りたい、という要望。リセット時刻を絶対に
     # 揃えたのと同じ方向で、**画面上の時刻表記が 1 種類に寄る**（残る相対表記はセッション経過だけ）。
     # `date` の fork はここ（背景の `build_git`）なので hot path に乗らない。
-    # **180 日以内は年を省く** — `08/17 12:29` で足り、年まで出すと Line 3 が伸びる。
-    # それより古ければ時刻を捨てて `2025/08/17` にする（古いコミットに分単位の意味は無い）。
+    # **180 日以内は年を省く** — `08-17T13:13` で足り、年まで出すと Line 3 が伸びる。
+    # それより古ければ時刻を捨てて `2025-08-17` にする（古いコミットに分単位の意味は無い）。
     local diff=$((_NOW - last_epoch))
     # 書式は **ISO 8601 風**（`08-17T13:13`）— 区切りは `-`、日付と時刻の間は `T`。
     # 年は省く（180 日超だけ `2025-08-17` で年を出し、時刻を捨てる）
@@ -662,16 +678,15 @@ render_git() {
     # `gh:` が同じ文字列の二度出しになる。上の一次情報という理由は覆さず、**その理由が効くとき
     # だけ出す**形に純化する (「違う時だけ出るなら差分そのものがシグナル」の適用)。
     # 大文字小文字が違えば一致しないので「出続ける」側に倒れる = 誤って消える事故は起きない。
-    # worktree ではパス末尾が `.claude/worktrees/<name>` になるので一致せず `gh:` が残る (安全側)。
+    # **worktree でも畳む** — Line 2 は `<repo>/.claude/worktrees/<name>` を repo root で切って
+    # 描くので、比較するのは**画面に出ているパス**（第 2 引数の `screen_dir`）。`current_dir`
+    # （末尾 = worktree 名）と比べていた頃は、画面に 2 回出ている repo 名を畳めなかった。
     # **一致した成分だけ削る 3 段**: `/owner/repo` 一致 → 出さない / `/repo` だけ一致 →
     # `gh:owner/`（owner はローカルに現れないので残す）/ 不一致 → 全部出す。特例を足すのではなく
     # 上の省略規則の一般化で、`~/dev/<repo>` という**最も普通の clone レイアウト**にも効く。
     # **末尾の `/` は意図的** — 裸の `gh:owner` は「owner という名の repo」に誤読される。`/` が
     # 「続き（repo 部）は真上の行の末尾」の標識になる。
     # 比較は必ず `/` で anchor する — 付けないと `my-<repo>` のような上位文字列に誤爆する。
-    # 比較するのは **Line 2 が実際に描いたパス** (`_line2_tail_dir`)。worktree では Line 2 が
-    # `<repo>/.claude/worktrees/<name>` を repo root で切って `~/dev/repo 🌲name` と描くので、
-    # `current_dir` (末尾 = worktree 名) と比べると**画面に 2 回出ている repo 名を畳めない**。
     local id="${ws_repo_id:-$repo_id}"
     if [[ -n "$id" && "$screen_dir" != *"/$id" ]]; then
       # repo 名だけ一致 → owner だけ残す (末尾の `/` が「続きは真上の行」の標識)
@@ -926,10 +941,10 @@ if [[ -n "$session_kind" ]]; then
 fi
 
 # Version — **Line 1 の最後**。版は行動に効かない参照情報なので、溢れた時に最初に削られてよい。
-# **前回見た版と違うときだけ立てる**（v1.74.0、ユーザー要望「版が変わったことを知りたい」）—
-# 常に色を付ける案は却下: どの版でも同じ見た目になり「変わった」が読めない（色を固定すると
-# 差分が消える）。立てるのは色相を増やさず**明度だけ**（248 灰 → 231 白）— 版はカテゴリではなく
-# 「新しいかどうか」の 1 軸なので、色系統を増やす理由が無い（金額の明度序列と同じ作法）。
+# **最新版から遅れている間だけアラーム色（赤）で立てる**（v1.79.0 時点の設計）。最新版は
+# Claude Code 自身が置く changelog キャッシュの冒頭から読み、`ver_older` で数値比較する。
+# 却下済み: ①「前回見た版と違う間だけ立てる」（変化の検知では*遅れているか*が読めない）
+# ② 明度だけ上げる白 231（アラームとして弱かった）。どちらも復活させないこと。
 if has_val "$cc_version"; then
   resolve_version_color "$cc_version"
   line1+=("${_ver_col}v${cc_version}${RST}")
@@ -1008,7 +1023,11 @@ if [[ -r "$_gc" ]]; then
   IFS= read -r _gc_raw < "$_gc"
   [[ "$_gc_raw" == "${GIT_FMT}"$'\037'* ]] && _git_facts="${_gc_raw#*$'\037'}"
 fi
-if [[ -z "$_git_facts" ]] || cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
+# **タグ不一致で即取り直すのは「中身があるのにタグが違う」ときだけ** — 非 git ディレクトリでは
+# `build_git` が何も出さず **0 バイトのファイル**が残るので、`-s` を付けないとタグ不一致と同じ扱いに
+# なって `cache_stale` の 5s 抑止を通らず**毎レンダー背景 build を spawn する**（storm。表示は
+# 正常なので沈黙する。`/code-review` が実測で捕まえた）
+if [[ -s "$_gc" && -z "$_git_facts" ]] || cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
   # 末尾の `>/dev/null 2>&1` は**内側の `> tmp` と別物で、外せない** — subshell が親の stdout を
   # 保持し続けると捕捉側の EOF が遅れる (docs/internals.md「バックグラウンド更新」/ fetch_subscription の注記)
   ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"

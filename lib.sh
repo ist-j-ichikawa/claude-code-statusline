@@ -14,13 +14,17 @@ readonly DIM=$'\033[2m'
 readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
 readonly GIT=$'\033[38;5;202m'
 # 変更行数と ahead/behind の色。**ANSI 31/32 を使わない** — あれは端末テーマがマップし直すので、
-# 実測では olive (#b5bf70) と brick (#c36c68) に化けて「緑と赤」に見えなかった (ユーザーの
-# スクリーンショットから採色。2026-08-17)。**256 色を明示するとテーマに依存しない**。
-# 値は Claude Desktop の code 画面の diff 色に合わせた実測値 (#51a565 / #aa5e6c) の最近傍。
+# 実測では olive (#b5bf70) と brick (#c36c68) に化けて「緑と赤」に見えなかった。
+# **値は GitHub Primer の diff トークン（ダークモード）に合わせる** — `--fgColor-success`
+# `#3fb950` / `--fgColor-danger` `#f85149`（ユーザー提示。2026-08-17）。**ダーク基準**にするのは
+# statusline が載る端末が暗いから（Primer ライトの `#1a7f37` / `#cf222e` は暗い地では沈む）。
+# 256 色の最近傍を計算して採用: add → 71 `#5faf5f`（Δ37）/ del → 203 `#ff5f5f`（Δ27）。
+# 最初はスクリーンショットから採色して del=131 `#af5f5f` にしていたが、あれは**アンチエイリアスで
+# 背景と混ざった値**（Δ78）で、実際のトークンより暗く濁っていた。
 # **アラームの赤 (ANSI 31) とは分ける** — `!N` コンフリクト / detached / コンテキスト 90%+ /
 # 遅れた版は「問題」、`+N -N ↑N ↓N` は「量」なので、色の役割を混ぜない。
-readonly DIFF_ADD=$'\033[38;5;71m'    # muted green  (#5faf5f)
-readonly DIFF_DEL=$'\033[38;5;131m'   # muted rose   (#af5f5f)
+readonly DIFF_ADD=$'\033[38;5;71m'    # GitHub dark --fgColor-success 相当 (#5faf5f)
+readonly DIFF_DEL=$'\033[38;5;203m'   # GitHub dark --fgColor-danger  相当 (#ff5f5f)
 readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL の両方がここから派生する
 readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 # 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
@@ -228,9 +232,10 @@ plan_label() {
     enterprise) _name="Enterprise" ;;
     *)          _name="$_st" ;;   # 未知の契約種別は生のまま出す (旧/新 Claude Code の graceful degradation)
   esac
-  case "${_rt##*_}" in
-    [0-9]x|[0-9][0-9]x) _tier=" ${_rt##*_}" ;;
-  esac
+  # **桁数に上限を置かない** — `[0-9]x|[0-9][0-9]x` は `100x` を落とすので、「suffix が `Nx` か
+  # だけを見る」という約束を満たしていなかった（列挙の粒度が値から桁数へ移っただけ。`/code-review` 指摘）
+  local _sfx="${_rt##*_}"
+  if [[ "$_sfx" == *x && "${_sfx%x}" =~ ^[0-9]+$ ]]; then _tier=" $_sfx"; fi
   printf -v "$1" '%s%s' "$_name" "$_tier"
 }
 
@@ -261,8 +266,11 @@ ver_older() {
   for i in 1 2 3; do
     av="${arest%%.*}" bv="${brest%%.*}"
     [[ "$av" =~ ^[0-9]+$ && "$bv" =~ ^[0-9]+$ ]] || return 1
-    ((av < bv)) && return 0
-    ((av > bv)) && return 1
+    # **`10#` で明示基数** — `2.1.08` のようなゼロ埋めを 8 進数と解釈されると
+    # `value too great for base` が毎レンダー stderr に漏れる（regex は `08` を通すので防げない。
+    # subagent 側が同じ作法を既に持っている。`/code-review` 指摘）
+    ((10#$av < 10#$bv)) && return 0
+    ((10#$av > 10#$bv)) && return 1
     # 次の成分へ。残りが無い側は 0 として扱う（`2.1` と `2.1.0` は同じ）
     [[ "$arest" == *.* ]] && arest="${arest#*.}" || arest=0
     [[ "$brest" == *.* ]] && brest="${brest#*.}" || brest=0

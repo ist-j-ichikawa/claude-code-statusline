@@ -6,7 +6,7 @@
 
 - **`statusline-command.sh`** — メイン statusLine (プロンプト直下の 5 行)。`settings.json` の `statusLine` から参照。
 - **`subagent-statusline-command.sh`** — agent panel の各サブエージェント行 (`subagentStatusLine`、v1.45.0 追加)。`settings.json` の `subagentStatusLine` から参照。
-- **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_key`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`/`fmt_ctx_size`/`fmt_elapsed`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。tier 判定は `model_key` が display_name / id / Bedrock inference-profile を `opus 5` 等の正規形に畳み、`model_color` はその完全一致で分岐する（新モデルはパレット 1 行 + arm 1 行で足せる）。**色の対象は 4.x 以降**（3.x 系は全廃止済み。下限未満は generic tier 色に落ちるだけで壊れない）。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。`osc8` は URL 側だけ `%` `;` `#` `?` を percent-encode する（表示テキストは素のまま。理由と `%` を先に処理する必要は `lib.sh` のコメント）。
+- **`lib.sh`** — 両者が `source` する共有ライブラリ。色定数と fork-free な presentation ヘルパー (`has_val`/`osc8`/`editor_url`/`rainbow`/`gradient`/`model_key`/`model_color`/`braille_bar`/`color_by_threshold`/`format_tokens`/`fmt_ctx_size`/`fmt_elapsed`/`plan_label`/`effort_color`/`ver_older`)。ネットワーク・キャッシュ・`date` 等の副作用は持たず、それらは `statusline-command.sh` 側に残す。モデル色は `model_color` に一元化され両 statusline が同一の tier 色を使う。tier 判定は `model_key` が display_name / id / Bedrock inference-profile を `opus 5` 等の正規形に畳み、`model_color` はその完全一致で分岐する（新モデルはパレット 1 行 + arm 1 行で足せる）。**色の対象は 4.x 以降**（3.x 系は全廃止済み。下限未満は generic tier 色に落ちるだけで壊れない）。**スクリプトと同じディレクトリに必須**（`${BASH_SOURCE%/*}/lib.sh` で解決、相対起動時は `.` に fallback）。`osc8` は URL 側だけ `%` `;` `#` `?` を percent-encode する（表示テキストは素のまま。理由と `%` を先に処理する必要は `lib.sh` のコメント）。
 
 ## 仕組み
 
@@ -65,6 +65,9 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 ## カラーテーマ
 
+**ダークテーマ推奨**（2026-08-17 の判断）。色は暗い背景でのコントラストを基準に選んでいるので、白地では lime 82 / gold 220 / 白 231 / think 117 / fast 190 が 1.0〜1.6:1 しかなく読めない（実測）。**ライトテーマ対応は入れない** — 端末の地色を知る手段が無い（stdin にテーマ情報は来ない）ので、両対応にするには「どちらでも読める中間色」へ寄せる＝暗地でのコントラストを捨てることになる。再検討条件は **stdin が端末の配色/テーマを渡してきたとき**。
+
+
 | 指標 | 色 | ANSIコード |
 |---|---|---|
 | vim mode `INSERT` | 黒文字 / 青 bg (bold)。**gruvbox/airline の流儀**（緑は NORMAL/COMMAND なので使わない） | 1;30;48;5;109 |
@@ -100,8 +103,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | output style (`default`) | dim (既定値はプレースホルダ扱い。`no git` と同じ) | 2 |
 | 進行中の git 操作 (`rebase 2/5` / `merge` / `cherry-pick` / `revert` / `bisect`、Line 3 の先頭) | 赤 (detached / conflicts と同じ「特別な git 状態」) | 31 |
 | Git ブランチ名 | Git brand オレンジ | 38;5;202 |
-| Git 追加行 `+N` / ahead `↑` | muted green (**ANSI 32 ではなく 256 色を明示** — ANSI は端末テーマが olive に化かす実測) | 38;5;71 |
-| Git 削除行 `-N` / behind `↓` | muted rose (同上。ANSI 31 は brick に化ける) | 38;5;131 |
+| Git 追加行 `+N` / ahead `↑` | GitHub Primer `--fgColor-success`(dark `#3fb950`) の最近傍。**ANSI 32 は端末テーマが olive に化かす**ので 256 色を明示 | 38;5;71 |
+| Git 削除行 `-N` / behind `↓` | GitHub Primer `--fgColor-danger`(dark `#f85149`) の最近傍（同上） | 38;5;203 |
 | conflicts `!N` / Detached HEAD | 赤 (**アラームの赤**。「量」の 71/131 と役割を分ける) | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
 | last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |

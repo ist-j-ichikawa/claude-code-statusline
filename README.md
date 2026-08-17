@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.79.0-blue)
+![Version](https://img.shields.io/badge/version-1.80.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -10,6 +10,8 @@ j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
 Claude Code の各アシスタント応答後に表示されるカスタムステータスラインです。
 セッション情報、Git 状態、コンテキスト使用量、コスト等をリアルタイムに表示します。
+
+> **ダークテーマの端末を推奨します。** 色は暗い背景でのコントラストを基準に選んでいるため、明るい背景では一部の要素 (コンテキストの緑・実課金の金・output style の白・think・fast) が読めません (白地に対して 1.0〜1.6:1 の実測)。ライトテーマ用の配色は用意していません。
 
 ### 表示レイアウト
 
@@ -46,7 +48,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(Max 20x)  Opus 5  high  think  fast  my-project-41  v2.1.233
+Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.233
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83
@@ -54,6 +56,8 @@ gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ```
 
 Line 3 の `gh:acme/` が owner だけなのは、repo 名 (`my-project`) が Line 2 のパス末尾に既に出ているためです (下の表を参照)。
+
+`default` は output style です (常に出ます。既定なので弱め表示で、変更していれば白く出ます)。
 
 コンテキストバーの分母は使用率と同じ色で、`%` と一体で読めます (200k のモデルでは `48%/200k`)。
 
@@ -65,8 +69,10 @@ Line 3 の変更表示は **Claude Desktop の code 画面と同じ単位と色*
 
 | 記号 | 意味 | 色 | 単位 |
 |---|---|---|---|
-| `+42` | 追加された行 | 緑 (256 色で明示。端末テーマに左右されません) | 行 |
+| `+42` | 追加された行 | 緑 (GitHub の diff 色に合わせた 256 色。端末テーマに左右されません) | 行 |
 | `-17` | 削除された行 | 赤 (同上) | 行 |
+
+> 配色は**ダークテーマの端末を前提**にしています。
 | `!2` | コンフリクト中のファイル | 赤 (**注意を促す赤**。行数の赤とは別の色) | ファイル |
 | `↑2` | origin より進んでいるコミット | 緑 (行数と同じ) | コミット |
 | `↓1` | origin より遅れているコミット | 赤 (行数と同じ) | コミット |
@@ -327,6 +333,7 @@ Claude Code 運用で特に便利な機能:
 ## Requirements
 
 - **macOS 専用** — `stat -f %m` / `md5 -q -s` (BSD 版) に依存します
+- **ダークテーマの端末推奨** — 配色を暗い背景基準で選んでいます (上記)
 - [Claude Code](https://code.claude.com/) CLI
 - `jq` (JSON parser)
 - `curl` — `fetch_usage_spend()` のみ。extra-usage の実課金額取得に使い、OAuth トークンは argv に出さず stdin 経由で渡します。サブスクリプション種別の取得はネットワークを使わず Keychain 読みだけです
