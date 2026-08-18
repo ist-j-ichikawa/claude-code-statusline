@@ -2912,13 +2912,13 @@ print(r.stdout.split(chr(10))[2])
     '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:48},rate_limits:{five_hour:{used_percentage:45,resets_at:$f},seven_day:{used_percentage:9,resets_at:$w}}}')
   _render() { printf '%s' "$j" | env PATH="$bin:$PATH" \
     CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh"; }
-  # 1 回目: _NOW + 5h + 週間 の 3 回
+  # 1 回目: 5h + 週間 の 2 回だけ (`_NOW` は v1.82.0 で jq 由来になったので `date` を使わない)
   : > "$log"; _render >/dev/null
-  [[ "$(grep -c . "$log")" == "3" ]]
+  [[ "$(grep -c . "$log")" == "2" ]]
   [[ "$(grep -c -- '-j -r' "$log")" == "2" ]]
-  # 2 回目: _NOW の 1 回だけ (`-j -r` はゼロ)
+  # 2 回目: **1 度も叩かない** (メモが効き、時刻も jq から来る)
   : > "$log"; local out2; out2=$(_render)
-  [[ "$(grep -c . "$log")" == "1" ]]
+  [[ "$(grep -c . "$log")" == "0" ]]
   [[ "$(grep -c -- '-j -r' "$log")" == "0" ]]
   # メモから出しても表示は同じであること (fork を消して値まで消えていないか)
   local want plain

@@ -25,7 +25,8 @@ readonly GIT_CACHE_MAX_AGE=5
 # (「500 件以下なのに遅い」を上限のせいと誤診しないための注記)。実測と理由は build_git の
 # untracked の節 (④) に 1 箇所だけ置いてある。
 readonly UNTRACKED_FILE_CAP=500
-readonly _NOW=$(date +%s)
+# `_NOW` は**既に 1 回だけ走っている jq から取る**（`now|floor`）ので、ここでは `date` を叩かない。
+# 定義は jq の eval 直後（`date` fork が 1 個減る = 実測 -3.6ms。UTC epoch なので TZ 非依存）。
 
 # --- Main-only helpers (generic presentation helpers — has_val/osc8/editor_url/
 # rainbow/gradient/model_color/braille_bar/color_by_threshold/format_tokens — live in lib.sh) ---
@@ -456,6 +457,7 @@ five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
 ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
 pr_review_state=""
+now_epoch=0
 vim_mode=""
 effort_level="" thinking_enabled="false" fast_mode="false" output_style=""
 cost_cents=0 dur_sec=0
@@ -491,9 +493,15 @@ _jq_out=$(jq -r '
   @sh "fast_mode=\(.fast_mode // false)",
   @sh "output_style=\(.output_style.name // "")",
   @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)",
-  @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)"
+  @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)",
+  @sh "now_epoch=\(now|floor)"
 ' 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
+# **0 なら `date` に落とす** — eval が失敗した時に `_NOW=0` を使うと、`cache_stale` は
+# 「古くない」で安全側に倒れる一方、リセットの `now` 判定と commit age が誤表示になる。
+# 正常経路では追加コストなし（jq が既に値を返している）。
+[[ "$now_epoch" =~ ^[0-9]+$ ]] && ((now_epoch > 0)) || now_epoch=$(date +%s)
+readonly _NOW="$now_epoch"
 
 # Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
 # Empty unless stdin actually provided a GitHub repo identity — both call sites use this as the gate.
