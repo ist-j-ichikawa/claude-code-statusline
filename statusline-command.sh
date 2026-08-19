@@ -71,8 +71,8 @@ prefetch_mtimes() {
 cache_stale() {
   local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE} _mt=""
   # キーは 1 回だけ組む（3 度綴ると 1 つ typo しても黙って個別 `stat` に落ちるだけでテストは緑）。
-  # **`local` を別行にする** — bash 3.2 は `local a=$1 b="…$a…"` を先に全部展開するので、
-  # 同じ `local` 行で `$cache` を参照すると `set -u` で "unbound variable" になる。
+  # **`local` を別行にする** — 同じ `local` 行で前の変数を参照すると `set -u` で
+  # "unbound variable" になる（`local a=$1 b="[$a]"` は **3.2 でも 5.3 でも**落ちる。実測）。
   local _k=$'\n'"$cache "
   # **`-f` が「不在」と「通常ファイルでない」を 1 箇所で吸う**（まとめ取りの前に置く）—
   # `stat` はディレクトリや FIFO にも成功するので map にも入る。後ろに置くと、`md5` が PATH に
