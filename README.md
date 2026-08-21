@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.82.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.233-purple)
+![Version](https://img.shields.io/badge/version-1.83.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.235-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -19,7 +19,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 |---|---|
 | **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
-| **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`owner/repo · ブランチ (OSC 8 → GitHub tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit (`08-17T13:13`) |
+| **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`/`gl:`owner/repo · ブランチ (OSC 8 → GitHub / GitLab tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit (`08-17T13:13`) |
 | **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
 | **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · extra-usage 実課金 — **アカウント** |
 
@@ -48,7 +48,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.233
+Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.235
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83
@@ -91,17 +91,18 @@ Line 3 の変更表示は **Claude Desktop の code 画面と同じ単位と色*
 
 コンフリクトの `!` は Claude Desktop に対応する表示が無いため独自に決めた記号です（`+` `-` と同じ ASCII の 1 桁なので、どの端末でも桁が揃います）。マージ中は最優先の情報なので、行数とは独立して出しています。
 
-origin 未設定 / 非 GitHub remote (GitLab 等) では `gh:` 部分が省略され、Line 3 はブランチ名から始まります。
+GitHub は `gh:`、GitLab は `gl:` を付け、ブランチはそれぞれの tree ページへリンクします。
+origin 未設定、またはこの 2 つ以外のホストでは略号ごと省略され、Line 3 はブランチ名から始まります。
 
-**`gh:` は Line 2 のパスと重複した成分だけを削ります** — 同じ文字列が 2 行に並ばないようにするためです。
+**略号 (`gh:` / `gl:`) は Line 2 のパスと重複した成分だけを削ります** — 同じ文字列が 2 行に並ばないようにするためです。
 
 | Line 2 のパス末尾 | Line 3 の表示 |
 |---|---|
-| `owner/repo` と一致 (ghq 等) | `gh:` ごと出さない |
+| `owner/repo` と一致 (ghq 等) | 略号ごと出さない |
 | repo 名だけ一致 (`~/dev/<repo>` 等) | `gh:owner/` に畳む (末尾の `/` は「続きは上の行」の意) |
 | 不一致 | `gh:owner/repo` を全部出す |
 「まだ GitHub に上げてないリポ」がひと目でわかります。
-`gh:` プレフィックスは dim、`owner/repo` は通常輝度です — ローカルのディレクトリ名と origin のリポジトリ名が食い違っていても、どこの repo かがここで判別できます (一致していれば上のとおり省略されるので、**出ているときは必ず何か違う**ということです)。
+略号のプレフィックスは dim、`owner/repo` は通常輝度です — ローカルのディレクトリ名と origin のリポジトリ名が食い違っていても、どこの repo かがここで判別できます (一致していれば上のとおり省略されるので、**出ているときは必ず何か違う**ということです)。
 
 worktree セッションで `<repo>/.claude/worktrees/<名前>` 配下にいる場合、パスはリポジトリ root までで切り、worktree 名を 🌲 の直後に表示します。
 パス末尾がランダムな worktree 名で占領されず、リポジトリのディレクトリ名がパス末尾に残ります。

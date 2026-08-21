@@ -19,6 +19,17 @@ readonly CACHE_BASE="${CLAUDE_STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statu
 # (過去に 3 箇所を 1 つずつ踏んだ) を機械的に潰せない。メタテストが直書きを禁じている以上、
 # 展開そのものを共有するのが筋。
 readonly CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+# securestorage 側も**同じ規則で 1 箇所から派生させる** — `.credentials.json` の置き場と Keychain の
+# サービス名の suffix がここから出る。関数の中でインラインに展開すると `CONFIG_DIR` と同じ
+# 「対応漏れを機械的に潰せない」状態を作り、メタテストも緩めることになる。
+# `HASH_DIR` が空 = suffix なし（既定アカウント）。`:+` なので `set -u` でも落ちない。
+if [[ -n "${CLAUDE_SECURESTORAGE_CONFIG_DIR+x}" ]]; then
+  readonly SECURESTORAGE_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}"
+  readonly SECURESTORAGE_HASH_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR}"
+else
+  readonly SECURESTORAGE_DIR="$CONFIG_DIR"
+  readonly SECURESTORAGE_HASH_DIR="${CLAUDE_CONFIG_DIR:+$CONFIG_DIR}"
+fi
 readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
 readonly GIT_CACHE_MAX_AGE=5
 # untracked の行数を数える上限。**コストは総バイト数に比例するのに上限は件数なので近似指標**
@@ -123,17 +134,50 @@ git_cache_file() {
 }
 
 # --- Credentials blob (Keychain → file fallback) ---
+# **Keychain のサービス名は config dir ごとに変わる** (2.1.233 のバイナリで実測。docs も CHANGELOG も
+# 無記載)。上流の組み立ては `Claude Code` + `-credentials` + suffix で、suffix は
+#   - `CLAUDE_SECURESTORAGE_CONFIG_DIR` が**定義済み**: 値が空なら無し / 非空ならその値の sha256 先頭 8 桁
+#   - 未定義: `CLAUDE_CONFIG_DIR` が空なら無し / 非空なら**その env の値そのまま**の sha256 先頭 8 桁
+# `Claude Code-credentials` を決め打ちで引くと、別 config dir のセッションで**既定アカウントの blob**を
+# 読む = 別アカウントのプラン名と extra:$ を出す (無表示 < 誤読)。既定ユーザー (どちらも未設定) は
+# suffix 無しなので `shasum` の fork は増えない。
+# **上流は env の値を NFC 正規化してから hash する。path の解決 (`resolve`) も末尾スラッシュの
+# 除去もしない** (2.1.238 の `Rre()`/`En()` で実測) — なので**相対パスでも綴りが同じなら一致する**。
+# 一致しないのは**非 NFC の値だけ** (bash では正規化できない)。その場合は「引いた名前が見つからない」
+# だけなので要素が落ちる = 安全側。**`shasum` が無い等で suffix を算出できないときは Keychain ごと
+# 飛ばす** — 決め打ち名に落ちると別アカウントの blob を読む誤読になるため。
 get_credentials_blob() {
-  if command -v security &>/dev/null; then
+  # 置き場と suffix の元は top-level の `SECURESTORAGE_DIR` / `SECURESTORAGE_HASH_DIR` から取る
+  local _ss_dir="$SECURESTORAGE_DIR" _hash_dir="$SECURESTORAGE_HASH_DIR" _svc="Claude Code-credentials"
+  local _keychain_ok=1
+  if [[ -n "$_hash_dir" ]]; then
+    _keychain_ok=0
+    local _h
+    _h=$(printf '%s' "$_hash_dir" | shasum -a 256 2>/dev/null) || _h=""
+    _h="${_h%% *}"
+    if [[ "$_h" =~ ^[0-9a-f]{8} ]]; then _svc="${_svc}-${_h:0:8}" _keychain_ok=1; fi
+  fi
+  if ((_keychain_ok)) && command -v security &>/dev/null; then
     local blob
-    blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+    # **`-a` を付ける** — 上流は読み (`find-generic-password -a <USER> -s <svc> -w`) も書きも
+    # account 属性込みで識別する (2.1.238 の `Tkd()`/`hYT()`)。service だけで引くと、同名 item が
+    # 2 つある keychain (別マシンから同期した / `$USER` が違う時に作った) で**別アカウントの blob**を
+    # 読む = suffix 対応で閉じたはずの誤読が残る。**`-s` の後に置く** (テストが `$3` で名前を pin する)。
+    # `USER` が無い環境 (`env -i`) では付けない — `-a ""` は一致しなくなるため。
+    local _acct="${USER:-${LOGNAME:-}}"
+    if [[ -n "$_acct" ]]; then
+      blob=$(security find-generic-password -s "$_svc" -a "$_acct" -w 2>/dev/null)
+    else
+      blob=$(security find-generic-password -s "$_svc" -w 2>/dev/null)
+    fi
     # `printf '%s'` を使う — blob は外部文字列で、`echo` は先頭が `-n`/`-e` の値を食う
     if [[ -n "$blob" ]]; then printf '%s\n' "$blob"; return 0; fi
   fi
-  # `CLAUDE_CONFIG_DIR` を尊重する — docs は「credentials on Linux and Windows」もこの下と明記
-  # (macOS は Keychain が主で、ここはその fallback)。ハードコードすると別 config dir で
-  # subscription と extra-usage が無言で消える (宛名と同じ根本原因)。
-  local creds="${CONFIG_DIR}/.credentials.json"
+  # docs は「credentials on Linux and Windows」もこの下と明記 (macOS は Keychain が主で、ここは
+  # その fallback)。ハードコードすると別 config dir で subscription と extra-usage が無言で消える
+  # (宛名と同じ根本原因)。**`CONFIG_DIR` ではなく `_ss_dir`** — 上流はこのファイルだけ
+  # `CLAUDE_SECURESTORAGE_CONFIG_DIR` 側に置く。
+  local creds="${_ss_dir}/.credentials.json"
   # gate は `-f` ではなく **`-r`** — root 所有や mode 000 の credentials では `$(<file)` が
   # "Permission denied" を stderr に吐く (旧 `cat file 2>/dev/null` は黙っていた)。
   # **`$(<file 2>/dev/null)` と書いてはいけない** — bash 3.2 では `$(<file)` の特殊構文が壊れて
@@ -455,7 +499,7 @@ exceeds_200k="false" cc_version="" session_name="" session_id="" transcript_path
 agent_name="" ctx_window_size=0
 five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
 wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
-ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id=""
+ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id="" ws_repo_forge=""
 pr_review_state=""
 now_epoch=0
 vim_mode=""
@@ -504,8 +548,19 @@ if ((_jq_ok)); then eval "$_jq_out" || true; fi
 readonly _NOW="$now_epoch"
 
 # Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
-# Empty unless stdin actually provided a GitHub repo identity — both call sites use this as the gate.
-if [[ "$ws_repo_host" == "github.com" ]] && has_val "$ws_repo_owner" && has_val "$ws_repo_name"; then
+# Empty unless stdin actually provided a **known forge** repo identity — both call sites use this as the gate.
+# **ホスト決め打ちの許可リストを残す** — 表示する略号 (`gh:`/`gl:`) と tree URL の形は forge ごとに
+# 違うので、任意ホストを通すと「知らない forge にそれっぽいリンクを張る」誤誘導になる。上流が
+# 対応しているのは GitHub と GitLab の 2 つ (2.1.233/2.1.234) なので、この 2 つだけ。
+# **完全一致で見る** — https の `Cie()` はポートを残す (`github.com:443`) ので、自前ホストや
+# ポート付きは一致せず要素が落ちる = 安全側 (出さない)。
+if has_val "$ws_repo_owner" && has_val "$ws_repo_name"; then
+  case "$ws_repo_host" in
+    github.com) ws_repo_forge="gh" ;;
+    gitlab.com) ws_repo_forge="gl" ;;
+  esac
+fi
+if [[ -n "$ws_repo_forge" ]]; then
   ws_repo_id="${ws_repo_owner}/${ws_repo_name}"
 fi
 
@@ -537,7 +592,7 @@ build_git() {
   [[ -z "$branch" ]] && return
 
   local repo_id="" remote="" ins=0 del=0 conflicts=0
-  local ahead=0 behind=0 age="" msg="" op=""
+  local ahead=0 behind=0 age="" msg="" op="" _hostpart=""
 
   # 進行中の git 操作 (rebase / merge / cherry-pick / revert / bisect)。
   # **`HEAD@<sha>` だけでは「sha を直接 checkout した」と「rebase 中」が区別できない** — 実測で
@@ -578,14 +633,36 @@ build_git() {
   # origin (dir の事実)。stdin の workspace.repo は使わない — cache に stdin 由来値を混ぜないため。
   # background 実行なのでこの 1 fork は hot path に乗らない (presenter 側で stdin 値を優先する)。
   remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
+  # **末尾スラッシュを剥がす** — git は URL を verbatim で持つので `https://github.com/o/r/` が来る。
+  # 残すと `repo_id="o/r/"` になり、末尾 `/` は「repo 部は真上の行」の標識と衝突して owner に誤読され、
+  # tree URL も `//tree/main` になる。上流も `oGs()` で `/+$` を落としている。複数個ありうるのでループ。
+  while [[ "$remote" == */ ]]; do remote="${remote%/}"; done
+  # **userinfo (`https://user@host/…`) を先に落とす** — 上流は 2.1.234 でこれを host 判定から外した
+  # (それまで `user@github.com` を host と読んでいた)。落とさないと下の arm が全部外れて `remote=""` に
+  # なり、**ブランチの OSC 8 リンクだけが静かに消える** (`gh:` は stdin 側から出るので気付けない)。
+  # スコープは**最初の `/` より前**に限る (上流の `(?:[^@/?#]*@)?` と同じ) — パスに `@` を含む
+  # repo 名 (`o/r@2`) を userinfo と誤読しないため。剥がすのは最短一致で 1 個だけ。
+  case "$remote" in
+    https://*@*)
+      _hostpart="${remote#https://}"
+      _hostpart="${_hostpart%%/*}"
+      [[ "$_hostpart" == *@* ]] && remote="https://${remote#*@}"
+      ;;
+  esac
   case "$remote" in
     git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
     ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
     https://github.com/*)    ;;
+    git@gitlab.com:*)        remote="https://gitlab.com/${remote#git@gitlab.com:}" ;;
+    ssh://git@gitlab.com/*)  remote="https://gitlab.com/${remote#ssh://git@gitlab.com/}" ;;
+    https://gitlab.com/*)    ;;
     *)                       remote="" ;;
   esac
   remote="${remote%.git}"
-  [[ -n "$remote" ]] && repo_id="${remote#https://github.com/}"
+  # **ホスト名は綴りで剥がさず「scheme を落として最初の `/` まで」で捨てる** — forge を足すたびに
+  # `${remote#https://<host>/}` を 1 行増やすのは、増やし忘れで `repo_id` にホスト名が混じる
+  # (`gh:github.com/o/r`) 経路を作る。
+  if [[ -n "$remote" ]]; then repo_id="${remote#https://}"; repo_id="${repo_id#*/}"; fi
 
   # Dirty state = **行数の増減** (`+470 -105`)。Claude Desktop の code 画面と同じ単位・同じ色で、
   # ファイル状態ごとの件数 (旧 `A3 M6 ?1`) は出さない (v1.74.0、ユーザー選択)。
@@ -750,19 +827,36 @@ render_git() {
     # **末尾の `/` は意図的** — 裸の `gh:owner` は「owner という名の repo」に誤読される。`/` が
     # 「続き（repo 部）は真上の行の末尾」の標識になる。
     # 比較は必ず `/` で anchor する — 付けないと `my-<repo>` のような上位文字列に誤爆する。
+    # **forge の略号は facts の origin から先に決める** — stdin の `workspace.repo` は旧 Claude Code に
+    # 無いが、`remote` は build_git が正規化して必ず持つ。
+    # **どちらからも読めなければ要素ごと出さない** — 「不明なら GitHub」と倒すと、`id` の供給元が
+    # 増えた時に**未知 forge へ `gh:` を貼る**誤誘導になる (許可リストの方針と正反対)。
+    # 今は `id` があれば forge も必ずあるので、この gate は保険ではなく方針の表明。
+    local forge="$ws_repo_forge"
+    case "$remote" in
+      https://gitlab.com/*) forge="gl" ;;
+      https://github.com/*) forge="gh" ;;
+    esac
     local id="${ws_repo_id:-$repo_id}"
-    if [[ -n "$id" && "$screen_dir" != *"/$id" ]]; then
+    if [[ -n "$forge" && -n "$id" && "$screen_dir" != *"/$id" ]]; then
       # repo 名だけ一致 → owner だけ残す (末尾の `/` が「続きは真上の行」の標識)
       [[ "$id" == */* && "$screen_dir" == *"/${id##*/}" ]] && id="${id%/*}/"
-      line_git+=("${DIM}gh:${RST}${id}")
+      line_git+=("${DIM}${forge}:${RST}${id}")
     fi
 
-    # GitHub tree URL — PR への遷移は Claude Code 組み込みフッターの PR badge に任せる
+    # tree URL — PR/MR への遷移は Claude Code 組み込みフッターの PR/MR badge に任せる。
+    # **GitLab は `/-/tree/`** (`-` が ref とパスの区切り。`/tree/` だとブランチ名の repo 直下パスと
+    # 解釈されて 404 になる)。URL の形は forge ごとに違うので、`forge` を知っている場所で分岐する。
     local branch_show="$branch"
-    [[ -n "$remote" ]] && osc8 "${remote}/tree/${branch}" "$branch" branch_show
+    local tree_seg="/tree/"
+    [[ "$forge" == "gl" ]] && tree_seg="/-/tree/"
+    [[ -n "$remote" ]] && osc8 "${remote}${tree_seg}${branch}" "$branch" branch_show
     line_git+=("${GIT}${branch_show}${RST}")
 
-    # PR review state (Claude Code 2.1.145+) — フッターが出さない state のみを補う
+    # PR/MR review state (Claude Code 2.1.145+ / GitLab は 2.1.234+) — フッターが出さない state のみを
+    # 補う。GitLab の `review_state` は `draft`/`approved`/`pending` の 3 値だけ (2.1.235 実測) なので
+    # `pr_state_color` の既存 arm で全部受かる。**番号は出さない** — フッターが `MR !N` を持つし、
+    # 同じ行の conflicts が既に `!N` (赤) を使っていて意味が衝突する。
     if has_val "$pr_review_state"; then
       local pr_color
       pr_state_color "$pr_review_state" pr_color
@@ -978,6 +1072,13 @@ if has_val "$session_id"; then
     # `read` の rc は見ない — このファイル群は末尾改行が無く rc=1 でも内容は入る (forkedFrom と同じ罠)
     IFS= read -r _sl < "$_sf"
     [[ "$_sl" == *"\"sessionId\":\"${session_id}\""* ]] || continue
+    # **`formerNames` から先を捨てる** — 2.1.235 実測で、`/rename` 済みセッションのファイルは
+    # `"formerNames":[{"name":…,"until":…},…]` を持つ。つまり**`name` キーを持つネストしたオブジェクト
+    # が実在する**ようになった (この機能の唯一の誤情報経路として警告していた形)。今は実物の並びが
+    # `name` → `formerNames` なので下の最短一致が正しい方を選ぶが、それは**並び順だけが支えの安全**
+    # なので、シリアライズ順が入れ替わると**過去の名前を宛名として出す = 誤配**になる。
+    # 逆順になったときは `name` ごと落ちて宛名が消えるだけ (無表示 < 誤読) で済む。
+    _sl="${_sl%%'"formerNames"'*}"
     # **`nameSource` で絞らない** — `name` は生成規則にかかわらず常にアドレスなので、絞ると
     # 「送れる宛先が画面に無い」状態が生まれる (v1.69.0 の回帰。経緯は docs/internals.md の「宛名」節)。
     # `"name":"` は `"nameSource":"` に一致しない (`"name` の次が `S`)。JSON 文字列値の中では

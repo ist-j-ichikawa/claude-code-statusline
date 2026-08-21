@@ -32,7 +32,9 @@ setup() {
   #   `CLAUDE_CODE_USE_*` — 「Bedrock では extra-usage を出さない」が**検出が壊れていても緑**になる
   # 偽の赤は自分で申告するが、偽の緑は沈黙するので後者が本番。リストは下のメタテストが強制する。
   # 行継続で分けない — メタテストは 1 行ごとに `unset` と変数名の同居を見るため
-  unset CLAUDE_SETTINGS CLAUDE_CONFIG_DIR
+  #   `CLAUDE_SECURESTORAGE_CONFIG_DIR` — Keychain のサービス名 suffix とファイル fallback 先を
+  #                        両方動かすので、漏れると credentials 経路のテストが**別 dir を読んで**緑になる
+  unset CLAUDE_SETTINGS CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR
   unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
 }
 
@@ -859,6 +861,52 @@ _count_cmd() {
   [[ "$result" != *"acme/widgets.git"* ]]
 }
 
+@test "Git: GitLab origin が gl: と GitLab の tree URL になること" {
+  # 上流は 2.1.234 で GitLab MR を footer/statusline に載せた。`review_state` は GitLab でも来るので、
+  # host を `github.com` 決め打ちにしていると **state だけ出て repo 識別もリンクも無い行**になる。
+  # **`/-/tree/` であること**が要点 — GitHub と同じ `/tree/` を張ると GitLab では 404 になる
+  # (リンクは見た目が壊れないので、テストで見ないと気付けない)。
+  local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  _repo_at "$tmp_repo"
+  git -C "$tmp_repo" remote add origin "git@gitlab.com:acme/widgets.git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.234","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.234","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" == *"gl:${RST}acme/widgets"* ]]
+  [[ "$result" == *"https://gitlab.com/acme/widgets/-/tree/"* ]]
+  # GitHub 用の略号と URL に落ちていないこと（両方 pin しないと片方の回帰が通る）
+  [[ "$result" != *"gh:"* ]]
+  [[ "$result" != *"https://gitlab.com/acme/widgets/tree/"* ]]
+}
+
+@test "Git: userinfo 付き https origin でもブランチのリンクを出すこと" {
+  # 上流は 2.1.234 で `https://user@host/…` の host 誤読を直した。こちら側の origin 正規化は
+  # userinfo 無しの 3 形しか受けていなかったので、`remote=""` になって**ブランチの OSC 8 リンクだけ**が
+  # 静かに落ちていた（`gh:` は stdin の workspace.repo から出るので画面では気付けない）。
+  local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  _repo_at "$tmp_repo"
+  git -C "$tmp_repo" remote add origin "https://bot@github.com/acme/widgets.git"
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.234","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.234","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  [[ "$result" == *"https://github.com/acme/widgets/tree/"* ]]
+  # userinfo が URL に残っていないこと（残ると認証情報が画面とリンクに載る）
+  [[ "$result" != *"bot@"* ]]
+  [[ "$result" == *"gh:${RST}acme/widgets"* ]]
+}
+
 @test "Git: workspace.repo(Claude Code 2.1.145+)がコールドスタートでもgh:を表示すること" {
   local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
   rm -f "$cache_dir"/* 2>/dev/null
@@ -1050,11 +1098,15 @@ _count_cmd() {
   [[ "$result" != *"#1234"* ]]
 }
 
-@test "Git: workspace.repoの非GitHubホスト(gitlab.com等)ではgh:が表示されないこと" {
+@test "Git: workspace.repoのgitlab.comがコールドスタートでもgl:を表示すること" {
+  # **`!= *"gh:"*` だけでは pin にならない** — case arm (`gitlab.com) ws_repo_forge="gl"`) を消しても
+  # 「何も出ない」で緑になる。GitHub 側にはコールドスタートの pin があるのに GitLab には無かった。
+  # 出る値そのものを assert する（コールドスタート = facts キャッシュが空なので stdin 経路だけが働く）。
   local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
   rm -f "$cache_dir"/* 2>/dev/null
   result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"gitlab.com","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" == *"gl:"*"acme/widgets"* ]]
   [[ "$result" != *"gh:"* ]]
 }
 
@@ -1098,13 +1150,40 @@ _count_cmd() {
   [[ "$result" != *"48;5;214"* ]]
 }
 
-@test "Git: 非GitHub origin(GitLab等)ではgh:が表示されないこと" {
+@test "Git: origin の末尾スラッシュを畳んで gh:owner/repo/ にしないこと" {
+  # git は URL を verbatim で持つので `https://github.com/o/r/` が来る。剥がさないと
+  # `repo_id="o/r/"` になり、末尾 `/` は「repo 部は真上の行」の標識と衝突して owner に誤読される。
+  # tree URL も `//tree/main` になる。**表示は崩れないのでテストでしか気付けない**。
   local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
   local tmp_repo
   tmp_repo=$(mktemp -d)
   ( cd "$tmp_repo" && git init -q \
     && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init \
-    && git remote add origin "git@gitlab.com:acme/widgets.git" )
+    && git remote add origin "https://github.com/acme/widgets/" )
+  rm -f "$cache_dir"/* 2>/dev/null
+  echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh >/dev/null 2>&1
+  _wait_for_cache "$cache_dir"
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  rm -rf "$tmp_repo"
+  # 表示要素は空白で終わる（`acme/widgets/` なら空白の前に `/` が残る）。**URL 側にも `acme/widgets/`
+  # が現れる**（`/tree/master` の区切り）ので、`!= *"acme/widgets/"*` では偽陽性になる
+  [[ "$result" == *"acme/widgets "* ]]
+  [[ "$result" != *"widgets//tree"* ]]
+}
+
+@test "Git: 許可リストに無い forge(bitbucket等)では略号もリンクも出さないこと" {
+  # 旧名は「非GitHub origin(GitLab等)では gh: が出ないこと」だったが、2.1.234 追従で gitlab.com が
+  # `gl:` としてサポート対象になったため、**テスト名と実際の挙動が食い違い、許可リスト
+  # (「知らない forge にそれっぽいリンクを張らない」) の pin が 0 本になっていた**。
+  # 未知ホストに向け直す — ここが緑のままだと `*) forge="gh"` のような穴を検出できない。
+  local cache_dir="$CLAUDE_STATUSLINE_CACHE_DIR/git"
+  local tmp_repo
+  tmp_repo=$(mktemp -d)
+  ( cd "$tmp_repo" && git init -q \
+    && git -c user.name=t -c user.email=t@t commit --allow-empty -q -m init \
+    && git remote add origin "git@bitbucket.org:acme/widgets.git" )
   rm -f "$cache_dir"/* 2>/dev/null
   echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.76","workspace":{"current_dir":"'"$tmp_repo"'"},"context_window":{"used_percentage":10}}' \
     | /bin/bash statusline-command.sh >/dev/null 2>&1
@@ -1113,6 +1192,17 @@ _count_cmd() {
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
   rm -rf "$tmp_repo"
   [[ "$result" != *"gh:"* ]]
+  [[ "$result" != *"gl:"* ]]
+  [[ "$result" != *"bitbucket"* ]]
+  # **stdin 経路も同じ方針で pin する** — facts 経路だけだと `*) remote="" ;;` と forge の gate の
+  # 2 箇所を同時に壊さないと赤くならない（単発 mutation を検出できない）。stdin の host は
+  # `ws_repo_forge` の case が直接受けるので、`*) ws_repo_forge="gh" ;;` を足した瞬間ここが赤くなる。
+  rm -f "$cache_dir"/* 2>/dev/null
+  result=$(echo '{"model":{"id":"test","display_name":"Test"},"version":"2.1.146","workspace":{"current_dir":"'"$(pwd)"'","repo":{"host":"bitbucket.org","owner":"acme","name":"widgets"}},"context_window":{"used_percentage":10}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '3p')
+  [[ "$result" != *"gh:"* ]]
+  [[ "$result" != *"gl:"* ]]
+  [[ "$result" != *"acme/widgets"* ]]
 }
 
 # ============================================================================
@@ -1446,6 +1536,35 @@ _peer_json() {
     | "${_peer_pre[@]}" "CLAUDE_CONFIG_DIR=$_alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
   [[ "$result" == *" alt-config-session"* ]]
   [[ "$result" != *"wrong-home-side"* ]]
+}
+
+@test "宛名: formerNames の過去の名前を宛名として出さないこと" {
+  # 2.1.235 実測: `/rename` 済みセッションのファイルは `"formerNames":[{"name":…,"until":…},…]` を持つ。
+  # つまり **`name` キーを持つネストしたオブジェクトが実在する**ようになった（この機能の唯一の
+  # 誤情報経路として警告していた形そのもの）。実物の並びは `name` → `formerNames` なので最短一致は
+  # 正しい方を選ぶが、それは**並び順だけが支えの安全**。逆順で置いて「過去の名前を出さない」ことを pin する。
+  _ph="$BATS_TEST_TMPDIR/peer-former"
+  mkdir -p "$_ph/.claude/sessions"
+  printf '{"pid":54642,"sessionId":"%s","cwd":"/tmp","formerNames":[{"name":"old-name-77","until":1787137476612}],"name":"current-name-88","status":"busy"}' \
+    "aaaaaaaa-1111-2222-3333-444444444444" > "$_ph/.claude/sessions/54642.json"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | env "HOME=$_ph" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  # 逆順では宛名ごと落ちる（無表示 < 誤読）。**過去の名前を出さない**ことが本体の assert
+  [[ "$result" != *"old-name-77"* ]]
+  [[ "$result" == *"Test"* ]]   # 到達証跡 — 描画自体は続いている
+}
+
+@test "宛名: formerNames を持つ実物の並びでは今の名前を出すこと" {
+  # 上のテストと対で見る — `formerNames` から先を捨てる処理が行き過ぎて、実物の並び
+  # (`name` → `formerNames`) でも宛名が消えたら「常に無表示」で上のテストだけ緑になる
+  _ph="$BATS_TEST_TMPDIR/peer-former-ok"
+  mkdir -p "$_ph/.claude/sessions"
+  printf '{"pid":54642,"sessionId":"%s","cwd":"/tmp","name":"current-name-88","formerNames":[{"name":"old-name-77","until":1787137476612}],"status":"busy"}' \
+    "aaaaaaaa-1111-2222-3333-444444444444" > "$_ph/.claude/sessions/54642.json"
+  result=$(_peer_json "aaaaaaaa-1111-2222-3333-444444444444" \
+    | env "HOME=$_ph" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1)
+  [[ "$result" == *" current-name-88"* ]]
+  [[ "$result" != *"old-name-77"* ]]
 }
 
 @test "宛名: session_id が来ない旧 Claude Code では宛名を出さないこと" {
@@ -2219,12 +2338,24 @@ _os_run() {
   # **コメント行は除外する** — 散文は `~/.claude/sessions/...` のように直接書くので、
   # `/bin/bash` メタテストの「隣の語で絞る」手が使えない。`path:行番号:` の後が `#` で
   # 始まる行を落とす (行末コメントだけの言及は拾ってしまうが、そこは実コードと同居する形なので許容)。
-  local bad
-  bad=$(grep -nE '(\$\{?HOME\}?|~)/\.claude' \
+  # 許可するのは **top-level の `readonly` で `CLAUDE_*CONFIG_DIR:-` の既定値として書いた形だけ**。
+  # 変数名では絞らない（`CLAUDE_SECURESTORAGE_CONFIG_DIR` も正当な env seam なので）が、**`readonly` を
+  # 要求する**ことで「関数の中でインラインに展開し直す」複製を弾く。以前は `:-` の形だけを見ていたため、
+  # `get_credentials_blob` の中に 2 つ目の展開が入っても緑だった（v1.83.0 のレビュー指摘）。
+  local bad sl_bad inst_bad
+  # 被験体 3 本には **`readonly` を要求する**（関数内のインライン展開を弾く）。
+  sl_bad=$(grep -nE '(\$\{?HOME\}?|~)/\.claude' \
           "$BATS_TEST_DIRNAME/statusline-command.sh" "$BATS_TEST_DIRNAME/lib.sh" \
-          "$BATS_TEST_DIRNAME/subagent-statusline-command.sh" "$BATS_TEST_DIRNAME/install.sh" \
+          "$BATS_TEST_DIRNAME/subagent-statusline-command.sh" \
         | grep -vE ':[0-9]+:[[:space:]]*#' \
-        | grep -v 'CLAUDE_CONFIG_DIR:-' || true)
+        | grep -vE ':[0-9]+:[[:space:]]*readonly [A-Z_]+=.*CLAUDE_[A-Z_]*CONFIG_DIR:-' || true)
+  # `install.sh` は settings のパスを組む都合で `readonly` にできない（usage 文と代入）ので
+  # 従来どおり「`CLAUDE_*CONFIG_DIR:-` の既定値として書いてあること」だけを要求する。
+  # **`-H` を必ず付ける** — 単一ファイルだと grep が `path:` を省き、下の `:行:#` フィルタが素通りする
+  inst_bad=$(grep -nHE '(\$\{?HOME\}?|~)/\.claude' "$BATS_TEST_DIRNAME/install.sh" \
+        | grep -vE ':[0-9]+:[[:space:]]*#' \
+        | grep -vE 'CLAUDE_[A-Z_]*CONFIG_DIR:-' || true)
+  bad="${sl_bad}${inst_bad}"
   [ -z "$bad" ] || {
     printf '~/.claude を直書きしている箇所 (${CLAUDE_CONFIG_DIR:-$HOME/.claude} を使うこと):\n%s\n' "$bad" >&2; false; }
 }
@@ -2390,6 +2521,113 @@ _os_run() {
   _cached=$(<"$_stub_cache/subscription")
   _st2="${_cached#*$'\037'}"; _st2="${_st2%%$'\037'*}"
   [[ "$_st2" == "pro" ]]
+}
+
+@test "Keychain: config dir 未指定なら suffix 無しのサービス名で引くこと" {
+  # 上の対のテストと 2 本セットで見る。こちらが無いと「Keychain を常に飛ばす」実装でも
+  # 「別アカウントを読まない」側だけが緑になる（既定ユーザー全員の subscription が消える回帰）。
+  _stub_env kcplain 'exit 1'
+  local log="$BATS_TEST_TMPDIR/kcplain-security.log"
+  ln -sf "$(command -v shasum)" "$_stub_bin/" 2>/dev/null || true
+  printf '%s\n' '#!/bin/bash' "echo \"svc=\$3\" >> $(printf %q "$log")" \
+    '[[ "$3" == "Claude Code-credentials" ]] || exit 44' \
+    "printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"AAAAtest\",\"subscriptionType\":\"team\"}}'" \
+    > "$_stub_bin/security"
+  chmod +x "$_stub_bin/security"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  local _cached _st
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
+  # Keychain 由来の `team`。偽 HOME のファイル側は helper 既定の `max` なので、値で経路が分かる
+  [[ "$_st" == "team" ]]
+  # 引いた名前そのものを pin する（suffix が付いてしまう回帰を値だけでは検出できない）
+  [[ "$(cat "$log")" == *"svc=Claude Code-credentials"* ]]
+  [[ "$(cat "$log")" != *"svc=Claude Code-credentials-"* ]]
+}
+
+@test "Keychain: config dir を指定したセッションで既定アカウントの blob を読まないこと" {
+  # Keychain のサービス名は config dir ごとに `-<sha256[0:8]>` が付く（2.1.233 のバイナリで実測。
+  # docs にも CHANGELOG にも無い）。`Claude Code-credentials` を決め打ちで引くと、別 config dir の
+  # セッションで**既定アカウントの blob**を読む = 別アカウントのプラン名と extra:$ を出す誤情報になる。
+  _stub_env kcsuffix 'exit 1'
+  local log="$BATS_TEST_TMPDIR/kcsuffix-security.log"
+  local alt="$BATS_TEST_TMPDIR/kcsuffix-alt"
+  mkdir -p "$alt"
+  ln -sf "$(command -v shasum)" "$_stub_bin/" 2>/dev/null || true
+  printf '%s\n' '#!/bin/bash' "echo \"svc=\$3\" >> $(printf %q "$log")" \
+    '[[ "$3" == "Claude Code-credentials" ]] || exit 44' \
+    "printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"AAAAtest\",\"subscriptionType\":\"team\"}}'" \
+    > "$_stub_bin/security"
+  chmod +x "$_stub_bin/security"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  local _cached _st
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
+  # `team` なら既定アカウントの Keychain を読んでいる = 誤情報。alt 側には credentials が無いので空が正解
+  [[ "$_st" != "team" ]]
+  # **到達証跡** — `security` に一度も触らずに空になったのでは何も pin できない。
+  # suffix 付きの名前で引いていること（16 進 8 桁）を見る
+  [[ "$(cat "$log")" =~ svc=Claude\ Code-credentials-[0-9a-f]{8} ]]
+}
+
+@test "Keychain: suffix を算出できないときは決め打ち名に落ちず Keychain ごと飛ばすこと" {
+  # suffix が必要（config dir 指定あり）なのに `shasum` が無い場合、`Claude Code-credentials` を
+  # 決め打ちで引くと**既定アカウントの blob**を読む = 別アカウントのプラン名を出す。
+  # **この経路は他の 2 本では構造的に踏めない**（どちらも偽 PATH に shasum を張っている）ので、
+  # `_keychain_ok=1` を無条件にする mutant がテストをすり抜けていた。
+  _stub_env kcskip 'exit 1'
+  local log="$BATS_TEST_TMPDIR/kcskip-security.log"
+  local alt="$BATS_TEST_TMPDIR/kcskip-alt"
+  mkdir -p "$alt"
+  # **shasum は張らない**（`_stub_env` の既定 PATH に無い）= suffix を算出できない状況を作る
+  [[ ! -x "$_stub_bin/shasum" ]]
+  # `security` は存在するが**一度も呼ばれない**のが正解。呼ばれたら log ができる
+  printf '%s\n' '#!/bin/bash' "echo \"svc=\$3\" >> $(printf %q "$log")" \
+    "printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"AAAAtest\",\"subscriptionType\":\"team\"}}'" \
+    > "$_stub_bin/security"
+  chmod +x "$_stub_bin/security"
+  # 到達証跡 — alt 側のファイル fallback だけが情報源になる（値で経路が分かる）
+  printf '%s' '{"claudeAiOauth":{"subscriptionType":"enterprise"}}' > "$alt/.credentials.json"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  local _cached _st
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
+  # ファイル fallback 側の値。`team` なら Keychain を決め打ち名で引いてしまっている
+  [[ "$_st" == "enterprise" ]]
+  [[ ! -f "$log" ]] || { printf 'Keychain を飛ばさず引いている: %s\n' "$(cat "$log")" >&2; false; }
+}
+
+@test "Keychain: account 属性(-a)を付けて引くこと" {
+  # 上流は読み書き両方で `-a <USER>` 込みで識別する（2.1.238 の `Tkd()`/`hYT()`）。service だけで
+  # 引くと、同名 item が 2 つある keychain で**別アカウントの blob**を読む = suffix 対応で閉じた
+  # はずの誤読が残る。**argv そのものを pin する** — 値だけ見ても `-a` の有無は分からない。
+  _stub_env kcacct 'exit 1'
+  local log="$BATS_TEST_TMPDIR/kcacct-security.log"
+  ln -sf "$(command -v shasum)" "$_stub_bin/" 2>/dev/null || true
+  printf '%s\n' '#!/bin/bash' "echo \"args=\$*\" >> $(printf %q "$log")" \
+    '[[ "$3" == "Claude Code-credentials" ]] || exit 44' \
+    "printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"AAAAtest\",\"subscriptionType\":\"team\"}}'" \
+    > "$_stub_bin/security"
+  chmod +x "$_stub_bin/security"
+  local j
+  j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
+  printf '%s' "$j" | "${_stub_pre[@]}" "USER=testuser" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  _wait_for_file "$_stub_cache/subscription" -s
+  local _cached _st
+  _cached=$(<"$_stub_cache/subscription")
+  _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
+  [[ "$_st" == "team" ]]
+  # `-s <名前>` の後に `-a <USER>` が来ること（順序は `$3` で名前を pin する既存 2 本と両立させるため）
+  [[ "$(cat "$log")" == *"-s Claude Code-credentials -a testuser"* ]]
 }
 
 @test "plan: subscriptionType が公式表記に畳まれること" {

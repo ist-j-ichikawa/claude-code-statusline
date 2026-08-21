@@ -29,7 +29,7 @@ statusline-command.sh
 ├── Git render       render_git() — facts + stdin 由来値（workspace.repo / pr.review_state）から Line 3 を組む。cold-start も同じ presenter を通るので経路ごとの gate 差が生じない
 ├── Line 1           [vim mode バッジ (INSERT=青 bg / VISUAL・V-LINE=橙 bg、vim 側の流儀。NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（レベルごとの色。low=gold / medium=green / high=薄紫 / xhigh=濃紫 / max=多色）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ output style（常に出す。`default` は dim = 「特に設定していない」プレースホルダ扱い、非既定は白で立つ）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
-├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [gh: (dim) + owner/repo (通常輝度)。GitHub origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub tree] + PR review_state (Claude Code 2.1.145+ pr.review_state、テキスト色分け、PR # は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (**ISO 8601 風の絶対時刻** `08-17T13:13`。180 日超は `2025-08-17`。どの古さでも必ず出す) + msg)、非git時は "no git"
+├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [forge 略号 (dim。GitHub = `gh:` / GitLab = `gl:`) + owner/repo (通常輝度)。既知 forge の origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub は `/tree/`、GitLab は `/-/tree/`] + PR/MR review_state (Claude Code 2.1.145+ pr.review_state。GitLab MR は 2.1.234+ で同じキーに載り値は draft/approved/pending の 3 値。テキスト色分け、PR #/MR ! は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (**ISO 8601 風の絶対時刻** `08-17T13:13`。180 日超は `2025-08-17`。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値)
 ├── Line 5           **アカウント**: 5hレート制限 + weeklyレート制限 + モデル別weekly制限 (`Fable:39%`) + extra-usage実課金 ($、gold)。全要素 Anthropic 限定なので Bedrock 等ではこの行が出ない (空行は挟まない)
 └── Output           printf で各行を出力
@@ -107,7 +107,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | Git 削除行 `-N` / behind `↓` | GitHub Primer `--fgColor-danger`(dark `#f85149`) の最近傍（同上） | 38;5;203 |
 | conflicts `!N` / Detached HEAD | 赤 (**アラームの赤**。「量」の 71/131 と役割を分ける) | 31 |
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
-| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin プレフィックス (`gh:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
+| last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin の forge 略号 (`gh:` / `gl:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
 | コンテキストの分母 (`/200k`・`/1M` 等を常時表示。値が来ていない旧 CC のみ無印) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |
 | Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
@@ -115,7 +115,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 cross-session messaging（`SendMessage` / `ListAgents`、2.1.224+）でこのセッションを指すアドレスです。`~/.claude/sessions/<pid>.json` の `name` フィールドを、stdin の `session_id` で照合して読みます。
 
-読む場所は **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** です。`CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を差し替える環境変数で、docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しています。複数アカウントの併用や案件ごとの切り替えでこれを設定して走るセッションがあり、`$HOME/.claude` をハードコードすると sessions が 1 件も見つからず**宛名が丸ごと消えます**（v1.71.0 までのバグ。実測で `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在しませんでした）。同じ理由で `.credentials.json` の fallback パスもこの変数を尊重します — ハードコードしていた間は、別 config dir で subscription と extra-usage が無言で消えていました。
+読む場所は **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** です。`CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を差し替える環境変数で、docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しています。複数アカウントの併用や案件ごとの切り替えでこれを設定して走るセッションがあり、`$HOME/.claude` をハードコードすると sessions が 1 件も見つからず**宛名が丸ごと消えます**（v1.71.0 までのバグ。実測で `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在しませんでした）。同じ理由で `.credentials.json` の fallback パスも env を尊重します — ただしこちらが見るのは `CLAUDE_CONFIG_DIR` ではなく **`CLAUDE_SECURESTORAGE_CONFIG_DIR`**（定義済みならその値、空なら `$HOME/.claude`、未定義なら config dir）で、上流も credentials だけこの変数で置き場を決めます。ハードコードしていた間は、別 config dir で subscription と extra-usage が無言で消えていました。
 
 出すのは**そのセッション自身の宛名**です。目的は「これをコピーして別のセッションに渡し、そちらからこのセッションへ送らせる」ことなので、`session_id` が指すセッションの名前を出します（同じ端末に interactive と背景の 2 セッションが並ぶことがありますが、描画対象の `session_id` に対応する側を出せば常に「自分の宛先」になります）。
 
@@ -263,7 +263,11 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 
 ### プラン名とレート枠 (`Anthropic(Max 5x)`)
 
-Anthropic 直接利用のときだけ、`fetch_subscription()` が Keychain（fallback は `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json`）の `claudeAiOauth` から 2 つを **1 回の jq** で取り、US 区切りで 3600s キャッシュする。
+Anthropic 直接利用のときだけ、`fetch_subscription()` が Keychain（fallback は securestorage ディレクトリの `.credentials.json`）の `claudeAiOauth` から 2 つを **1 回の jq** で取り、US 区切りで 3600s キャッシュする。
+
+**Keychain のサービス名は設定ディレクトリごとに変わります。** 名前は `Claude Code-credentials` に、設定ディレクトリの sha256 先頭 8 桁を `-` で付けた形です（suffix の元は `CLAUDE_SECURESTORAGE_CONFIG_DIR` が定義済みならその値、未定義なら `CLAUDE_CONFIG_DIR` の値。どちらも空／未設定なら suffix 無し）。docs も CHANGELOG も触れていない挙動で、2.1.238 のバイナリで実測しました。上流は env の値を NFC 正規化してから hash し、パスの解決や末尾スラッシュの除去はしません（＝相対パスでも綴りが同じなら一致します）。読み出しは account 属性込み（`security find-generic-password -s <名前> -a <ユーザー> -w`）です。
+
+帰結として、**`CLAUDE_CONFIG_DIR` を設定して走るセッションでは、その設定ディレクトリ専用の Keychain 項目が必要**になります。無い場合はプラン名と `extra:$` が出ません（決め打ちの名前で引いて既定アカウントの値を出す方が危険なので、算出できないときは Keychain ごと飛ばします — 無表示 < 誤読）。
 
 | フィールド | 用途 | 実測値 |
 |---|---|---|
