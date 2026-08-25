@@ -2,7 +2,7 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.84.0-blue)
+![Version](https://img.shields.io/badge/version-1.85.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.245-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -21,7 +21,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
 | **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`/`gl:`owner/repo · ブランチ (OSC 8 → GitHub / GitLab tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit (`08-17T13:13`) |
 | **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
-| **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · extra-usage 実課金 — **アカウント** |
+| **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · usage-credits 実課金 — **アカウント** |
 
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。
 
@@ -52,7 +52,7 @@ Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.245
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83
-⣶     16%  19:31  week:9%  金 12:00  Fable:39%  土 16:00  extra:$2.14
+⣶     16%  19:31  week:9%  金 12:00  Fable:39%  土 16:00  credits:$2.14
 ```
 
 Line 3 の `gh:acme/` が owner だけなのは、repo 名 (`my-project`) が Line 2 のパス末尾に既に出ているためです (下の表を参照)。
@@ -337,7 +337,7 @@ Claude Code 運用で特に便利な機能:
 - **ダークテーマの端末推奨** — 配色を暗い背景基準で選んでいます (上記)
 - [Claude Code](https://code.claude.com/) CLI
 - `jq` (JSON parser)
-- `curl` — `fetch_usage_spend()` のみ。extra-usage の実課金額取得に使い、OAuth トークンは argv に出さず stdin 経由で渡します。サブスクリプション種別の取得はネットワークを使わず Keychain 読みだけです
+- `curl` — `fetch_usage_spend()` のみ。usage-credits の実課金額取得に使い、OAuth トークンは argv に出さず stdin 経由で渡します。サブスクリプション種別の取得はネットワークを使わず Keychain 読みだけです
 - `git` (Git 情報表示用)
 - Bash 3.2+ (macOS 標準の `/bin/bash` で動作 — bash 4+ 機能は使いません)
 

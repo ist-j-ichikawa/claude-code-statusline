@@ -69,11 +69,11 @@ readonly EFFORT_MAX_PAL=(99 170 209)
 
 readonly THINK=$'\033[38;5;117m'
 readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
-readonly SPEND=$'\033[38;5;220m'  # extra-usage (usage-credits) **実課金額** — 明るい gold, 非ブランド
+readonly SPEND=$'\033[38;5;220m'  # usage-credits の**実課金額** (画面ラベルは `credits:`) — 明るい gold, 非ブランド
 # セッションコスト — 落ち着いた金色 (ブロンズ)。**SPEND と同じ色相で明度だけ下げる**のが要点:
 # 同系色なので「どちらも金額」と読め、明度差で「実課金 (明) / 参考値 (暗)」の序列が付く。
 # v1.74.0 まで無色だったのは SPEND と隣接して混同するからで、Line 4/5 の行分割で
-# コスト (セッション行) と extra (アカウント行) が別行になり、その前提が消えた。
+# コスト (セッション行) と credits (アカウント行) が別行になり、その前提が消えた。
 readonly COST=$'\033[38;5;136m'
 readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
 # vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.

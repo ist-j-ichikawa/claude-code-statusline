@@ -537,13 +537,18 @@ _count_cmd() {
   [[ "$result" != *'$'* ]]
 }
 
-@test "Line5: extra-usage キャッシュがあると extra:\$X.XX が表示されること" {
+@test "Line5: usage-credits キャッシュがあると credits:\$X.XX が表示されること" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   printf 'cents,limits\037214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
-  [[ "$result" == *'extra:$2.14'* ]]
+  [[ "$result" == *'credits:$2.14'* ]]
+  # **色と太字も生のリテラルで pin する** — この行で唯一「実際に請求される額」なので、
+  # SPEND (明るい gold) を COST (ブロンズ) に取り違えたり `BOLD` を落とした mutant は
+  # ラベルの assert だけでは緑になる（実際にこの diff がこの行を書き換えたのに pin が無かった）。
+  # 定数 (`$SPEND`) で書くとどんな値でも通り、無断の再調整を検出できない。
+  [[ "$result" == *$'\033[1m'$'\033[38;5;220m'"credits:\$2.14"* ]]
 }
 
 @test "週間枠: limits[] 由来のモデル別枠が名前つきで出ること" {
@@ -562,6 +567,48 @@ _count_cmd() {
   # 色は Line 1 と同じ model_color。**生のリテラルで assert** する — 定数で書くと
   # どんな値でも通り、無断の再調整を検出できない (FABLE_PAL の先頭 = 178)
   [[ "$result" == *'38;5;178m'* ]]
+}
+
+@test "週間枠: 0% のモデル別枠を出さないこと(アカウント全体の week: と揃える)" {
+  # `week:` が 0 を落とすのにモデル別枠は 0 を通していた = 同じ行で非対称
+  # (理由は statusline-command.sh の `render_scoped_limits` の 0% ガードのコメント)。
+  # **非 0 の枠が同時に生き残ること**も見る — `continue` を `break` に書き換えた mutant は
+  # 「0 を出さない」だけなら緑になる（以降の枠が全部消える）。
+  # **2 つの枠のリセット時刻は別の値にする** — 同じ文字列だと、落とした枠のリセット時刻だけが
+  # residue として残る壊れ方を検出できない（「リセット時刻も連れてこない」が pin されない）。
+  local plain
+  mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
+  printf 'cents,limits\0370\nSonnet 5\0370\037Mon 09:00\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  plain=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.245","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
+  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  # 0% の枠は名前ごと出さない。リセット時刻も連れてこない
+  [[ "$plain" != *"Sonnet 5"* ]]
+  [[ "$plain" != *"Mon 09:00"* ]]
+  # 非 0 の枠は生きる = 0 の行だけ落ちている
+  [[ "$plain" == *"Fable:39%"* ]]
+  [[ "$plain" == *"Sat 16:00"* ]]
+}
+
+@test "Line5: 週間枠は 0% を落とすが 5h は 0% でも出すこと(意図的な非対称)" {
+  # 上の 0% ガードのコメントは `week:` 側の `((seven_pct > 0))` を根拠に挙げているのに、
+  # **`week:` 側には 0% の fixture が 1 つも無かった** — `> 0` を外してもスイートは緑のまま、
+  # コメントだけが嘘になる（2026-08-25 の /simplify 指摘）。ここで実行可能にする。
+  # **5h は 0% でも出す** — 行の左端の一目確認用なので `has_val` だけで gate している。
+  # 「制限は 0% なら隠す」ではなく「**週間の枠だけ** 0% なら隠す」が実際の規則。
+  local l5
+  l5=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.245","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":4070908800},"seven_day":{"used_percentage":0,"resets_at":4070995200}}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
+  [[ "$l5" != *"week:"* ]]
+  # **`0%` の部分一致だけでは弱い** — バー (`⣿⣶`) やリセット時刻を落とす mutant が緑になる。
+  # `0% <時刻>` の並びで取る。**期待値は `date -j -r` でローカルに直す**（TZ 依存にしない）
+  local exp
+  exp=$(date -j -r 4070908800 +%H:%M)
+  [[ "$l5" == *"0% $exp"* ]]
+  # **バーは 0% でも幅ぶんの空白として出る**（実測: `······0%·09:00`）ので、行頭が `0%` に
+  # なったらバーが落ちている。幅を数値で書かずに「何かが前に付いていること」で見る。
+  # 隣のテストの「空バー + 裸の `%`」とはここで区別される — あちらは `%` の前に数字が無い
+  [[ "$l5" != "0%"* ]]
 }
 
 @test "週間枠: /usage のレスポンスから枠を抽出できること(偽 curl で本番経路を通す)" {
@@ -596,12 +643,12 @@ _count_cmd() {
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh 2>/dev/null \
     | sed -n '5p' | _strip)
   [[ "$plain" == *"Fable:39% $exp"* ]]
-  [[ "$plain" == *'extra:$2.14'* ]]
+  [[ "$plain" == *'credits:$2.14'* ]]
 }
 
 @test "週間枠: 取得失敗で既存のキャッシュを消さないこと(延命する)" {
   # Wi-Fi 断や `curl -m 4` のタイムアウトで空応答になったとき、上書きすると
-  # **ディスクに良い値があるのに extra:$ と全枠が 300s 消える** (code-review 指摘)。
+  # **ディスクに良い値があるのに credits:$ と全枠が 300s 消える** (code-review 指摘)。
   # `fetch_subscription` と同じく touch で延命し、storm も防いだまま表示を保つ。
   _stub_env usagefail 'exit 1'          # curl は失敗する
   mkdir -p "$_stub_cache"
@@ -622,7 +669,7 @@ _count_cmd() {
 @test "週間枠: エラー応答で既存のキャッシュを消さないこと" {
   # `curl -s` は `-f` を付けていないので **401/429/5xx の JSON 本文も stdout に来る**。
   # 「応答が空か」で延命を判定していた頃は、`// 0` の既定値のせいで cents=0 と枠 0 件で
-  # 良いキャッシュを上書きし、`extra:$` と全枠が 300s 消えた（`/code-review` 指摘）。
+  # 良いキャッシュを上書きし、`credits:$` と全枠が 300s 消えた（`/code-review` 指摘）。
   # 判定は **`.spend.used.amount_minor` の有無**（パース結果）で行う。
   _stub_env usageerr 'printf "%s" "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}"'
   mkdir -p "$_stub_cache"
@@ -643,13 +690,13 @@ _count_cmd() {
   local j='{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}'
   printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend   # 旧形式（タグ無し）
   result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  [[ "$result" != *'extra:$2.14'* ]]
+  [[ "$result" != *'credits:$2.14'* ]]
   [[ "$result" != *':39%'* ]]
   # **タグだけ違って中身は現行と同じ形**のケースも使わない（値の捨て忘れを pin する）
   printf 'OLD_FMT\037214\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
-  [[ "$result" != *'extra:$2.14'* ]]
+  [[ "$result" != *'credits:$2.14'* ]]
   [[ "$result" != *':39%'* ]]
 }
 
@@ -685,7 +732,7 @@ _count_cmd() {
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" == *"Fable:39%"* ]]      # 正常な枠は出る
   [[ "$plain" != *"Broken"* ]]         # 壊れた枠は落ちる
-  [[ "$result" == *'extra:$2.14'* ]]   # cents は生きる
+  [[ "$result" == *'credits:$2.14'* ]]   # cents は生きる
 }
 
 @test "週間枠: 枠のリセットと経過が別行になること" {
@@ -718,22 +765,22 @@ _count_cmd() {
   [[ "$plain" != *":39%"* ]]
 }
 
-@test "Line5: extra-usage データがないとき extra: が表示されないこと" {
+@test "Line5: usage-credits データがないとき credits: が表示されないこと" {
   # setup() で usage_spend は削除済み・NO_NET で fetch も走らない。
-  # **制限行（5 行目）で見る** — Line 4 には extra が元々出ないので、4 行目を見る形は
+  # **制限行（5 行目）で見る** — Line 4 には credits が元々出ないので、4 行目を見る形は
   # どう壊しても緑になる（Bedrock 側で同じ穴を踏んだ。`/code-review` 指摘）
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  [[ "$result" != *'extra:'* ]]
+  [[ "$result" != *'credits:'* ]]
 }
 
-@test "Line5: Bedrockでは extra-usage を取得も表示もしないこと" {
+@test "Line5: Bedrockでは usage-credits を取得も表示もしないこと" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   printf 'cents,limits\037500\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
-    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')   # 制限行（Line 4/5 の分割で extra は 5 行目へ移った）
+    | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')   # 制限行（Line 4/5 の分割で credits は 5 行目へ移った）
   rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
-  [[ "$result" != *'extra:'* ]]
+  [[ "$result" != *'credits:'* ]]
 }
 
 @test "Line5: Anthropicでレートリミットが表示されること" {
@@ -757,8 +804,12 @@ _count_cmd() {
   # (2026-08-25、Fable レビューの指摘)。
   # **assert は行頭で取る** — gate を外した mutant は空バー + 裸の `%` を出すので、行が
   # `······%·week:12%` になる。`⣿` の有無では見えない (空バーは空白なので glyph が出ない)。
-  local j out l5
-  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":12,"resets_at":4070908800}}}'
+  # **変わらない部分は 1 回だけ書く** — 3 シナリオの違いは `rate_limits` だけなので、そこを
+  # `printf` の差し込みにする（同じ 230 字を 3 回並べると、唯一の違いが行末に埋もれる）
+  local fmt j out l5 outf
+  fmt='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":%s}'
+
+  printf -v j "$fmt" '{"seven_day":{"used_percentage":12,"resets_at":4070908800}}'
   out=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null)
   [[ "$(printf '%s' "$out" | grep -c .)" -eq 5 ]]
   l5=$(printf '%s' "$out" | sed -n '5p' | _strip)
@@ -766,7 +817,7 @@ _count_cmd() {
   [[ "$l5" == "week:12%"* ]]
 
   # 逆向き: seven_day を落として five_hour だけ
-  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800}}}'
+  printf -v j "$fmt" '{"five_hour":{"used_percentage":35,"resets_at":4070908800}}'
   out=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null)
   [[ "$(printf '%s' "$out" | grep -c .)" -eq 5 ]]
   l5=$(printf '%s' "$out" | sed -n '5p' | _strip)
@@ -775,15 +826,15 @@ _count_cmd() {
 
   # **両方消えたら Line 5 ごと出さない** — 空の制限行を連結すると空行が挟まって行が崩れる
   # (Bedrock で実際に踏んだ形。ここが 4 行であることが空行抑止を pin する)
-  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{}}'
   # **`grep -c .` では空行を検出できない** — 空要素の行を連結する mutant でも非空行は 4 のままで、
-  # 差が出るのは**総行数**だけ (実測: 正常 4 / mutant 5)。`$( )` は末尾改行を落とすので、
-  # 数えるのは**変数に入れずパイプの中**で行う。
-  local nonempty total
-  nonempty=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | grep -c .)
-  total=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | wc -l | tr -d ' ')
-  [[ "$nonempty" -eq 4 ]]
-  [[ "$total" -eq 4 ]]
+  # 差が出るのは**総行数**だけ (実測: 正常 4 / mutant 5)。**総行数は `grep -c ''`** で数える —
+  # `$( )` は末尾改行を落とすので変数越しには見えず、ファイルに 1 回出せば 2 通りの数え方が
+  # **同じ出力**を指す (描画を 2 回するとその間の背景書き込みで別物になりうる)。
+  printf -v j "$fmt" '{}'
+  outf="$BATS_TEST_TMPDIR/l5-both-gone.out"
+  printf '%s' "$j" | /bin/bash statusline-command.sh >"$outf" 2>/dev/null
+  [[ "$(grep -c . <"$outf")" -eq 4 ]]
+  [[ "$(grep -c '' <"$outf")" -eq 4 ]]
 }
 
 @test "Line5: rate_limitsのused_percentageがfloatでもroundされること" {
@@ -2587,7 +2638,7 @@ _os_run() {
 @test "Keychain: config dir を指定したセッションで既定アカウントの blob を読まないこと" {
   # Keychain のサービス名は config dir ごとに `-<sha256[0:8]>` が付く（2.1.233 のバイナリで実測。
   # docs にも CHANGELOG にも無い）。`Claude Code-credentials` を決め打ちで引くと、別 config dir の
-  # セッションで**既定アカウントの blob**を読む = 別アカウントのプラン名と extra:$ を出す誤情報になる。
+  # セッションで**既定アカウントの blob**を読む = 別アカウントのプラン名と credits:$ を出す誤情報になる。
   _stub_env kcsuffix 'exit 1'
   local log="$BATS_TEST_TMPDIR/kcsuffix-security.log"
   local alt="$BATS_TEST_TMPDIR/kcsuffix-alt"

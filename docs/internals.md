@@ -31,7 +31,7 @@ statusline-command.sh
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [forge 略号 (dim。GitHub = `gh:` / GitLab = `gl:`) + owner/repo (通常輝度)。既知 forge の origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub は `/tree/`、GitLab は `/-/tree/`] + PR/MR review_state (Claude Code 2.1.145+ pr.review_state。GitLab MR は 2.1.234+ で同じキーに載り値は draft/approved/pending の 3 値。テキスト色分け、PR #/MR ! は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (**ISO 8601 風の絶対時刻** `08-17T13:13`。180 日超は `2025-08-17`。どの古さでも必ず出す) + msg)、非git時は "no git"
 ├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値)
-├── Line 5           **アカウント**: 5hレート制限 + weeklyレート制限 + モデル別weekly制限 (`Fable:39%`) + extra-usage実課金 ($、gold)。全要素 Anthropic 限定なので Bedrock 等ではこの行が出ない (空行は挟まない)
+├── Line 5           **アカウント**: 5hレート制限 + weeklyレート制限 + モデル別weekly制限 (`Fable:39%`) + usage-credits実課金 ($、gold)。全要素 Anthropic 限定なので Bedrock 等ではこの行が出ない (空行は挟まない)
 └── Output           printf で各行を出力
 ```
 
@@ -81,8 +81,8 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | Sonnet 4.5 | アンバー | 38;5;214 |
 | Haiku | ラベンダー | 38;5;183 |
 | Anthropic / 5hレート制限 | サンドベージュ | 38;5;180 |
-| extra-usage **実課金額** | 明るい gold + **太字** | 1 / 38;5;220 |
-| セッションコスト | ブロンズ (extra と同色相で明度だけ下げる = 参考値) | 38;5;136 |
+| usage-credits **実課金額** | 明るい gold + **太字** | 1 / 38;5;220 |
+| セッションコスト | ブロンズ (credits と同色相で明度だけ下げる = 参考値) | 38;5;136 |
 | Bedrock | ティールグリーン | 38;5;72 |
 | Vertex | Google ブルー | 38;5;33 |
 | Foundry | Azure ブルー | 38;5;39 |
@@ -115,7 +115,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 
 cross-session messaging（`SendMessage` / `ListAgents`、2.1.224+）でこのセッションを指すアドレスです。`~/.claude/sessions/<pid>.json` の `name` フィールドを、stdin の `session_id` で照合して読みます。
 
-読む場所は **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** です。`CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を差し替える環境変数で、docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しています。複数アカウントの併用や案件ごとの切り替えでこれを設定して走るセッションがあり、`$HOME/.claude` をハードコードすると sessions が 1 件も見つからず**宛名が丸ごと消えます**（v1.71.0 までのバグ。実測で `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在しませんでした）。同じ理由で `.credentials.json` の fallback パスも env を尊重します — ただしこちらが見るのは `CLAUDE_CONFIG_DIR` ではなく **`CLAUDE_SECURESTORAGE_CONFIG_DIR`**（定義済みならその値、空なら `$HOME/.claude`、未定義なら config dir）で、上流も credentials だけこの変数で置き場を決めます。ハードコードしていた間は、別 config dir で subscription と extra-usage が無言で消えていました。
+読む場所は **`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/`** です。`CLAUDE_CONFIG_DIR` は設定ディレクトリ全体を差し替える環境変数で、docs（env-vars）が「All settings, session history, and plugins are stored under this path」と明記しています。複数アカウントの併用や案件ごとの切り替えでこれを設定して走るセッションがあり、`$HOME/.claude` をハードコードすると sessions が 1 件も見つからず**宛名が丸ごと消えます**（v1.71.0 までのバグ。実測で `CLAUDE_CONFIG_DIR` を切り替えたセッションのファイルはそちらにしか存在しませんでした）。同じ理由で `.credentials.json` の fallback パスも env を尊重します — ただしこちらが見るのは `CLAUDE_CONFIG_DIR` ではなく **`CLAUDE_SECURESTORAGE_CONFIG_DIR`**（定義済みならその値、空なら `$HOME/.claude`、未定義なら config dir）で、上流も credentials だけこの変数で置き場を決めます。ハードコードしていた間は、別 config dir で subscription と usage-credits が無言で消えていました。
 
 出すのは**そのセッション自身の宛名**です。目的は「これをコピーして別のセッションに渡し、そちらからこのセッションへ送らせる」ことなので、`session_id` が指すセッションの名前を出します（同じ端末に interactive と背景の 2 セッションが並ぶことがありますが、描画対象の `session_id` に対応する側を出せば常に「自分の宛先」になります）。
 
@@ -203,11 +203,11 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 
 ## パフォーマンス
 
-- **バックグラウンド更新**: Git (5秒)・Subscription 種別 (3600秒)・extra-usage (300秒) の 3 つをサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない。**`( … ) >/dev/null 2>&1 & disown` の `>/dev/null 2>&1` が非同期化の必須条件** — 付けないとサブシェルが親の stdout (Claude Code が読む pipe) を継承したまま生き、読み手は最後の fd 保持者が終わるまで EOF を見ない (実測: 冷キャッシュの大リポで 50ms → 300ms、遅い `curl` で 3.1s)
+- **バックグラウンド更新**: Git (5秒)・Subscription 種別 (3600秒)・usage-credits (300秒) の 3 つをサブシェルで非同期更新。stale キャッシュを即座に返すため出力をブロックしない。**`( … ) >/dev/null 2>&1 & disown` の `>/dev/null 2>&1` が非同期化の必須条件** — 付けないとサブシェルが親の stdout (Claude Code が読む pipe) を継承したまま生き、読み手は最後の fd 保持者が終わるまで EOF を見ない (実測: 冷キャッシュの大リポで 50ms → 300ms、遅い `curl` で 3.1s)
 - **単一 jq 呼び出し**: stdin JSON を `eval` + `@sh` で一括抽出（フィールドごとの再パースなし）
 - **時刻はすべてこのマシンのローカル TZ**（`date -j` と jq の `strflocaltime` はどちらもローカル。Claude Code 自身も専用の TZ 設定を持たず OS のゾーンを使うので表示が食い違わない）。**ゾーン名は表示しない** — 例外が無いので情報が増えない（v1.78.0 で `JST 19:31` を試して v1.79.0 で撤去）
 - **共有タイムスタンプは jq から取る** (v1.82.0): `_NOW` は既に 1 回だけ走っている jq の `now|floor` から受け取り、`date` は 1 個も起動しない (実測 -3.0ms、中央値。UTC epoch なので TZ 非依存)。取れなかったときだけ `date +%s` に落ちる — `_NOW=0` のままだと `cache_stale` は安全側 (「古くない」) に倒れるが、リセットの `now` 判定と commit age が誤表示になる
-- **mtime はまとめて 1 回の `stat` で取る** (`prefetch_mtimes`、v1.81.0): 鮮度を見るキャッシュは 3 つ (git / subscription / extra-usage) あり、`cache_stale` がそれぞれ `stat` を fork していた (実測 9.802ms → 3.146ms = **-6.7ms**、暖まった描画の 16%)。`stat -f '%N %m'` の出力（「パス 空白 mtime」の行）を**そのまま表として持ち、行頭でキーを引く** — パスを出さずに `%m` だけ並べると、欠損ファイルがあると行がずれて**別ファイルの mtime を読む** (実測で確認: 中央を欠損させると 3 番目の値が 2 番目に入る)。まとめ取りに無いファイルは従来どおり個別 `stat` に落ちる
+- **mtime はまとめて 1 回の `stat` で取る** (`prefetch_mtimes`、v1.81.0): 鮮度を見るキャッシュは 3 つ (git / subscription / usage-credits) あり、`cache_stale` がそれぞれ `stat` を fork していた (実測 9.802ms → 3.146ms = **-6.7ms**、暖まった描画の 16%)。`stat -f '%N %m'` の出力（「パス 空白 mtime」の行）を**そのまま表として持ち、行頭でキーを引く** — パスを出さずに `%m` だけ並べると、欠損ファイルがあると行がずれて**別ファイルの mtime を読む** (実測で確認: 中央を欠損させると 3 番目の値が 2 番目に入る)。まとめ取りに無いファイルは従来どおり個別 `stat` に落ちる
 - **hot path では here-string (`<<<`) を使わない**: bash 3.2 では一時ファイルを作るので、`read` への 1 回が実測 1.679ms (パラメータ展開なら 0.083ms)。`render_git` のレコード分解はパラメータ展開のループにする。**stdin は変数に読まず jq に直接継承させる** — 変数に読むと渡し直す口（here-string = 一時ファイル / プロセス置換 = subshell）が必要になるが、`$( )` は stdin を継承するのでどちらも要らない。背景 subshell の中（`build_git` / 各 fetch）は毎描画の予算に乗らないので `<<<` を残している
 - **キャッシュ**: `${TMPDIR:-/tmp}/claude-statusline-$UID/{git/<md5>,subscription,usage_spend,resets*}`（**形式の判定はレコード先頭の形式タグ**＝フィールド一覧そのもの。一致しなければ値を捨てて即取り直す。ファイル名に版を持たせないので孤児が出ない。v1.77.0） (mkdir 700、親も含めて owner-only) に保存。`CLAUDE_STATUSLINE_CACHE_DIR` で差し替え可 (テスト密閉の seam)。固定の共有パスは共有 Mac で書けず curl storm になるため v1.52.0 でユーザー単位に変更
 - **未追跡の行数には件数上限 (500)**: 数えるコストは未追跡の**総バイト数**に比例するので、`node_modules` などを無視設定に入れていないリポ (実測 30,000 件で **5.17 秒**) では `GIT_CACHE_MAX_AGE=5` を超えて「書き終えた時点で既に stale」= 毎レンダー全走査 + 背景 job の積み上がりになる。超えたら未追跡ぶんを数えない (途中までの合計は「間違った数」なので要素ごと落とす)。**上限は件数なので近似指標**（コストはバイト数側）
@@ -218,16 +218,16 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 
 **Anthropic** (rate_limits が届く場合)
 - Claude Code 2.1.80+ の stdin JSON `rate_limits` フィールドから直接取得
-- 表示は **2 行**: **Line 4 (このセッション)** = コンテキストバー + % + 分母 → セッション経過時間(単位1つ `41m`/`4h`。**画面で唯一の相対表記** — 時刻ではなく期間なので絶対時刻と混ざらない) → セッションコスト。**Line 5 (アカウント)** = 5hバー + % + リセット時刻(`19:31`、曜日なし) → week:% + リセット(`土 16:00`、曜日つき) → モデル別週間枠 → extra-usage実課金
+- 表示は **2 行**: **Line 4 (このセッション)** = コンテキストバー + % + 分母 → セッション経過時間(単位1つ `41m`/`4h`。**画面で唯一の相対表記** — 時刻ではなく期間なので絶対時刻と混ざらない) → セッションコスト。**Line 5 (アカウント)** = 5hバー + % + リセット時刻(`19:31`、曜日なし) → week:% + リセット(`土 16:00`、曜日つき) → モデル別週間枠 → usage-credits実課金（**モデル別枠は 0% を出さない** — `week:` が `> 0` で 0 を落とすのと揃える。上流は 2.1.236 で「まだ何も使っていない枠」も返すようになった）
 - **リセット時刻はメモ化する** — epoch は次のリセットまで動かないので `${CACHE_BASE}/resets<config dir>` に `epoch US 表示文字列` を持ち、epoch が一致する限り `date` を呼ばない（実測 `date -j` 1 回 4.15ms。呼び出しは 1 描画 3 回 → 1 回。なお**残っていた「制限あり/なし 約 8ms」の差はメモ化漏れではなく `stat` の 3 回 fork**で、v1.81.0 のまとめ取りで消えた。描画時間の絶対値は同時に動いている処理で振れるので、回帰は新旧の交互 A/B で見る）。使用率は使うたび変わるのでメモしない。**epoch 一致時しか cache の値を使わない**ので誤表示の経路が無く、ファイル名に config dir を混ぜて複数アカウント併用時の書き合いを避ける
-- **スコープで行を分ける**（v1.74.0）。1 行に混在していた頃は 7 要素・弱め表示が 7 割で「どこまでが制限の話でどこからがこのセッションの話か」が読めなかった。特に週間リセット（dim の時刻）の直後にセッション経過（dim の時刻）が並び、経過が「週間制限の続き」に見えて属し先が消えていた。区切り記号を足すのではなく意味の境界で行を割った。**セッション行を上（4 行目）**に置くのは毎ターン変わるのがこちらだから（制限は数時間〜1 週間単位）。`extra:` は枠を超えた分の課金なのでアカウント行、セッションコストはこのセッションの API 換算額なのでセッション行
+- **スコープで行を分ける**（v1.74.0）。1 行に混在していた頃は 7 要素・弱め表示が 7 割で「どこまでが制限の話でどこからがこのセッションの話か」が読めなかった。特に週間リセット（dim の時刻）の直後にセッション経過（dim の時刻）が並び、経過が「週間制限の続き」に見えて属し先が消えていた。区切り記号を足すのではなく意味の境界で行を割った。**セッション行を上（4 行目）**に置くのは毎ターン変わるのがこちらだから（制限は数時間〜1 週間単位）。`credits:` は枠を超えた分の課金なのでアカウント行、セッションコストはこのセッションの API 換算額なのでセッション行
 - Pre-2.1.80 ではレート制限部分が非表示（graceful degradation）
 
 **Bedrock / Vertex AI / Foundry**
-- `rate_limits` フィールドは届かないため、コンテキストバーとコストのみ表示（extra-usage も Anthropic 限定なので非表示）
+- `rate_limits` フィールドは届かないため、コンテキストバーとコストのみ表示（usage-credits も Anthropic 限定なので非表示）
 
 **モデル別の週間制限** (`Fable:39% 土 16:00`、Anthropic のみ)
-- **stdin には来ない** — docs の完全 JSON スキーマで `rate_limits` は `five_hour` と `seven_day` の 2 つだけ。モデル別の枠は `/usage` レスポンスの `limits[]` にある（`extra:$` と同じ curl の結果なので**追加のネットワークも fork もゼロ**）
+- **stdin には来ない** — docs の完全 JSON スキーマで `rate_limits` は `five_hour` と `seven_day` の 2 つだけ。モデル別の枠は `/usage` レスポンスの `limits[]` にある（`credits:$` と同じ curl の結果なので**追加のネットワークも fork もゼロ**）
 - 実測した要素の形: `{"kind":"weekly_scoped","group":"weekly","percent":39,"severity":"normal","resets_at":"2026-08-15T07:00:00.346608+00:00","scope":{"model":{"id":null,"display_name":"Fable"}},"is_active":true}` — claude.ai の「週間制限 / Fable / 39% 使用済み」と一致
 - **読むのは `limits[]` だけ** — レスポンスのトップレベルには `nimbus_quill` / `amber_ladder` / `tangelo` / `iguana_necktie` 等のコードネーム鍵があるが feature flag 名で churn するので使わない。`limits[]` は消費者向けに整形済み
 - **`is_active` / `severity` で絞らない** — 各 1 観測しかなく意味論が不明（未文書フィールドを列挙する罠）
@@ -240,11 +240,14 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 - 全体の週間制限（stdin の `seven_day`）と**併存**する。別の制限なので置き換えない
 - 再検討条件は **stdin が per-model の `rate_limits` を渡してきたとき**（`/check-claude-code-update` の確認項目に入れてある）
 
-**extra-usage 実課金** (`extra:$X.XX`、gold `38;5;220`、Anthropic のみ)
+**usage-credits 実課金** (`credits:$X.XX`、gold `38;5;220`、Anthropic のみ)
+
 - `fetch_usage_spend()` が `/usage` OAuth エンドポイント (`api.anthropic.com/api/oauth/usage`) の `spend.used` を取得 — **stdin に無い唯一の課金情報**で、usage-credits の実消費額（参考値の session cost と別物）
 - **このスクリプト唯一のネットワーク呼び出し**。背景 subshell + 300s キャッシュで hot path をブロックしない。OAuth トークンは `curl -H @-`（stdin）で argv 非露出
-- Fable は 7/7 以降 extra-usage 課金に移行するため「実際に溶けた額」を出す実益が大きい
+- Fable は 7/7 以降 usage-credits 課金に移行するため「実際に溶けた額」を出す実益が大きい
 - データ無し / 取得失敗 / `$0.00` は非表示。`CLAUDE_STATUSLINE_NO_NET=1` で fetch 自体を無効化（オフライン / プライバシー）。エンドポイントは非公式なので変わりうる前提の graceful degradation
+
+> 画面のラベルは `credits:` です。上流は Claude Code 2.1.144 で "extra usage" を **"usage credits"** に改名し（`/extra-usage` → `/usage-credits`）、以後の CLI コピーは全部そちらなので、画面の語彙をそちらに合わせています。**`/usage` の応答側の鍵名は今も `extra_usage`** なので、API を読むときの綴りと画面の語彙は一致しません。
 
 **セッションコスト** (`$X.XX`、通常輝度、最右)
 - stdin JSON `cost.total_cost_usd` をそのまま表示。Claude Code がキャッシュ区分 (cache read/write) 込みで計算済みの API 換算額
@@ -267,7 +270,7 @@ Anthropic 直接利用のときだけ、`fetch_subscription()` が Keychain（fa
 
 **Keychain のサービス名は設定ディレクトリごとに変わります。** 名前は `Claude Code-credentials` に、設定ディレクトリの sha256 先頭 8 桁を `-` で付けた形です（suffix の元は `CLAUDE_SECURESTORAGE_CONFIG_DIR` が定義済みならその値、未定義なら `CLAUDE_CONFIG_DIR` の値。どちらも空／未設定なら suffix 無し）。docs も CHANGELOG も触れていない挙動で、2.1.238 のバイナリで実測しました。上流は env の値を NFC 正規化してから hash し、パスの解決や末尾スラッシュの除去はしません（＝相対パスでも綴りが同じなら一致します）。読み出しは account 属性込み（`security find-generic-password -s <名前> -a <ユーザー> -w`）です。
 
-帰結として、**`CLAUDE_CONFIG_DIR` を設定して走るセッションでは、その設定ディレクトリ専用の Keychain 項目が必要**になります。無い場合はプラン名と `extra:$` が出ません（決め打ちの名前で引いて既定アカウントの値を出す方が危険なので、算出できないときは Keychain ごと飛ばします — 無表示 < 誤読）。
+帰結として、**`CLAUDE_CONFIG_DIR` を設定して走るセッションでは、その設定ディレクトリ専用の Keychain 項目が必要**になります。無い場合はプラン名と `credits:$` が出ません（決め打ちの名前で引いて既定アカウントの値を出す方が危険なので、算出できないときは Keychain ごと飛ばします — 無表示 < 誤読）。
 
 | フィールド | 用途 | 実測値 |
 |---|---|---|

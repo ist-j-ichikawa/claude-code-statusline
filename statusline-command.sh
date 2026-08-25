@@ -139,7 +139,7 @@ git_cache_file() {
 #   - `CLAUDE_SECURESTORAGE_CONFIG_DIR` が**定義済み**: 値が空なら無し / 非空ならその値の sha256 先頭 8 桁
 #   - 未定義: `CLAUDE_CONFIG_DIR` が空なら無し / 非空なら**その env の値そのまま**の sha256 先頭 8 桁
 # `Claude Code-credentials` を決め打ちで引くと、別 config dir のセッションで**既定アカウントの blob**を
-# 読む = 別アカウントのプラン名と extra:$ を出す (無表示 < 誤読)。既定ユーザー (どちらも未設定) は
+# 読む = 別アカウントのプラン名と credits:$ を出す (無表示 < 誤読)。既定ユーザー (どちらも未設定) は
 # suffix 無しなので `shasum` の fork は増えない。
 # **上流は env の値を NFC 正規化してから hash する。path の解決 (`resolve`) も末尾スラッシュの
 # 除去もしない** (2.1.238 の `Rre()`/`En()` で実測) — なので**相対パスでも綴りが同じなら一致する**。
@@ -259,7 +259,7 @@ readonly USAGE_CACHE_MAX_AGE=300
 # キャッシュ形式: 1 行目が cents、2 行目以降が `モデル名 US % US リセット epoch` の 1 行 1 枠。
 # 旧形式 (cents 1 行だけ) を読んでも枠が 0 件になるだけなのでファイル名の版は上げない。
 # **NO_NET の効き方が `fetch_subscription` と非対称**（意図的）: あちらは Keychain 読みごと止めて
-# 空に倒すが、こちらは **fetch だけ止めてキャッシュは読む** — extra:$ と枠は「前回取れた値」を
+# 空に倒すが、こちらは **fetch だけ止めてキャッシュは読む** — credits:$ と枠は「前回取れた値」を
 # 出しても害が無く、オフラインでも直近の値が見えるほうが有用。テストもこの差に依存している。
 fetch_usage_spend() {
   _usage_cents=""; _scoped_limits=""
@@ -328,7 +328,7 @@ fetch_usage_spend() {
       # curl storm になる (extra-usage 0 のユーザーが大多数なので致命的)。
       # **ただし取得できなかったときは既存値を touch で延命する** (`fetch_subscription` と同じ作法) —
       # Wi-Fi 断や `curl -m 4` のタイムアウトで `out` が空になると cents=0 / 枠 0 件になり、
-      # 上書きすると **ディスクに良い値があるのに extra:$ と全枠が 300s 消える**。
+      # 上書きすると **ディスクに良い値があるのに credits:$ と全枠が 300s 消える**。
       # touch なら storm も防げて表示も保たれる (取れた時だけ内容を差し替える)。
       # 中間ファイル名に PID を入れる — 固定名だと同一 dir の並走セッション (refreshInterval で
       # 定期再実行 × 複数ペイン) が同じ .tmp に同時書き込みし、mv が atomic でも内容が混ざる
@@ -366,6 +366,14 @@ render_scoped_limits() {
     _reset_txt="${_tmp#*$'\037'}"
     # 名前と % が揃わない行は落とす (形式が変わっても他の枠と cents は生きる)
     [[ -n "$_name" && "$_pct" =~ ^[0-9]+$ ]] || continue
+    # **0% は出さない** — **週間の枠どうしで揃える**（アカウント全体の `week:` も
+    # `((seven_pct > 0))` で 0 を落とす）。**5h は 0% でも出す** — 行の左端の一目確認用なので
+    # `has_val` だけで gate しており、ここを「制限は 0% なら隠す」と読み替えて 5h に広げてはいけない
+    # (テスト `Line5: 週間枠は 0% を落とすが 5h は 0% でも出すこと` が赤で止める)。
+    # 落とす理由は桁の割に情報が無いこと — `Sonnet 5:0% 土 16:00` は 24 桁使って
+    # 「今週まだ使っていない」しか伝えない (リセット時刻まで連れてくる)。上流は 2.1.236 で
+    # 「まだ何も使っていない枠」も返すようになったので、この経路は今後増える。
+    ((_pct > 0)) || continue
     model_color _col "$_name"
     # **`:N%` は無色の通常輝度**（宛名やパス名と同じ扱い）。dim だと数値が沈んで読めない。
     # 閾値色（緑/黄/赤）は試したうえで却下 — モデル名が既に色を持つので 1 要素に 2 系統の色が
@@ -1269,7 +1277,7 @@ if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)); then
 fi
 
 # モデル別の週間制限 (`Fable:39%`、Anthropic のみ)。stdin には来ないので `/usage` の `limits[]` から。
-# **`fetch_usage_spend` はここで 1 回だけ呼ぶ** — extra:$ も同じキャッシュを使うので、
+# **`fetch_usage_spend` はここで 1 回だけ呼ぶ** — credits:$ も同じキャッシュを使うので、
 # 後段では `_usage_cents` を読むだけにする (2 回呼ぶと背景 fetch が二重に走る)。
 # 全体の週間制限 (stdin の `seven_day`) と**併存させる** — 別の制限なので置き換えない。
 if [[ -z "$provider" ]]; then
@@ -1307,17 +1315,20 @@ if ((dur_sec >= 60)); then
   line_sess+=("${DIM}${_dur}${RST}")
 fi
 
-# Extra-usage spend (usage-credits, Anthropic only) — 実課金額。stdin に無いので /usage を背景取得。
+# Usage-credits spend (Anthropic only) — 実課金額。stdin に無いので /usage を背景取得。
+# **ラベルは `credits:`** — 上流は 2.1.144 で "extra usage" を "usage credits" に改名し
+# (`/extra-usage` → `/usage-credits`)、以後の CLI コピーは全部そちら。画面の語彙を上流に合わせる
+# (「既存の語彙に協調し独自の呼び方を持たない」の適用)。旧 `extra:` に戻さない。
 # **アカウント側の行 (line_lim) に置く** — 枠を超えた分の課金なので制限と同じスコープ。
 # セッションコストは「このセッションの API 換算額」で別のスコープなのでセッション行に残す。
 if [[ -z "$provider" ]]; then
   # fetch は制限グループ側で済んでいる (`_usage_cents` を読むだけ)
   if [[ "$_usage_cents" =~ ^[0-9]+$ ]] && ((_usage_cents > 0)); then
-    printf -v _xtra 'extra:$%d.%02d' $((_usage_cents / 100)) $((_usage_cents % 100))
+    printf -v _credits 'credits:$%d.%02d' $((_usage_cents / 100)) $((_usage_cents % 100))
     # **bold で立てる** — この行で唯一「実際に請求される額」なので、同色相のセッションコスト
     # (COST, ブロンズ) との明度差に加えて太さでも差を付ける。bold は色ではないので
     # Line 4/5 の色系統を増やさない (vim mode バッジ以外で bold を使うのはここだけ)。
-    line_lim+=("${BOLD}${SPEND}${_xtra}${RST}")
+    line_lim+=("${BOLD}${SPEND}${_credits}${RST}")
   fi
 fi
 
@@ -1325,7 +1336,7 @@ fi
 # cost_cents > 0 が「フィールド欠落 (旧 Claude Code)」と「$0.00」の両方を非表示に倒す
 if ((cost_cents > 0)); then
   printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
-  # **金額らしく金色で出す** (v1.74.0)。extra-usage の実課金 (SPEND, 明るい gold) と同色相で
+  # **金額らしく金色で出す** (v1.74.0)。usage-credits の実課金 (`credits:`、SPEND, 明るい gold) と同色相で
   # 明度だけ下げた COST (ブロンズ) を使い、「どちらも金額 / 明るい方が実際に請求される額」の
   # 序列を色で表す。無色だった頃は「弱め要素の中で唯一の通常輝度」でしか立っていなかった。
   line_sess+=("${COST}${_cost}${RST}")
