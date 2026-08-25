@@ -750,6 +750,42 @@ _count_cmd() {
   [[ "$line_count" -eq 4 ]]
 }
 
+@test "Line5: 片方の窓だけ来ても残った窓だけを出し、行を崩さないこと(2.1.243 の窓消失)" {
+  # 2.1.243 で `rate_limits.<窓>` は「API が報告していて `resets_at` を過ぎていない間だけ present」に
+  # なった。つまり**片方だけ present** が過渡状態として日常的に起きる。既存テストは常に両窓か
+  # `rate_limits` ごと欠落しか見ておらず、この形を pin しているものが 1 本も無かった
+  # (2026-08-25、Fable レビューの指摘)。
+  # **assert は行頭で取る** — gate を外した mutant は空バー + 裸の `%` を出すので、行が
+  # `······%·week:12%` になる。`⣿` の有無では見えない (空バーは空白なので glyph が出ない)。
+  local j out l5
+  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":12,"resets_at":4070908800}}}'
+  out=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null)
+  [[ "$(printf '%s' "$out" | grep -c .)" -eq 5 ]]
+  l5=$(printf '%s' "$out" | sed -n '5p' | _strip)
+  # 消えた 5h の痕跡が行頭に残らないこと (空バーも裸の `%` も出ない)
+  [[ "$l5" == "week:12%"* ]]
+
+  # 逆向き: seven_day を落として five_hour だけ
+  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800}}}'
+  out=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null)
+  [[ "$(printf '%s' "$out" | grep -c .)" -eq 5 ]]
+  l5=$(printf '%s' "$out" | sed -n '5p' | _strip)
+  [[ "$l5" == *"35%"* ]]
+  [[ "$l5" != *"week:"* ]]
+
+  # **両方消えたら Line 5 ごと出さない** — 空の制限行を連結すると空行が挟まって行が崩れる
+  # (Bedrock で実際に踏んだ形。ここが 4 行であることが空行抑止を pin する)
+  j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"version":"2.1.243","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{}}'
+  # **`grep -c .` では空行を検出できない** — 空要素の行を連結する mutant でも非空行は 4 のままで、
+  # 差が出るのは**総行数**だけ (実測: 正常 4 / mutant 5)。`$( )` は末尾改行を落とすので、
+  # 数えるのは**変数に入れずパイプの中**で行う。
+  local nonempty total
+  nonempty=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | grep -c .)
+  total=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | wc -l | tr -d ' ')
+  [[ "$nonempty" -eq 4 ]]
+  [[ "$total" -eq 4 ]]
+}
+
 @test "Line5: rate_limitsのused_percentageがfloatでもroundされること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35.7,"resets_at":4070908800}}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
