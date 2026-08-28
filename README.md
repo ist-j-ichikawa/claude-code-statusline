@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.85.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.245-purple)
+![Version](https://img.shields.io/badge/version-1.86.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.250-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -48,7 +48,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.245
+Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.250
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83
