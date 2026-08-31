@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.86.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.250-purple)
+![Version](https://img.shields.io/badge/version-1.87.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.251-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -20,7 +20,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 | **Line 1** | vim mode · プロバイダー · Model · effort · think · fast · output style · Agent 名 · 宛名 · `branch:`元セッション id / `fork` · Version |
 | **Line 2** | ディレクトリパス · 🌲worktree 名 · `from:`元ブランチ · `(+N dirs)` |
 | **Line 3** | 進行中の git 操作 (`rebase 2/5` 等) · `gh:`/`gl:`owner/repo · ブランチ (OSC 8 → GitHub / GitLab tree) · PR review_state · 変更行数 (`+42 -17`) · ahead/behind · last commit (`08-17T13:13`) |
-| **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト — **このセッション** |
+| **Line 4** | コンテキストバー (分母付き `/200k` `/1M`) · セッション経過 · セッションコスト · プロンプトキャッシュ (`prompt_cache:warm` / `cold` と `hit_ratio:N%`) — **このセッション** |
 | **Line 5** | 5h レート制限 · weekly レート制限 · モデル別 weekly 制限 (`Fable:39%`) · usage-credits 実課金 — **アカウント** |
 
 > セッション名は Claude Code 2.1.76+ で右上に組み込み表示されるため、ステータスラインには含みません。
@@ -48,10 +48,10 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.250
+Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.251
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
-⣿⣶   60%/1M  3h  $4.83
+⣿⣶   60%/1M  3h  $4.83  prompt_cache:warm hit_ratio:91%
 ⣶     16%  19:31  week:9%  金 12:00  Fable:39%  土 16:00  credits:$2.14
 ```
 

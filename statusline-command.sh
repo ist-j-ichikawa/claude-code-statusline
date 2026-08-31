@@ -513,6 +513,7 @@ now_epoch=0
 vim_mode=""
 effort_level="" thinking_enabled="false" fast_mode="false" output_style=""
 cost_cents=0 dur_sec=0
+pc_warm="" pc_hit=""
 _jq_ok=1
 _jq_out=$(jq -r '
   @sh "model=\(.model.display_name // "Unknown")",
@@ -545,6 +546,8 @@ _jq_out=$(jq -r '
   @sh "fast_mode=\(.fast_mode // false)",
   @sh "output_style=\(.output_style.name // "")",
   @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)",
+  @sh "pc_warm=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
+  @sh "pc_hit=\(.prompt_cache.hit_ratio // null | if . == null then "" else (. * 100 | round) end)",
   @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)",
   @sh "now_epoch=\(now|floor)"
 ' 2>/dev/null) || _jq_ok=0
@@ -1340,6 +1343,27 @@ if ((cost_cents > 0)); then
   # 明度だけ下げた COST (ブロンズ) を使い、「どちらも金額 / 明るい方が実際に請求される額」の
   # 序列を色で表す。無色だった頃は「弱め要素の中で唯一の通常輝度」でしか立っていなかった。
   line_sess+=("${COST}${_cost}${RST}")
+fi
+
+# Prompt cache (Claude Code 2.1.251+, `prompt_cache`) — **状態と率の 2 つだけ出す**。
+# 上流 docs 自身が「短い status line は 1〜2 個で、`warm` と `hit_ratio` が状態を最も直接に
+# 要約する」と書いており、**操作が変わるのはこの 2 つだけ**（cold なら次のリクエストが焼き直す /
+# 率が落ちていれば何かが prefix を壊している）。全 12 項目を出す案は却下 — 残りは累計か静的値で、
+# 金額は `$` で既に見えており、詳細は `/usage` の `Prompt cache (main)` 行が持っている（常時見る
+# 必要があるものだけを置く、という agent view を却下したのと同じ理屈）。**`expires_at` を出さない
+# のは誤読とコストの両方**: 上流は `max(lastRequest.at, touchedAt) + ttl` で毎リクエスト前へずらす
+# ので、① cold のときは過去の時刻が「これから切れる」ように読める ② メモは epoch が動き続けて
+# 当たらず、毎描画 `mv` を 1 個増やすだけだった（実測: 6 描画で date 6 / mv 7）。
+# **時刻を出さないので `date` fork はゼロ**（v1.82.0 の床を崩さない）。
+# **ラベルだけ dim・値は通常輝度**（`gh:` と同じ dim 役 ①）。旧 Claude Code と最初の API 応答前は
+# `prompt_cache` ごと absent → `pc_warm=""` で要素が落ちる。
+# **`warm` の判定に jq の `//` を使わない** — `//` は `false` も falsy に扱うので、まさに出したい
+# `warm:false` が absent に畳まれる（テストが pin）。
+if has_val "$pc_warm"; then
+  _pcs="${DIM}prompt_cache:${RST}${pc_warm}"
+  # `hit_ratio` は全 input に対するキャッシュ読みの割合。null（まだ 0 件）ならラベルごと落とす
+  has_val "$pc_hit" && _pcs+=" ${DIM}hit_ratio:${RST}${pc_hit}%"
+  line_sess+=("$_pcs")
 fi
 
 # ============================================================================

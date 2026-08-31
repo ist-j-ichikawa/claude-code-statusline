@@ -30,7 +30,7 @@ statusline-command.sh
 ├── Line 1           [vim mode バッジ (INSERT=青 bg / VISUAL・V-LINE=橙 bg、vim 側の流儀。NORMAL は非表示)] + プロバイダー + モデル名（Fable=多色(蝶標本), Opus 5=coral スイープ, Opus 4.x=コーラル, Sonnet 5=緑グラデーション, Sonnet 4.6=ティール, Sonnet 4.5=アンバー, Haiku=ラベンダー）+ effort（レベルごとの色。low=gold / medium=green / high=薄紫 / xhigh=濃紫 / max=多色）+ think（light cyan）+ fast（greenyellow、/fast 有効時のみ）+ output style（常に出す。`default` は dim = 「特に設定していない」プレースホルダ扱い、非既定は白で立つ）+ Agent + 宛名（cross-session messaging のアドレス。`~/.claude/sessions/<pid>.json` の derived name を `session_id` で照合して読む。ラベルも囲みも付けないので、要素間のスペースが単語境界になりダブルクリックで名前だけ取れる）+ セッション出自（`/branch`=`branch:`+元セッション id (full uuid) / `/fork`=`fork`、ラベルはどちらも黄。`branch` は transcript の `forkedFrom` で裏取りし、同じ記録から元 id も抜く）+ Version（**行の最後**。Claude Code の版は行動に効かない参照情報なので、モデル・effort・宛名・出自の後に置く。truncate で最初に削られてよい要素でもある）
 ├── Line 2           ディレクトリパス (OSC 8 リンク) + 🌲worktree名 + from:branch + added_dirs (+N dirs)。`<repo>/.claude/worktrees/<name>` 配下はリポ root と 🌲<name> (dim) に分割表示（リンクは root / worktree 各 dir へ。サブディレクトリ滞在時・既定外配置ではフルパスに fallback）。from:HEAD (detached から作成) も表示する
 ├── Line 3           Git ([進行中の git 操作 (`rebase 2/5`/`merge`/`cherry-pick`/`revert`/`bisect`、赤。**行の先頭**。`HEAD@<sha>` だけでは「sha を checkout した」と「rebase 中」が区別できないため)] + [forge 略号 (dim。GitHub = `gh:` / GitLab = `gl:`) + owner/repo (通常輝度)。既知 forge の origin あり時のみ。Line 2 のパスと一致した成分だけ削る: owner/repo 一致 → 非表示 / repo 名だけ一致 → `gh:owner/` / 不一致 → 全表示] + ブランチ [OSC 8 リンク → GitHub は `/tree/`、GitLab は `/-/tree/`] + PR/MR review_state (Claude Code 2.1.145+ pr.review_state。GitLab MR は 2.1.234+ で同じキーに載り値は draft/approved/pending の 3 値。テキスト色分け、PR #/MR ! は Claude Code 組み込み footer に任せて非表示) + 変更行数 (`+42 -17`、Claude Desktop の code 画面と同じ単位・色) + ahead/behind + last commit (**ISO 8601 風の絶対時刻** `08-17T13:13`。180 日超は `2025-08-17`。どの古さでも必ず出す) + msg)、非git時は "no git"
-├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値)
+├── Line 4           **このセッション**: コンテキストバー (`%` 直後に分母 `/200k`・`/1M` 等を常時表示、% と同色) + セッション経過時間 (dim、60秒未満は非表示) + セッションコスト ($、ブロンズ 136 = 参考値) + プロンプトキャッシュ (`prompt_cache:warm`/`cold` と `hit_ratio:N%`。ラベルだけ dim。Claude Code 2.1.251+)
 ├── Line 5           **アカウント**: 5hレート制限 + weeklyレート制限 + モデル別weekly制限 (`Fable:39%`) + usage-credits実課金 ($、gold)。全要素 Anthropic 限定なので Bedrock 等ではこの行が出ない (空行は挟まない)
 └── Output           printf で各行を出力
 ```
@@ -109,6 +109,7 @@ agent panel (プロンプト下のサブエージェント一覧) の各行を�
 | PR review_state (`approved` / `changes_requested` / `pending` / `draft`、他は dim) | 緑 / 赤 / 黄 / グレー | 32 / 31 / 33 / 38;5;245 |
 | last commit (age + msg)、worktree from、worktree 名 (🌲 直後)、Git origin の forge 略号 (`gh:` / `gl:`)、weekly rate limit、セッション経過時間 | dim (SGR 2 = faint 属性。色ではないので端末依存) | 2 |
 | コンテキストの分母 (`/200k`・`/1M` 等を常時表示。値が来ていない旧 CC のみ無印) | 使用率と同じ色 (`88%/1M` を一体で読ませる) | 38;5;82 / 33 / 31 |
+| プロンプトキャッシュのラベル (`prompt_cache:` / `hit_ratio:`。Line 4 の末尾) | dim (ラベルだけ弱め・値は通常輝度 = `gh:` と同じ dim 役。色は増やさない) | 2 |
 | Git origin リポ名 (`owner/repo`) | 通常輝度（デフォルト前景色） | - |
 
 ## 宛名 (cross-session messaging のアドレス)
@@ -218,7 +219,7 @@ Line 1 の黄バッジ（宛名と Version の間）は `session_name` 末尾の
 
 **Anthropic** (rate_limits が届く場合)
 - Claude Code 2.1.80+ の stdin JSON `rate_limits` フィールドから直接取得
-- 表示は **2 行**: **Line 4 (このセッション)** = コンテキストバー + % + 分母 → セッション経過時間(単位1つ `41m`/`4h`。**画面で唯一の相対表記** — 時刻ではなく期間なので絶対時刻と混ざらない) → セッションコスト。**Line 5 (アカウント)** = 5hバー + % + リセット時刻(`19:31`、曜日なし) → week:% + リセット(`土 16:00`、曜日つき) → モデル別週間枠 → usage-credits実課金（**モデル別枠は 0% を出さない** — `week:` が `> 0` で 0 を落とすのと揃える。上流は 2.1.236 で「まだ何も使っていない枠」も返すようになった）
+- 表示は **2 行**: **Line 4 (このセッション)** = コンテキストバー + % + 分母 → セッション経過時間(単位1つ `41m`/`4h`。**画面で唯一の相対表記** — 時刻ではなく期間なので絶対時刻と混ざらない) → セッションコスト → プロンプトキャッシュ（**`warm`/`cold` と `hit_ratio` の 2 つだけ**。上流 docs 自身が「短い status line は 1〜2 個で、`warm` と `hit_ratio` が状態を最も直接に要約する」と書いており、操作が変わるのはこの 2 つだけ。残る 10 項目は累計か静的値で、金額は `$` で既に見え、詳細は `/usage` の `Prompt cache (main)` 行が持つ。**`expires_at` を出さない**のは ① 上流が `max(lastRequest.at, touchedAt) + ttl` で毎リクエスト前へずらすので cold のとき過去の時刻が「これから切れる」と読める ② 同じ理由でメモが当たらず毎描画 `mv` を 1 個増やすだけだった実測がある、の 2 つ。時刻を出さないので **`date` fork はゼロ**）。**Line 5 (アカウント)** = 5hバー + % + リセット時刻(`19:31`、曜日なし) → week:% + リセット(`土 16:00`、曜日つき) → モデル別週間枠 → usage-credits実課金（**モデル別枠は 0% を出さない** — `week:` が `> 0` で 0 を落とすのと揃える。上流は 2.1.236 で「まだ何も使っていない枠」も返すようになった）
 - **リセット時刻はメモ化する** — epoch は次のリセットまで動かないので `${CACHE_BASE}/resets<config dir>` に `epoch US 表示文字列` を持ち、epoch が一致する限り `date` を呼ばない（実測 `date -j` 1 回 4.15ms。呼び出しは 1 描画 3 回 → 1 回。なお**残っていた「制限あり/なし 約 8ms」の差はメモ化漏れではなく `stat` の 3 回 fork**で、v1.81.0 のまとめ取りで消えた。描画時間の絶対値は同時に動いている処理で振れるので、回帰は新旧の交互 A/B で見る）。使用率は使うたび変わるのでメモしない。**epoch 一致時しか cache の値を使わない**ので誤表示の経路が無く、ファイル名に config dir を混ぜて複数アカウント併用時の書き合いを避ける
 - **スコープで行を分ける**（v1.74.0）。1 行に混在していた頃は 7 要素・弱め表示が 7 割で「どこまでが制限の話でどこからがこのセッションの話か」が読めなかった。特に週間リセット（dim の時刻）の直後にセッション経過（dim の時刻）が並び、経過が「週間制限の続き」に見えて属し先が消えていた。区切り記号を足すのではなく意味の境界で行を割った。**セッション行を上（4 行目）**に置くのは毎ターン変わるのがこちらだから（制限は数時間〜1 週間単位）。`credits:` は枠を超えた分の課金なのでアカウント行、セッションコストはこのセッションの API 換算額なのでセッション行
 - Pre-2.1.80 ではレート制限部分が非表示（graceful degradation）

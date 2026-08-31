@@ -631,8 +631,12 @@ _count_cmd() {
     || { echo "背景 fetch がキャッシュに届いていない = テストが無意味" >&3; return 1; }
   local cache exp
   cache=$(< "$_stub_cache/usage_spend")
-  # 期待するリセット表示は TZ 依存なので、07:00Z を this machine のローカルに直して比べる
-  exp=$(date -j -f '%Y-%m-%dT%H:%M:%S %z' '2026-08-15T07:00:00 +0000' +'%a %H:%M')
+  # 期待するリセット表示は TZ 依存なので、07:00Z を this machine のローカルに直して比べる。
+  # **`LC_ALL=C` を付ける** — `_stub_env` は `env -i` で走らせるので**被験体側は C ロケール**になり
+  # `%a` が `Sat` になる。テスト側の shell は `LANG=ja_JP.UTF-8` を持つので付けないと `土` と
+  # 比べてしまい、**日本語ロケールの機体だけで赤くなる**（本番は CC が LANG 付きで起動するので
+  # `土` が出る = これはテスト側の env 非対称で、実装のバグではない）
+  exp=$(LC_ALL=C date -j -f '%Y-%m-%dT%H:%M:%S %z' '2026-08-15T07:00:00 +0000' +'%a %H:%M')
   [[ "$(printf '%s' "$cache" | sed -n '1p')" == "cents,limits"$'\037'"214" ]]   # 1 行目 = タグ US cents
   [[ "$cache" == *"Fable"$'\037'"39"$'\037'"$exp"* ]]           # 名前 US 丸めた% US 分丸めしたリセット
   [[ "$cache" != *"Broken"* ]]                                  # 型不正の枠は落ちる
@@ -2501,6 +2505,74 @@ _os_run() {
   l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":0.42,"total_duration_ms":2460000}}' \
     | /bin/bash statusline-command.sh | tail -1 | _strip)
   [[ "$l4" == *" 41m "*'$0.42'* ]]
+}
+
+@test "prompt_cache: warm と hit_ratio の 2 つだけ出すこと" {
+  # **12 項目が来ていても 2 つだけ出す**（残りは累計か静的値で操作が変わらず、詳細は
+  # `/usage` の `Prompt cache (main)` 行が持つ）。**出さないことを 1 つずつ pin する** —
+  # 「全部出す」に戻す変更を、テストを消さずに入れられないようにするため
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"1h","expires_at":1788155910,"requests":12,"misses":3,"expected_rebuilds":1,"hit_ratio":0.9135,"cache_write_tokens":343735,"miss_recache_tokens":310200,"last_miss_at":1788150000,"recache_tokens_if_cold":45000}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$l4" == *"prompt_cache:warm hit_ratio:91%"* ]]
+  [[ "$l4" != *"ttl"* ]]; [[ "$l4" != *"expires_at"* ]]; [[ "$l4" != *"requests"* ]]
+  [[ "$l4" != *"misses"* ]]; [[ "$l4" != *"expected_rebuilds"* ]]; [[ "$l4" != *"cache_write"* ]]
+  [[ "$l4" != *"miss_recache"* ]]; [[ "$l4" != *"last_miss_at"* ]]; [[ "$l4" != *"if_cold"* ]]
+  [[ "$l4" != *"caching_observed"* ]]
+  # Line 4 の既存要素は無傷（この要素は末尾に足すだけ）
+  [[ "$l4" == *"48%"* ]]; [[ "$l4" == *" 1h "*'$1.23'* ]]
+}
+
+@test "prompt_cache: warm が false のとき cold と出すこと(jq の // で畳まれないこと)" {
+  # **jq の `//` は false も falsy に扱う**ので、`.prompt_cache.warm // ""` に退行すると
+  # warm:false が absent と区別できなくなる（要素ごと消えて通常状態と見分けが付かない）
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":false,"hit_ratio":0.627}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$l4" == *"prompt_cache:cold"* ]]
+  # `hit_ratio` は round を pin（0.627 → round 63 / floor 62 で差が出る値を使う）
+  [[ "$l4" == *"hit_ratio:63%"* ]]
+}
+
+@test "prompt_cache: hit_ratio が null ならラベルごと落とすこと" {
+  # `hit_ratio:%` のような中身のないラベルを作らない（無表示 < 誤読）
+  l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":true,"hit_ratio":null}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$l4" == *"prompt_cache:warm"* ]]
+  [[ "$l4" != *"hit_ratio"* ]]
+  # 0% は「まだ読めていない」ではなく実測値なので**出す**（5h バーが 0% を出すのと揃える）
+  l4z=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":true,"hit_ratio":0}}' \
+    | /bin/bash statusline-command.sh | tail -1 | _strip)
+  [[ "$l4z" == *"hit_ratio:0%"* ]]
+}
+
+@test "prompt_cache: ラベルだけ dim で値は通常輝度であること" {
+  # 色の assert は**生のリテラル**で（定数だとどんな値でも通る）。dim = SGR 2
+  raw=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":true,"hit_ratio":0.91}}' \
+    | /bin/bash statusline-command.sh | tail -1)
+  [[ "$raw" == *$'\033[2m'"prompt_cache:"$'\033[0m'"warm"* ]]
+  [[ "$raw" == *$'\033[2m'"hit_ratio:"$'\033[0m'"91%"* ]]
+}
+
+@test "prompt_cache: 時刻を出さないので date を fork しないこと" {
+  # `expires_at` / `last_miss_at` を出す形に戻すと `date` fork が復活する（上流は
+  # `expires_at` を毎リクエスト前へずらすのでメモも当たらず、実測で 6 描画 date 6 / mv 7 だった）。
+  # v1.82.0 の「date fork 0 個」の床を守っていることを**起動回数**で pin する
+  local d="$BATS_TEST_TMPDIR/pcnf" bin="$BATS_TEST_TMPDIR/pcnfbin" log="$BATS_TEST_TMPDIR/pcnf.log"
+  _count_cmd "$bin" date "$log"
+  printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"1h","expires_at":1788155910,"requests":12,"misses":3,"expected_rebuilds":1,"hit_ratio":0.9135,"cache_write_tokens":343735,"miss_recache_tokens":310200,"last_miss_at":1788150000,"recache_tokens_if_cold":45000}}' \
+    | CLAUDE_STATUSLINE_CACHE_DIR="$d" PATH="$bin:$PATH" CLAUDE_STATUSLINE_NO_NET=1 \
+      /bin/bash statusline-command.sh >"$BATS_TEST_TMPDIR/pcnf.out" 2>/dev/null
+  # 到達証跡: 要素が実際に描かれている（描かれないまま「fork 0」でも緑になるのを防ぐ）
+  grep -q 'prompt_cache:' "$BATS_TEST_TMPDIR/pcnf.out"
+  [[ ! -s "$log" ]] || { echo "date が $(grep -c . "$log") 回起動した" >&3; return 1; }
+}
+
+@test "prompt_cache: 来ていないときは要素ごと出さず行数も増えないこと" {
+  local outf="$BATS_TEST_TMPDIR/pc-absent.out"
+  printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"cost":{"total_cost_usd":1.23,"total_duration_ms":3600000},"rate_limits":{"five_hour":{"used_percentage":22,"resets_at":4070908800}}}' \
+    | /bin/bash statusline-command.sh >"$outf" 2>/dev/null
+  [[ "$(grep -c . <"$outf")" -eq 5 ]]; [[ "$(grep -c '' <"$outf")" -eq 5 ]]
+  local l4; l4=$(sed -n '4p' "$outf" | _strip)
+  [[ "$l4" == *"48%"* ]]; [[ "$l4" == *'$1.23'* ]]; [[ "$l4" != *"prompt_cache"* ]]
 }
 
 @test "キャッシュ: CLAUDE_STATUSLINE_CACHE_DIR で置き場を差し替えられること(テスト密閉の seam)" {
