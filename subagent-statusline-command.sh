@@ -18,27 +18,36 @@ set -uo pipefail
 _selfdir="${BASH_SOURCE%/*}"; [[ "$_selfdir" == "$BASH_SOURCE" ]] && _selfdir="."
 source "$_selfdir/lib.sh"
 
-IFS= read -r -d '' input || true
-[[ -z "$input" ]] && exit 0
-
-# per-task を単一 jq で US(0x1f) 区切り抽出。全 text フィールドの改行/タブは空白化 (US 連結行の分割崩れ防止)。
+# per-task を単一 jq で US(0x1f) 区切り抽出。**stdin は変数に読まず jq に直接継承させる** — 主
+# statusline と同じ作法で、`read` + here-string (bash 3.2 の `<<<` は一時ファイルを作る) が丸ごと
+# 消える。空入力と tasks 欠落は jq が rc=0 で何も出さないので `_rows` が空になり**下の空チェック**で
+# exit 0、不正 JSON は jq が rc≠0 なので**同じ行の `|| exit 0`** で抜ける (どちらも既定描画に戻る)。
+#
+# 全 text フィールドの制御文字は `[[:cntrl:]]` で空白化する。**改行/タブだけでは足りなかった** —
+# US(0x1f) を含む label が来ると連結行が割れて**別フィールドを読む**。ESC も同時に落ちるので、
+# task の説明文からの ANSI 注入も塞がる (行に色を付けるのは本スクリプトだけになる)。
 _rows=$(jq -r '.tasks[]? | [
-  (.id // "" | gsub("[\n\r\t]"; " ")),
-  (.label // .description // .name // "" | gsub("[\n\r\t]"; " ")),
-  (.model // "" | gsub("[\n\r\t]"; " ")),
-  (.status // "" | gsub("[\n\r\t]"; " ")),
-  (.cwd // "" | gsub("[\n\r\t]"; " ")),
-  ((((.effort.level? // .effort?) // "") | if type == "string" or type == "number" then tostring else "" end) | gsub("[\n\r\t]"; " "))
-] | join("\u001f")' <<< "$input" 2>/dev/null) || exit 0
+  (.id // "" | gsub("[[:cntrl:]]"; " ")),
+  (.label // .description // .name // "" | gsub("[[:cntrl:]]"; " ")),
+  (.model // "" | gsub("[[:cntrl:]]"; " ")),
+  (.status // "" | gsub("[[:cntrl:]]"; " ")),
+  (.cwd // "" | gsub("[[:cntrl:]]"; " ")),
+  ((((.effort.level? // .effort?) // "") | if type == "string" or type == "number" then tostring else "" end) | gsub("[[:cntrl:]]"; " "))
+] | join("\u001f")' 2>/dev/null) || exit 0
 [[ -z "$_rows" ]] && exit 0
 
 # model id -> "Opus 4.8" 風 (Line 1 の display_name と協調、fork-free)。先頭セグメントが tier 名
 # (opus/sonnet/haiku/fable) の新形式 id のみ整形。旧形式 (claude-3-5-sonnet-… 版が tier より前) や
-# 未知形式は cleaned id をそのまま出す (誤分割で "3 5.sonnet…" のように文字化けさせない)。
+# 未知形式は cleaned id をそのまま出す (誤分割で "3 5.sonnet…" のように文字化けさせない。
+# ただし**日付は新形式と同じ規則で落ちる**ので `3-5-sonnet` になる)。
 prettify_model() {
   local m="${1##*.anthropic.}"     # Bedrock inference-profile prefix (jp./global./us. 等 .anthropic.) を剥がす
   m="${m#claude-}"; m="${m%\[1m\]}"
   m="${m%%:*}"; m="${m%-v[0-9]*}"  # Bedrock の版接尾辞。実 id は "-v1:0" (:N 付き) なので :N を先に落とす
+  # 日付つき id (`claude-haiku-4-5-20251001`) の末尾を落とす。**8 桁ちょうどのパターンで消す** —
+  # 「末尾の数字」で消すと `opus-5` の版まで食う。落とさないと Line 1 の display_name (`Haiku 4.5`)
+  # に対して subagent 行だけ `Haiku 4.5.20251001` になり、同じモデルが 2 通りの名前で並ぶ。
+  m="${m%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]}"
   local tier="${m%%-*}" ver="${m#*-}" _t
   case "$tier" in
     opus)_t=Opus;; sonnet)_t=Sonnet;; haiku)_t=Haiku;; fable)_t=Fable;;
@@ -51,6 +60,20 @@ prettify_model() {
 
 # row への追記。要素間は 2 スペース区切り (先頭要素には付けない → row が空なら区切り無し。全要素で統一)。
 add() { row+="${row:+  }$1"; }
+
+# JSON 文字列値へ escape する (fork ゼロ。`jq -Rc` 1 個ぶんの起動が消える)。
+# **不変条件は「`\` を最初に処理する」の 1 つだけ**。後回しにすると `"` と ESC の置換が入れた `\` を
+# もう一度 escape して壊す (`osc8` が `%` を最初に処理するのと同じ理屈)。`"` と ESC は互いの生成物に
+# 触らないので、この 2 つの順序は結果を変えない。
+# **扱うのは自分が付けた ANSI の ESC だけ** — 他の制御文字は抽出側の `[[:cntrl:]]` で空白化済み。
+# ESC を生バイトで出さないのは、Claude Code 側の JSON パーサに素の制御文字を渡さないため
+# (`\u001b` は従来の `jq -Rc` の出力と同じ形なので、ワイヤ上の表現は変わっていない)。
+_ESC=$'\033'
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$_ESC/\\u001b}"
+  printf -v "$2" '%s' "$s"
+}
 
 # here-string 供給なのでループは現シェル (サブシェル無し・_out に蓄積)。
 _out=""
@@ -88,10 +111,11 @@ while IFS=$'\037' read -r id label model status cwd effort; do
     has_val "$_wt" && add "${DIM}🌲${_wt}${RST}"
   fi
   [[ -z "$row" ]] && continue
-  _out+="${id}"$'\037'"${row}"$'\n'
+  json_str "$id" _jid; json_str "$row" _jrow
+  _out+='{"id":"'"$_jid"'","content":"'"$_jrow"'"}'$'\n'
 done <<< "$_rows"
 
-# JSON lines を単一 jq で出力 (id/content を US で分割)。入力側と同じく here-string で printf のサブシェル fork を避ける。
-# _out 末尾の改行を 1 個外す (<<< が改行を付けるため。付けたままだと空行 → bogus な空 record が出る)。
-[[ -n "$_out" ]] && jq -Rc 'split("\u001f") | {id: .[0], content: .[1]}' <<< "${_out%$'\n'}"
+# JSON lines を**単一 printf** で出す (行ごとに書かない = pipe への書き込みが 1 回で済む。
+# 主 statusline の「最後に単一 printf」と同じ作法)。`_out` は各行に改行を持つのでそのまま流す。
+[[ -n "$_out" ]] && printf '%s' "$_out"
 exit 0

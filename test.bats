@@ -2133,7 +2133,13 @@ _os_run() {
 @test "Subagent: 旧形式 model id(claude-3-5-sonnet-…)を文字化けさせないこと" {
   c=$(echo '{"columns":120,"tasks":[{"id":"a","label":"x","model":"claude-3-5-sonnet-20241022"}]}' \
     | /bin/bash subagent-statusline-command.sh | jq -r .content)
-  [[ "$c" == *"3-5-sonnet-20241022"* ]]   # cleaned id のまま
+  # v1.89.0 から**日付だけは旧形式でも落ちる**（`Haiku 4.5` 側と同じ 8 桁パターン）。
+  # 版 (`3-5`) は残るのでどのモデルかは読めるまま。ここで見たいのは「未知の形式を
+  # 誤分割して文字化けさせない」ことなので、下の 2 本目が本体。
+  # **末尾の RST まで見る** — `*"3-5-sonnet"*` だけだと、日付除去を 4 桁にした mutant
+  # (`3-5-sonnet-2024`) でも通ってしまう。
+  [[ "$c" == *"3-5-sonnet"$'\033[0m'* ]]
+  [[ "$c" != *"20241022"* ]]
   [[ "$c" != *"3 5.sonnet"* ]]
 }
 
@@ -2278,6 +2284,103 @@ _os_run() {
   echo '' | /bin/bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo '{}' | /bin/bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
   echo 'not json' | /bin/bash subagent-statusline-command.sh; [[ $? -eq 0 ]]
+}
+
+@test "Subagent: 日付つきモデルid(claude-haiku-4-5-20251001)がHaiku 4.5になること" {
+  # **末尾の RST まで含めて pin する** — `*"Haiku 4.5"*` の部分一致だと、日付が残った
+  # `Haiku 4.5.20251001` でも通ってしまう（この不具合そのものが部分一致では見えなかった）。
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-haiku-4-5-20251001"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[38;5;183m'"Haiku 4.5"$'\033[0m'* ]]
+  [[ "$c" != *"20251001"* ]]
+  # **Bedrock の実 id（日付 + 版接尾辞）でも見る** — 日付除去を `-v[0-9]*` 剥がしより前に置くと
+  # `-20251001-v1:0` の最短一致で日付が残り `Haiku 4.5.20251001` に戻るので、**順序の pin** になる。
+  # 「8 桁ちょうど」の側（`-[0-9]*` にすると版を食う）は Opus 5 スイープのテストが赤くする。
+  c=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"us.anthropic.claude-haiku-4-5-20251001-v1:0"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[38;5;183m'"Haiku 4.5"$'\033[0m'* ]]
+  [[ "$c" != *"20251001"* ]]
+}
+
+@test "Subagent: labelにUSが混ざっても桁がずれずモデルとして描かれること" {
+  # US(0x1f) は抽出の区切りなので、潰さないと**行が割れて別フィールドを読む**。
+  # 実測では model が status 扱いになり、生 id が黄で出た（= 誤読する表示）。
+  c=$(printf '%s' '{"columns":120,"tasks":[{"id":"t","label":"a\u001fb","model":"claude-opus-5"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *$'\033[38;5;215m'"5"$'\033[0m'* ]]   # Opus 5 スイープの末尾 = モデルとして着色された
+  [[ "$c" != *$'\033[33m'* ]]                      # status 語(黄)は出ない
+  [[ "$c" != *"claude-opus-5"* ]]                  # 生 id が漏れない
+}
+
+@test "Subagent: labelのESCを落としてANSI注入を防ぐこと" {
+  c=$(printf '%s' '{"columns":120,"tasks":[{"id":"t","label":"pwn\u001b[31mRED","model":"claude-opus-5"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$c" == *"RED"* ]]              # 文字は残す（説明を消さない）
+  [[ "$c" != *$'\033[31m'* ]]        # ESC だけ落ちる = 赤くならない
+}
+
+@test "Subagent: idとcontentに\"と\\が来てもJSONとして妥当なこと" {
+  # 出力の JSON 化は fork ゼロの自前 escape（`\` → `"` → ESC の順が不変条件）。
+  # **jq -e でパースまで確かめる** — 目視や部分一致では壊れた escape が見えない。
+  out=$(printf '%s' '{"columns":120,"tasks":[{"id":"i\"d","label":"say \"hi\" \\ back"}]}' \
+    | /bin/bash subagent-statusline-command.sh)
+  echo "$out" | jq -e . >/dev/null
+  [[ "$(echo "$out" | jq -r .id)" == 'i"d' ]]
+  [[ "$(echo "$out" | jq -r .content)" == 'say "hi" \ back' ]]
+}
+
+@test "Subagent: id/status/cwd の制御文字も潰すこと(label だけでは 6 分の 5 が抜ける)" {
+  # 抽出は 6 フィールド全部を潰す契約なのに、`label` だけ pin すると**残り 5 つを旧実装に戻せる**。
+  # とくに `id` の US はこの版が直した不具合そのもの（桁がずれて model が status の位置に入る）で、
+  # `status` に ESC が残れば注入経路が生きる。3 フィールドまとめて 1 本で見る。
+  out=$(printf '%s' '{"columns":120,"tasks":[{"id":"t\u001fx","label":"job","model":"claude-opus-5","status":"pwn\u001b[31mRED","cwd":"/a\u001fb/.claude/worktrees/wt/src"}]}' \
+    | /bin/bash subagent-statusline-command.sh)
+  echo "$out" | jq -e . >/dev/null
+  [[ "$(echo "$out" | jq -r .id)" == "t x" ]]                        # id の US が空白化されている
+  local c; c=$(echo "$out" | jq -r .content)
+  [[ "$c" == *$'\033[38;5;215m'"5"$'\033[0m'* ]]                     # model が model として着色された
+  [[ "$c" == *"RED"* ]] && [[ "$c" != *$'\033[31m'* ]]               # status の文字は残るが ESC は落ちる
+  [[ "$c" == *"🌲wt"* ]]                                             # cwd も潰した後で worktree 名が取れる
+}
+
+@test "Subagent: 制御文字はクラス全部を潰すこと(USとESCだけでは不正JSONになる)" {
+  # `json_str` が escape するのは `\` `"` ESC だけ。0x01 や 0x07 が残ると**出力が不正 JSON** になり、
+  # Claude Code は agent panel の全行を落とす。「US と ESC を列挙する」実装ではここだけが赤くなる。
+  out=$(printf '%s' '{"columns":120,"tasks":[{"id":"c","label":"a\u0001b\u0007c","model":"claude-opus-5"}]}' \
+    | /bin/bash subagent-statusline-command.sh)
+  echo "$out" | jq -e . >/dev/null
+  [[ "$(echo "$out" | jq -r .content)" == "a b c"* ]]
+}
+
+@test "Subagent: 2 taskならJSONが2行で出て空行を挟まないこと" {
+  # 契約は「上書きする行ごとに JSON 1 行」。**連結して 1 行でも、空行入りでも `jq -r .content` は通る**
+  # ので、行数で pin する（旧実装が `${_out%$'\n'}` で防いでいた bogus な空レコードの再来も見る）。
+  # **`$( )` は末尾改行を落とすのでパイプの中で数える。**
+  local fx='{"columns":120,"tasks":[{"id":"a","label":"x"},{"id":"b","label":"y"}]}'
+  local n empty
+  n=$(printf '%s' "$fx" | /bin/bash subagent-statusline-command.sh | grep -c '')
+  empty=$(printf '%s' "$fx" | /bin/bash subagent-statusline-command.sh | grep -c '^$' || true)
+  [[ "$n" -eq 2 ]] || { printf '行数が %s（期待 2）\n' "$n" >&2; false; }
+  [[ "$empty" -eq 0 ]] || { printf '空行が %s 行ある\n' "$empty" >&2; false; }
+}
+
+@test "Subagent: 起動する外部プロセスがjq1個だけであること" {
+  # 抽出の jq 1 個が床。出力側を `jq -Rc` に戻すと 2 個になる（実測 17.4ms → 11.3ms の差は
+  # この 1 個と here-string 2 個ぶん）。agent panel は行数ぶん呼ばれるのでここを床に保つ。
+  local bin="$BATS_TEST_TMPDIR/subfork-bin" log="$BATS_TEST_TMPDIR/subfork-jq.log"
+  local errf="$BATS_TEST_TMPDIR/subfork.err" out
+  _count_cmd "$bin" jq "$log"
+  # **PATH には jq しか置かない**ので、jq 以外を fork した mutant は `command not found` を
+  # stderr に出して赤くなる（テスト名が「jq 1 個だけ」なので、jq の回数だけでは名前に足りない）。
+  # **stdout も捨てない** — 早期 exit する mutant は jq 0 回でも「1 個以下」で緑になりうる。
+  out=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-opus-5","effort":"high"}]}' \
+    | env -i "PATH=$bin" /bin/bash subagent-statusline-command.sh 2>"$errf")
+  [[ -n "$out" ]] || { printf '出力が空（描画に到達していない）\n' >&2; false; }
+  [[ ! -s "$errf" ]] || { printf 'stderr に出力がある（jq 以外を fork した疑い）:\n%s\n' "$(cat "$errf")" >&2; false; }
+  # **`grep -c .` では数えない** — jq のプログラムは複数行なので、1 起動で 8 行のログになる。
+  # 行頭の `called ` で数える（`_count_cmd` は 1 起動 = 1 個の `called` 行を出す）。
+  local n; n=$(grep -c '^called ' "$log")
+  [[ "$n" -eq 1 ]] || { printf 'jq の起動回数が %s（期待 1）:\n%s\n' "$n" "$(cat "$log")" >&2; false; }
 }
 
 # ============================================================================
