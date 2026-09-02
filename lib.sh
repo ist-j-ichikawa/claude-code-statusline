@@ -29,7 +29,20 @@ readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL
 readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
 # 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
 # 公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
-readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
+readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable 5: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
+# Fable 5.1 以降: 発表記事の図版が Venus / Magellan のレーダー画像なので別パレットにする
+# (**「ヒーローアートワーク」ではない** — 5.1 の発表ページは記事のヒーロー画像を持たず、この
+# レーダー画像と標高マップは本文「Computational analysis and modeling」節の図版。Fable 5.1 自身が
+# Magellan のレーダー画像から Venus の 1/3 の高解像度標高マップを作った、という成果の説明図)
+# (蝶標本は `FABLE_PAL` として **Fable 5 専用に残す** — 旧モデルを選んだ人の画面は変えない)。
+# 実写の明度分位から 1 周ぶんの物語を取る: 暗いレーダー地表 → tan の地形 → amber の空 → 明るい山頂。
+# **アートワークの生値そのままにはしない** — 実測の最暗は `#4a4338` (238 = 純グレー) で黒地では
+# 先頭文字がほぼ沈み、最明は near-white で light テーマで飛ぶ。**知覚明度を 38 ずつ等間隔**に
+# 引き直した (`L = 0.2126R + 0.7152G + 0.0722B` = 相対輝度で 103.5/140.6/179.4/212.1、ΔL +37/+39/+33。
+# 式は `/model-colors` の規則と同じもので **CIE L* ではない**)。**180 は使わない** — すぐ左の `Anthropic` ラベルと同じ色なので
+# 1 塊に見えて要素の境界が消える。214 は Sonnet 4.5 の flat 色と同値だが、スイープ内部の 1 ストップ
+# なので衝突しない (Opus 5 が 173 = Opus 4.x 色を内部に持つのと同じ前例)。
+readonly FABLE51_PAL=(95 137 214 187)            # Fable 5.1: Venus レーダー — brick→tan→amber→cream の 1 回スイープ
 readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ — 濃緑→黄緑
 # Opus 5: 鳥卵標本図版 (支配色が無いので単色を選べない)。Sonnet 5 と同じ「単色相を暗→明にスイープ」構造で、
 # 色相を Opus の coral 一族に取る: dark orange→CORAL→gold。彩度と明度レンジを稼ぐのが要点 —
@@ -176,11 +189,15 @@ model_key() {
 # model coloring。判定は model_key の正規形に対する**完全一致**で、残る順序ルールは
 # 「generic tier の arm を最後に置く」の 1 つだけ。新モデルはパレット 1 行 + arm 1 行で足せる。
 # Fable/Sonnet 5/Opus 5 は公式単色が無いので多色描画 (rainbow/gradient)。
+# **Fable は 2 本ある** — `fable 5` だけが蝶標本の循環で、5.1 と**版が読めない裸の `Fable`**
+# (`/usage` の `limits[]` は `"Fable"` しか返さない) は Venus のスイープに落ちる。既定モデルが
+# 5.1 なので、Line 5 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
 model_color() {
   local _ms="$2" _key
   model_key _key "$2" "${3:-}"
   case "$_key" in
-    fable*)                     rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
+    "fable 5")                  rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
+    fable*)                     gradient "$1" "$_ms" ${FABLE51_PAL[@]+"${FABLE51_PAL[@]}"} ;;
     "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
     "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
     "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
@@ -193,7 +210,9 @@ model_color() {
 
 # fmt_elapsed SECONDS VARNAME — 経過秒を "41m" / "4h" / "27h" にする (no subshell)。
 # 単位は常に 1 つ。**m/h 帯は Line 3 の commit age と同表記だが 24h 以降は分かれる** —
-# 経過は `27h` のまま (何時間回してるかが知りたい)、commit age は `1d` に丸める。
+# 経過は `27h` のまま (セッションを開いている総時間が知りたい)、commit age は `1d` に丸める。
+# **この値はアイドル込みの壁時計** = 「Claude が働いていた時間」ではない。根拠は
+# `docs/internals.md`「Line 4」(実働は `cost.total_api_duration_ms` 側)。
 # **H:MM にはしない** — リセット時刻（`19:31` / `土 16:00`）と桁の形が似て区別できなくなる。
 # 経緯は CHANGELOG 1.60.0（当時は 5h が残り時間 `4:01` で、H:MM が 2 個並ぶ問題だった）。
 fmt_elapsed() {

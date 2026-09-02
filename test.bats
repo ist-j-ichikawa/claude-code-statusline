@@ -74,6 +74,46 @@ _wait_for_file() {
 # `perl -pe` と `sed` の 2 記法が混ざると「どちらを直せばいいか」が読めなくなる (実際に分裂した)。
 _strip() { sed $'s/\033\\[[0-9;]*m//g'; }
 
+# _iso_cfg — **空の設定ディレクトリに隔離する**（このテストの残り全体に効く）。
+# setup() は `CLAUDE_CONFIG_DIR` を unset するので、既定では `CONFIG_DIR` が `$HOME/.claude` に
+# 落ちて**開発者の実 settings.json を読む**。v1.88.0 で `timeFormat` / `timeZone` を読むように
+# なったので、時刻の文字列やモデル別枠を assert するテストは**開発者がその設定を入れた日から
+# 落ちる**（実際に `"timeFormat": "24-hour"` を入れた瞬間に 4 本落ちた）。
+# キャッシュのパス helper も同じ変数から派生するので、export しておけば fixture と描画が揃う。
+_iso_cfg() {
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/isocfg-${1:-x}"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  # **ロケールも落とす** — `%a` / `%p` は `LC_ALL` → `LC_TIME` → `LANG` で決まり、
+  # v1.88.0 でこれもメモの照合キーに入った。開発者の `LANG` 次第で fixture の `loc` が
+  # 食い違って枠が消えるので、隔離するテストでは環境から外して**空**に固定する
+  # (テスト側の `date` も同じ環境なので、期待値の計算とズレない)。
+  unset LANG LC_ALL LC_TIME
+}
+
+# _usage_cache — スクリプトが実際に読み書きする `usage_spend` のパス。**直書きしない** —
+# v1.88.0 でファイル名に config dir が混ざった（複数アカウントで共有すると別アカウントの
+# 課金額が出るうえ、tz/tf の食い違いで毎レンダー curl になる）。**派生は 1 箇所**にしないと、
+# fixture が「スクリプトが読まない場所」に書かれて**テストが空振りで緑**になる。
+# 空振りは既存の肯定テスト（`credits:$2.14` が出ること）が赤くなって気付ける。
+_usage_cache() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  printf '%s' "${CLAUDE_STATUSLINE_CACHE_DIR}/usage_spend${cfg//\//_}"
+}
+
+# _sub_cache — スクリプトが実際に読み書きする `subscription` のパス。**直書きしない**（同上）。
+_sub_cache() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  printf '%s' "${CLAUDE_STATUSLINE_CACHE_DIR}/subscription${cfg//\//_}"
+}
+
+# _reset_cache — スクリプトが実際に読み書きする `resets` のパス。**直書きしない**（同上）。
+# 手で組むと `resets_${HOME//\//_}_.claude` のように区切りを 1 個余らせて別名になり、
+# **スクリプトが読まないファイルに fixture を書く = テストが空振りで緑**になる（実際に踏んだ）。
+_reset_cache() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  printf '%s' "${CLAUDE_STATUSLINE_CACHE_DIR}/resets${cfg//\//_}"
+}
+
 # _wait_for_mtime FILE EPOCH — FILE の mtime が EPOCH より新しくなるまで待つ。
 # 「内容は同じだが touch された」を見たいテスト用（`_wait_for_file` は存在/非空しか見られない）。
 # **刻みは既存 2 ヘルパーと同じ 2 段ラダー**（前半 0.01s）。`{1..N}` のまま — `$(seq)` にすると
@@ -134,6 +174,10 @@ _stub_env() {
   [[ -n "$curl_body" ]] && { printf '#!/bin/bash\n%s\n' "$curl_body" > "$_stub_bin/curl"; chmod +x "$_stub_bin/curl"; }
   printf '%s' '{"claudeAiOauth":{"accessToken":"AAAAtest","subscriptionType":"max"}}' \
     > "$_stub_home/.claude/.credentials.json"
+  # `env -i` の中では `HOME=$_stub_home` なので CONFIG_DIR は `$_stub_home/.claude`
+  local _sc="$_stub_home/.claude"
+  _stub_usage="$_stub_cache/usage_spend${_sc//\//_}"
+  _stub_sub="$_stub_cache/subscription${_sc//\//_}"
   _stub_pre=(env -i "HOME=$_stub_home" "PATH=$_stub_bin" "TMPDIR=$BATS_TEST_TMPDIR"
              "CLAUDE_STATUSLINE_CACHE_DIR=$_stub_cache")
 }
@@ -388,6 +432,40 @@ _count_cmd() {
   [[ "$result" == *"38;5;178mF"*"38;5;172ma"*"38;5;130mb"* ]]
 }
 
+@test "モデル色: Fable 5.1 が Venus パレットのスイープになること(蝶標本は 5 専用)" {
+  result=$(echo '{"model":{"id":"claude-fable-5-1","display_name":"Fable 5.1"},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  # **生のリテラルで assert** する（定数で書くと無断の再調整を検出できない）。
+  # FABLE51_PAL = 95 137 214 187 の 1 回スイープ: 先頭 95 で終端 187。
+  [[ "$result" == *"38;5;95mF"* ]]
+  [[ "$result" == *"38;5;187m1"* ]]
+  # **蝶標本の色が 1 つも混ざらないこと** — 混ざったら arm の順序が壊れている
+  [[ "$result" != *"38;5;178m"* ]]
+  [[ "$result" != *"38;5;66m"* ]]
+}
+
+@test "モデル色: Fable 5 は蝶標本のまま(5.1 の変更に巻き込まれないこと)" {
+  # 旧モデルを選んだ人の画面は変えない。**5 と 5.1 を対で見る** — 片方だけの assert だと
+  # 両方を同じパレットに倒す変更（= 保存したはずの蝶標本を失う）がテストを消さずに通る。
+  result=$(echo '{"model":{"id":"claude-fable-5","display_name":"Fable 5"},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  [[ "$result" == *"38;5;178mF"* ]]
+  [[ "$result" != *"38;5;95m"* ]]
+}
+
+@test "モデル色: display_nameが空でもFable 5.1のidから色が決まること" {
+  # **fixture は `""`（キー欠落ではない）** — 欠落だと jq の `// "Unknown"` が発火して
+  # 画面に出るのは `Unknown` になり、id 由来の表示テキストを一切通らない
+  # (色 assert だけは通るので、キー欠落の fixture では「id 経路を見た」ことにならない)。
+  # 空文字列なら `${model:-$model_id}` が効いて id がそのまま出るので、id だけで
+  # tier が決まることと、その表示テキストの両方を見られる。
+  result=$(echo '{"model":{"id":"claude-fable-5-1","display_name":""},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | /bin/bash statusline-command.sh 2>/dev/null | head -1)
+  local plain; plain=$(printf '%s' "$result" | _strip)
+  [[ "$plain" == *"claude-fable-5-1"* ]]
+  [[ "$result" == *"38;5;95mc"* ]]
+}
+
 @test "モデル色: 大文字混在のdisplay_nameでも正しい色になること" {
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"OPUS 4.6"},"version":"2.1.76","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | head -1)
@@ -538,11 +616,12 @@ _count_cmd() {
 }
 
 @test "Line5: usage-credits キャッシュがあると credits:\$X.XX が表示されること" {
+  _iso_cfg t5
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\037214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\n' > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   [[ "$result" == *'credits:$2.14'* ]]
   # **色と太字も生のリテラルで pin する** — この行で唯一「実際に請求される額」なので、
   # SPEND (明るい gold) を COST (ブロンズ) に取り違えたり `BOLD` を落とした mutant は
@@ -552,24 +631,29 @@ _count_cmd() {
 }
 
 @test "週間枠: limits[] 由来のモデル別枠が名前つきで出ること" {
+  _iso_cfg t0
   # stdin の rate_limits は five_hour/seven_day だけなので、モデル別の週間制限は
   # `/usage` の limits[] から来る (同じ curl の結果なので追加ネットワークゼロ)。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   # 1 行目 = cents、2 行目以降 = 名前 US % US epoch
-  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   # **多色モデルは名前のリテラル一致が効かない** (1 文字ずつ ANSI が入る) ので ANSI を剥がす
   local plain
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" == *"Fable:39%"* ]]
   # 色は Line 1 と同じ model_color。**生のリテラルで assert** する — 定数で書くと
-  # どんな値でも通り、無断の再調整を検出できない (FABLE_PAL の先頭 = 178)
-  [[ "$result" == *'38;5;178m'* ]]
+  # どんな値でも通り、無断の再調整を検出できない。
+  # **`/usage` の `limits[]` は版を持たない裸の `Fable` を返す**ので `model_key` は `fable` に畳み、
+  # generic の arm = Venus (FABLE51_PAL の先頭 = 95) に落ちる。既定モデルが 5.1 なので
+  # Line 1 と揃うのはこの向き（蝶標本に落ちると Line 1 が 5.1 のとき色が食い違う）。
+  [[ "$result" == *'38;5;95m'* ]]
 }
 
 @test "週間枠: 0% のモデル別枠を出さないこと(アカウント全体の week: と揃える)" {
+  _iso_cfg t1
   # `week:` が 0 を落とすのにモデル別枠は 0 を通していた = 同じ行で非対称
   # (理由は statusline-command.sh の `render_scoped_limits` の 0% ガードのコメント)。
   # **非 0 の枠が同時に生き残ること**も見る — `continue` を `break` に書き換えた mutant は
@@ -578,10 +662,10 @@ _count_cmd() {
   # residue として残る壊れ方を検出できない（「リセット時刻も連れてこない」が pin されない）。
   local plain
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\0370\nSonnet 5\0370\037Mon 09:00\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\nSonnet 5\0370\037Mon 09:00\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   plain=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.245","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   # 0% の枠は名前ごと出さない。リセット時刻も連れてこない
   [[ "$plain" != *"Sonnet 5"* ]]
   [[ "$plain" != *"Mon 09:00"* ]]
@@ -591,6 +675,7 @@ _count_cmd() {
 }
 
 @test "Line5: 週間枠は 0% を落とすが 5h は 0% でも出すこと(意図的な非対称)" {
+  _iso_cfg t2
   # 上の 0% ガードのコメントは `week:` 側の `((seven_pct > 0))` を根拠に挙げているのに、
   # **`week:` 側には 0% の fixture が 1 つも無かった** — `> 0` を外してもスイートは緑のまま、
   # コメントだけが嘘になる（2026-08-25 の /simplify 指摘）。ここで実行可能にする。
@@ -627,17 +712,17 @@ _count_cmd() {
   _stub_env limits "$(printf 'printf "%%s" "$(< %s)"' "$fixture")"
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
-  _wait_for_file "$_stub_cache/usage_spend" -s \
+  _wait_for_file "$_stub_usage" -s \
     || { echo "背景 fetch がキャッシュに届いていない = テストが無意味" >&3; return 1; }
   local cache exp
-  cache=$(< "$_stub_cache/usage_spend")
+  cache=$(< "$_stub_usage")
   # 期待するリセット表示は TZ 依存なので、07:00Z を this machine のローカルに直して比べる。
   # **`LC_ALL=C` を付ける** — `_stub_env` は `env -i` で走らせるので**被験体側は C ロケール**になり
   # `%a` が `Sat` になる。テスト側の shell は `LANG=ja_JP.UTF-8` を持つので付けないと `土` と
   # 比べてしまい、**日本語ロケールの機体だけで赤くなる**（本番は CC が LANG 付きで起動するので
   # `土` が出る = これはテスト側の env 非対称で、実装のバグではない）
   exp=$(LC_ALL=C date -j -f '%Y-%m-%dT%H:%M:%S %z' '2026-08-15T07:00:00 +0000' +'%a %H:%M')
-  [[ "$(printf '%s' "$cache" | sed -n '1p')" == "cents,limits"$'\037'"214" ]]   # 1 行目 = タグ US cents
+  [[ "$(printf '%s' "$cache" | sed -n '1p')" == "cents,limits,tz,tf,loc"$'\037'"214"$'\037'$'\037'$'\037' ]]   # 1 行目 = タグ US cents
   [[ "$cache" == *"Fable"$'\037'"39"$'\037'"$exp"* ]]           # 名前 US 丸めた% US 分丸めしたリセット
   [[ "$cache" != *"Broken"* ]]                                  # 型不正の枠は落ちる
   [[ "$cache" != *"Hourly"* ]]                                  # weekly 以外は入らない
@@ -656,18 +741,18 @@ _count_cmd() {
   # `fetch_subscription` と同じく touch で延命し、storm も防いだまま表示を保つ。
   _stub_env usagefail 'exit 1'          # curl は失敗する
   mkdir -p "$_stub_cache"
-  printf 'cents,limits\037214\nFable\03739\037Sat 16:00' > "$_stub_cache/usage_spend"
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\nFable\03739\037Sat 16:00' > "$_stub_usage"
   # cache_stale を必ず踏ませる (300s より古くする)
-  touch -t 202001010000 "$_stub_cache/usage_spend"
+  touch -t 202001010000 "$_stub_usage"
   # 描画は背景 fetch を起こすためだけに 1 回走らせる (出力は見ない)
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
   # 背景の fetch が終わるのを待つ (mtime が新しくなる = touch された)
-  _wait_for_mtime "$_stub_cache/usage_spend" 1600000000 \
+  _wait_for_mtime "$_stub_usage" 1600000000 \
     || { echo "背景 fetch が届いていない = テストが無意味" >&3; return 1; }
   local rec
-  rec=$(< "$_stub_cache/usage_spend")
-  [[ "$rec" == "cents,limits"$'\037'"214"$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]   # 内容は消えていない (touch だけ)
+  rec=$(< "$_stub_usage")
+  [[ "$rec" == "cents,limits,tz,tf,loc"$'\037'"214"$'\037'$'\037'$'\037'$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]   # 内容は消えていない (touch だけ)
 }
 
 @test "週間枠: エラー応答で既存のキャッシュを消さないこと" {
@@ -677,14 +762,14 @@ _count_cmd() {
   # 判定は **`.spend.used.amount_minor` の有無**（パース結果）で行う。
   _stub_env usageerr 'printf "%s" "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}"'
   mkdir -p "$_stub_cache"
-  printf 'cents,limits\037214\nFable\03739\037Sat 16:00' > "$_stub_cache/usage_spend"
-  touch -t 202001010000 "$_stub_cache/usage_spend"          # TTL を必ず踏ませる
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\nFable\03739\037Sat 16:00' > "$_stub_usage"
+  touch -t 202001010000 "$_stub_usage"          # TTL を必ず踏ませる
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
-  _wait_for_mtime "$_stub_cache/usage_spend" 1600000000 \
+  _wait_for_mtime "$_stub_usage" 1600000000 \
     || { echo "背景 fetch が届いていない = テストが無意味" >&3; return 1; }
-  local rec; rec=$(< "$_stub_cache/usage_spend")
-  [[ "$rec" == "cents,limits"$'\037'"214"$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]
+  local rec; rec=$(< "$_stub_usage")
+  [[ "$rec" == "cents,limits,tz,tf,loc"$'\037'"214"$'\037'$'\037'$'\037'$'\n'"Fable"$'\037'"39"$'\037'"Sat 16:00" ]]
 }
 
 @test "週間枠: タグの無いキャッシュ(旧形式)を使わないこと" {
@@ -692,14 +777,14 @@ _count_cmd() {
   # **cents として読まれない**（`214` がタグ位置に来るので不一致）。誤った金額を出すより出さない。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   local j='{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}'
-  printf '214\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend   # 旧形式（タグ無し）
+  printf '214\n' > "$(_usage_cache)"   # 旧形式（タグ無し）
   result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
   [[ "$result" != *'credits:$2.14'* ]]
   [[ "$result" != *':39%'* ]]
   # **タグだけ違って中身は現行と同じ形**のケースも使わない（値の捨て忘れを pin する）
-  printf 'OLD_FMT\037214\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'OLD_FMT\037214\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   result=$(printf '%s' "$j" | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   [[ "$result" != *'credits:$2.14'* ]]
   [[ "$result" != *':39%'* ]]
 }
@@ -713,25 +798,26 @@ _count_cmd() {
   _stub_env usagefmt 'printf "%s" "{\"spend\":{\"used\":{\"amount_minor\":777,\"exponent\":2}}}"'
   mkdir -p "$_stub_cache"
   # 新鮮（TTL 内）だがタグが違うファイルを置く。TTL だけを見る実装なら取り直しは起きない
-  printf 'OLD_FMT\037214\n' > "$_stub_cache/usage_spend"
+  printf 'OLD_FMT\037214\n' > "$_stub_usage"
   echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
   # **mtime では見られない** — 置いたファイルは既に新鮮なので、内容が変わるのを待つ
-  _wait_for_change "$_stub_cache/usage_spend" 'OLD_FMT*' \
+  _wait_for_change "$_stub_usage" 'OLD_FMT*' \
     || { echo "取り直しが走っていない = タグ不一致が stale 扱いになっていない" >&3; return 1; }
-  local rec; rec=$(< "$_stub_cache/usage_spend")
-  [[ "$rec" == "cents,limits"$'\037'"777"* ]]   # 現行タグで上書きされている
+  local rec; rec=$(< "$_stub_usage")
+  [[ "$rec" == "cents,limits,tz,tf,loc"$'\037'"777"$'\037'$'\037'$'\037'* ]]   # 現行タグで上書きされている
 }
 
 @test "週間枠: 壊れた枠の行を落として他の枠とcentsが生き残ること" {
+  _iso_cfg t3
   # 1 枠の形式不正で全体が消えないこと。cents は 1 行目にあるので枠の破損に巻き込まれない。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
   # 2 行目 = % が数値でない(落ちる) / 3 行目 = 正常 / 4 行目 = 名前が空(落ちる)
-  printf 'cents,limits\037214\nBroken\037abc\037Sat 16:00\nFable\03739\037Sat 16:00\n\03712\037Sat 16:00' \
-    > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\nBroken\037abc\037Sat 16:00\nFable\03739\037Sat 16:00\n\03712\037Sat 16:00' \
+    > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   local plain
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" == *"Fable:39%"* ]]      # 正常な枠は出る
@@ -740,14 +826,15 @@ _count_cmd() {
 }
 
 @test "週間枠: 枠のリセットと経過が別行になること" {
+  _iso_cfg t4
   # 枠は dim のリセット時刻で終わるので、経過 (dim の `2h`) と同じ行に並ぶと
   # 「枠の続き」に見えて属し先が消える。**行分割で構造的に起きなくなった**ことを pin する
   # (v1.74.0。以前は同一行で、間に何が挟まるかに依存していた)。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   out=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"cost":{"total_duration_ms":7200000}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | _strip)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   sess=$(printf '%s' "$out" | sed -n '4p')
   lim=$(printf '%s' "$out" | sed -n '5p')
   # 経過はセッション行、枠とそのリセットは制限行 — 同じ行に並ばない
@@ -760,10 +847,10 @@ _count_cmd() {
 
 @test "週間枠: Bedrockではモデル別枠を出さないこと" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1:0","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   local plain
   plain=$(printf '%s' "$result" | _strip)
   [[ "$plain" != *":39%"* ]]
@@ -780,10 +867,10 @@ _count_cmd() {
 
 @test "Line5: Bedrockでは usage-credits を取得も表示もしないこと" {
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\037500\n' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\037500\037\037\037\n' > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"global.anthropic.claude-opus-4-6-v1","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p')   # 制限行（Line 4/5 の分割で credits は 5 行目へ移った）
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   [[ "$result" != *'credits:'* ]]
 }
 
@@ -1988,10 +2075,10 @@ _os_run() {
 @test "行分割: 制限行の順序が 5h → week → モデル別枠 であること" {
   # 「% → リセット」の並びが繰り返されるので、リセット時刻がどの制限のものか対比で読める。
   mkdir -p $CLAUDE_STATUSLINE_CACHE_DIR
-  printf 'cents,limits\0370\nFable\03739\037Sat 16:00' > $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\nFable\03739\037Sat 16:00' > "$(_usage_cache)"
   result=$(echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.80","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":4070908800},"seven_day":{"used_percentage":12,"resets_at":4071427200}}}' \
     | /bin/bash statusline-command.sh 2>/dev/null | sed -n '5p' | _strip)
-  rm -f $CLAUDE_STATUSLINE_CACHE_DIR/usage_spend
+  rm -f "$(_usage_cache)"
   five_pos="${result%%35%*}"
   week_pos="${result%%week:*}"
   scoped_pos="${result%%Fable*}"
@@ -2136,6 +2223,12 @@ _os_run() {
   fab=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-fable-5"}]}' \
     | /bin/bash subagent-statusline-command.sh | jq -r .content)
   [[ "$fab" == *$'\033[38;5;178m'"F"* ]]
+  # Fable 5.1 は Venus スイープ。**subagent は id しか持たない**ので、id だけで 5 と 5.1 を
+  # 撃ち分けられることをここで見る (Line 1 は display_name があるので別経路)
+  fab51=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-fable-5-1"}]}' \
+    | /bin/bash subagent-statusline-command.sh | jq -r .content)
+  [[ "$fab51" == *$'\033[38;5;95m'"F"* ]]
+  [[ "$fab51" != *$'\033[38;5;178m'* ]]
   # id 形式 "claude-opus-5[1m]" → "Opus 5" に整形の上で卵パレットのスイープ (coral 起点)
   o5=$(echo '{"columns":120,"tasks":[{"id":"t","label":"x","model":"claude-opus-5[1m]"}]}' \
     | /bin/bash subagent-statusline-command.sh | jq -r .content)
@@ -2397,6 +2490,96 @@ _os_run() {
   [ -z "$bad" ] || { printf 'PATH の bash で起動している箇所:\n%s\n' "$bad" >&2; false; }
 }
 
+@test "リセット時刻: タグの違うメモを使わず作り直すこと(アップグレード経路)" {
+  _iso_cfg t11
+  # 前の版が書いた `resets` レコード（`e5,t5,e7,t7` の 4 フィールド）を新コードが読む経路。
+  # **この経路のテストが v1.88.0 まで 1 本も無かった** — タグを増やしたのに旧レコードを読むと
+  # 桁がずれて **`tz`/`tf` の位置に時刻文字列が入る** = 「設定が一致した」と誤判定して
+  # 古い書式が居座りうる。タグ不一致で捨てて `date` に落ちることを実測で pin する。
+  local bin="$BATS_TEST_TMPDIR/rubin" log="$BATS_TEST_TMPDIR/rulog" c="$BATS_TEST_TMPDIR/rucache"
+  _count_cmd "$bin" date "$log"
+  mkdir -p "$c"
+  local now e5 e7 j
+  now=$(date +%s); e5=$((now + 7200)); e7=$((now + 300000))
+  # **旧形式**を置く（4 フィールド・タグも旧）。時刻文字列は今と違う値にして「使われたら分かる」形に
+  local rc; rc=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" _reset_cache)
+  printf 'e5,t5,e7,t7\037%s\037OLD5\037%s\037OLD7' "$e5" "$e7" > "$rc"
+  j=$(jq -nc --argjson f "$e5" --argjson w "$e7" \
+    '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:48},rate_limits:{five_hour:{used_percentage:45,resets_at:$f},seven_day:{used_percentage:9,resets_at:$w}}}')
+  local out
+  : > "$log"
+  out=$(printf '%s' "$j" | env PATH="$bin:$PATH" CLAUDE_STATUSLINE_CACHE_DIR="$c" \
+    /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" | tail -1 | _strip)
+  # 旧メモの文字列は使わない
+  [[ "$out" != *"OLD5"* ]]; [[ "$out" != *"OLD7"* ]]
+  # `date` に落ちて正しい時刻を出す（5h + 週間 = 2 回）
+  [[ "$(grep -c -- '-j -r' "$log")" == "2" ]]
+  [[ "$out" == *"$(date -j -r "$e5" +"%H:%M")"* ]]
+  # 現行タグで書き直されている（次回はメモが効く = storm しない）
+  # **`read` の rc は見ない** — レコードに末尾改行が無いので rc=1 でも内容は入る
+  # (`|| true` を落とすとテストごと落ちる。CLAUDE.md の宛名スキャンと同じ罠)
+  local rec=""; IFS= read -r rec < "$rc" || true
+  [[ "$rec" == "e5,t5,e7,t7,tz,tf,loc"* ]]
+  : > "$log"
+  printf '%s' "$j" | env PATH="$bin:$PATH" CLAUDE_STATUSLINE_CACHE_DIR="$c" \
+    /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
+  [[ "$(grep -c -- '-j -r' "$log")" == "0" ]]
+}
+
+@test "cache: config dir の違う2アカウントが subscription を共有しないこと" {
+  # Keychain のサービス名は config dir ごとに変わる = **このレコードはアカウント固有**。
+  # ファイル名に混ぜないと 2 アカウントが共有し、**別アカウントのプラン名とレート枠**
+  # (`Anthropic(Max 20x)`) を出す。TTL が 3600s なので取り違えが最も長く居座るのがここ。
+  local c="$BATS_TEST_TMPDIR/msc" a="$BATS_TEST_TMPDIR/msc-a" b="$BATS_TEST_TMPDIR/msc-b"
+  mkdir -p -m 700 "$c" "$a" "$b"
+  local sa; sa=$(CLAUDE_CONFIG_DIR="$a" CLAUDE_STATUSLINE_CACHE_DIR="$c" _sub_cache)
+  local sb; sb=$(CLAUDE_CONFIG_DIR="$b" CLAUDE_STATUSLINE_CACHE_DIR="$c" _sub_cache)
+  # A だけに「Max 20x」のレコードを置く
+  printf 'type,tier\037max\037default_claude_max_20x' > "$sa"
+  local j='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":5}}'
+  # **NO_NET は使わない** — `fetch_subscription` の NO_NET は Keychain 読みごと止めて空に倒すので、
+  # キャッシュを読む経路を通らず「常に緑」になる（既存の plan テストと同じ理由）。偽 HOME +
+  # 別 config dir で credentials も Keychain も引けない状態にし、**キャッシュだけが情報源**にする。
+  local la lb h="$BATS_TEST_TMPDIR/msc-home"
+  la=$(printf '%s' "$j" | env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_CONFIG_DIR="$a" \
+    CLAUDE_STATUSLINE_CACHE_DIR="$c" HOME="$h" \
+    /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1 | _strip)
+  lb=$(printf '%s' "$j" | env -u CLAUDE_STATUSLINE_NO_NET CLAUDE_CONFIG_DIR="$b" \
+    CLAUDE_STATUSLINE_CACHE_DIR="$c" HOME="$h" \
+    /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" 2>/dev/null | head -1 | _strip)
+  [[ "$la" == *"Max 20x"* ]]        # A では出る
+  [[ "$lb" != *"Max 20x"* ]]        # **B には漏れない**
+  [[ "$lb" == *"Anthropic"* ]]      # 行そのものは出る
+  [[ ! -e "$sb" ]] || [[ "$(< "$sb")" != *"20x"* ]]
+}
+
+@test "cache: config dir の違う2アカウントが usage_spend を共有しないこと" {
+  # `CACHE_BASE` は UID 単位なので、ファイル名に config dir を混ぜないと `CLAUDE_CONFIG_DIR` を
+  # 分けた 2 アカウントが 1 つのレコードを共有する。**害が 2 つある**: ① 別アカウントの
+  # `credits:$` と枠が画面に出る ② tz/tf をレコードに持つので、片方に `settings.json` が
+  # 無いだけで互いに「形式違い」と判定し合い **毎レンダー curl + mv** に落ちる。
+  local c="$BATS_TEST_TMPDIR/mac" a="$BATS_TEST_TMPDIR/mac-a" b="$BATS_TEST_TMPDIR/mac-b"
+  mkdir -p "$c" "$a" "$b"
+  local ua="$c/usage_spend${a//\//_}" ub="$c/usage_spend${b//\//_}"
+  # A だけに課金レコードを置く（B には何も無い）
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\nFable\03739\037Sat 16:00' > "$ua"
+  local j='{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}'
+  local la lb
+  # **ロケールも環境から外す** — `loc` もメモの照合キーなので、開発者の `LANG` 次第で
+  # fixture の空 `loc` と食い違って枠が消える（このテストの主題とは無関係な理由で赤くなる）
+  la=$(printf '%s' "$j" | env -u LANG -u LC_ALL -u LC_TIME CLAUDE_CONFIG_DIR="$a" CLAUDE_STATUSLINE_CACHE_DIR="$c" \
+    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" | tail -1 | _strip)
+  lb=$(printf '%s' "$j" | env -u LANG -u LC_ALL -u LC_TIME CLAUDE_CONFIG_DIR="$b" CLAUDE_STATUSLINE_CACHE_DIR="$c" \
+    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" | tail -1 | _strip)
+  [[ "$la" == *'credits:$2.14'* ]]      # A では出る
+  [[ "$la" == *"Fable:39%"* ]]
+  [[ "$lb" != *'credits:$2.14'* ]]      # **B には漏れない**
+  [[ "$lb" != *"Fable:39%"* ]]
+  # A のレコードは B の描画で書き換えられていない（共有していれば潰し合う）
+  [[ "$(< "$ua")" == "cents,limits,tz,tf,loc"$'\037'"214"* ]]
+  [[ ! -e "$ub" ]] || [[ "$(< "$ub")" != *"214"* ]]
+}
+
 @test "cache: 形式タグの定義と、タグ違いを使わない振る舞いテストが揃っていること" {
   # 形式を変えたのに旧キャッシュを読むと、**既存ユーザーだけが壊れる**（新規インストールでは
   # 正しいので気づけない）。v1.74.0 で 2 つ踏んだ。
@@ -2412,7 +2595,10 @@ _os_run() {
   for t in "Git facts: タグの違うキャッシュを使わず作り直すこと" \
            "plan: タグだけ違う subscription キャッシュを読まないこと" \
            "週間枠: タグの無いキャッシュ(旧形式)を使わないこと" \
-           "週間枠: タグ不一致なら TTL を待たずに取り直すこと(アップグレード経路)"; do
+           "週間枠: タグ不一致なら TTL を待たずに取り直すこと(アップグレード経路)" \
+           "リセット時刻: タグの違うメモを使わず作り直すこと(アップグレード経路)" \
+           "cache: config dir の違う2アカウントが usage_spend を共有しないこと" \
+           "cache: config dir の違う2アカウントが subscription を共有しないこと"; do
     grep -qF "$t" "$tb" || bad+="振る舞いテスト欠落[$t] "
   done
   # ファイル名に版を持たせない（名前は安定させ、判定はタグに寄せる）
@@ -2593,15 +2779,16 @@ _os_run() {
   printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/security"
   chmod +x "$BATS_TEST_TMPDIR/bin/security"
   d="$BATS_TEST_TMPDIR/subcache"
+  local sc; sc=$(CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/fakehome" _sub_cache)
   run env -u CLAUDE_STATUSLINE_NO_NET HOME="$BATS_TEST_TMPDIR/fakehome" \
     PATH="$BATS_TEST_TMPDIR/bin:$PATH" CLAUDE_STATUSLINE_CACHE_DIR="$d" \
     /bin/bash -c 'printf "%s" "{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"'"$BATS_TEST_DIRNAME"'\"}}" | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"'
-  for i in {1..20}; do [[ -f "$d/subscription" ]] && break; sleep 0.1; done
+  for i in {1..20}; do [[ -f "$sc" ]] && break; sleep 0.1; done
   # ファイルを書かないと cache_stale が「不在=stale」で毎レンダー背景 fetch を起こし、
   # Keychain 読みの storm になる (extra-usage が 0 でも必ず書くのと同じ理由)
-  [[ -f "$d/subscription" ]]
+  [[ -f "$sc" ]]
   # タグ + 空値が入る（storm を防ぐために「書く」ことが要件。値は空でよく display は非表示に倒れる）
-  [[ "$(< "$d/subscription")" == "type,tier"$'\037'$'\037'* || "$(< "$d/subscription")" == "type,tier"$'\037' ]]
+  [[ "$(< "$sc")" == "type,tier"$'\037'$'\037'* || "$(< "$sc")" == "type,tier"$'\037' ]]
   [[ "$output" == *"Anthropic"* ]]    # 種別が無くても provider 表示は出る
   [[ "$output" != *"Anthropic("* ]]   # 空の括弧は出さない
 }
@@ -2648,10 +2835,10 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  _wait_for_file "$_stub_sub" -s
   # キャッシュは `形式タグ US 契約種別 US レート枠` (この fixture は rateLimitTier を持たないので枠は空)
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub")
   _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   [[ "$_st" == "enterprise" ]]
   # 2 回目のレンダーでキャッシュから読んで表示に載ること。表記は公式名 (`Enterprise`)
@@ -2673,11 +2860,13 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  # **`CLAUDE_CONFIG_DIR` を渡したので、キャッシュ名も**そちら**由来になる**（v1.88.0）
+  local _stub_sub_cd="$_stub_cache/subscription${alt//\//_}"
+  _wait_for_file "$_stub_sub_cd" -s
   # `pro` = CLAUDE_CONFIG_DIR 側。`max` なら偽 HOME 側を読んでいる
   # (レコードは `形式タグ US 契約種別 US レート枠` なので 2 番目を見る)
   local _cached _st2
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub_cd")
   _st2="${_cached#*$'\037'}"; _st2="${_st2%%$'\037'*}"
   [[ "$_st2" == "pro" ]]
 }
@@ -2696,9 +2885,9 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  _wait_for_file "$_stub_sub" -s
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub")
   _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   # Keychain 由来の `team`。偽 HOME のファイル側は helper 既定の `max` なので、値で経路が分かる
   [[ "$_st" == "team" ]]
@@ -2724,9 +2913,11 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  # **`CLAUDE_CONFIG_DIR` を渡したので、キャッシュ名も**そちら**由来になる**（v1.88.0）
+  local _stub_sub_cd="$_stub_cache/subscription${alt//\//_}"
+  _wait_for_file "$_stub_sub_cd" -s
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub_cd")
   _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   # `team` なら既定アカウントの Keychain を読んでいる = 誤情報。alt 側には credentials が無いので空が正解
   [[ "$_st" != "team" ]]
@@ -2756,9 +2947,11 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" "CLAUDE_CONFIG_DIR=$alt" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  # **`CLAUDE_CONFIG_DIR` を渡したので、キャッシュ名も**そちら**由来になる**（v1.88.0）
+  local _stub_sub_cd="$_stub_cache/subscription${alt//\//_}"
+  _wait_for_file "$_stub_sub_cd" -s
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub_cd")
   _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   # ファイル fallback 側の値。`team` なら Keychain を決め打ち名で引いてしまっている
   [[ "$_st" == "enterprise" ]]
@@ -2780,9 +2973,9 @@ _os_run() {
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   printf '%s' "$j" | "${_stub_pre[@]}" "USER=testuser" /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" >/dev/null
-  _wait_for_file "$_stub_cache/subscription" -s
+  _wait_for_file "$_stub_sub" -s
   local _cached _st
-  _cached=$(<"$_stub_cache/subscription")
+  _cached=$(<"$_stub_sub")
   _st="${_cached#*$'\037'}"; _st="${_st%%$'\037'*}"
   [[ "$_st" == "team" ]]
   # `-s <名前>` の後に `-a <USER>` が来ること（順序は `$3` で名前を pin する既存 2 本と両立させるため）
@@ -2826,8 +3019,9 @@ _os_run() {
   # タグ無し（`max` 単体）はフィールドが空になるので値の捨て忘れを検出できない。
   # **タグだけ違って中身は現行の形**のファイルで pin する（捨て忘れると枠まで出てしまう）。
   local d="$BATS_TEST_TMPDIR/wrongfmtsub"
+  local sc; sc=$(CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome-wrongfmt" _sub_cache)
   mkdir -p -m 700 "$d"
-  printf 'OLD_FMT\037max\037default_claude_max_5x' > "$d/subscription"
+  printf 'OLD_FMT\037max\037default_claude_max_5x' > "$sc"
   local j out
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   # **NO_NET は使わない** — あれは Keychain 読みごと止めるので、タグ検証を外しても契約名が
@@ -2845,8 +3039,9 @@ _os_run() {
   # `Anthropic(Max 5x)` が `Anthropic(Max)` に退化する。この状態が 3600s 続いていた。
   # 形式タグを見るようにしたので、タグの無い中身は使わない（`max` はタグ位置で不一致になる）。
   local d="$BATS_TEST_TMPDIR/upgradesub"
+  local sc; sc=$(CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome-upgrade" _sub_cache)
   mkdir -p -m 700 "$d"
-  printf 'max' > "$d/subscription"          # v1.73.0 の形式（タグ無し）
+  printf 'max' > "$sc"          # v1.73.0 の形式（タグ無し）
   local j out
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   # 偽 HOME で Keychain も credentials も読めない状態にし、「旧ファイルだけが情報源」にする
@@ -2854,14 +3049,15 @@ _os_run() {
     HOME="$BATS_TEST_TMPDIR/nohome-upgrade" /bin/bash statusline-command.sh 2>/dev/null | sed -n '1p' | _strip)
   [[ "$out" != *"Max"* ]]                   # 旧ファイルは読まれない
   [[ "$out" == *"Anthropic"* ]]             # 行そのものは出る (provider は stdin 由来)
-  [[ -f "$d/subscription" ]]                # ファイル自体は残る（NO_NET なので取り直しは走らない）
+  [[ -f "$sc" ]]                # ファイル自体は残る（NO_NET なので取り直しは走らない）
 }
 
 @test "plan: タグの無いキャッシュを読んでも stderr が汚れないこと" {
   # 使わないだけで、エラーも警告も出さないこと（読み手に見えるのは「枠が出ない」だけ）。
   local d="$BATS_TEST_TMPDIR/oldsubcache"
+  local sc; sc=$(CLAUDE_STATUSLINE_CACHE_DIR="$d" HOME="$BATS_TEST_TMPDIR/nohome" _sub_cache)
   mkdir -p -m 700 "$d"
-  printf 'max' > "$d/subscription"          # 旧形式: US 区切りが無い
+  printf 'max' > "$sc"          # 旧形式: US 区切りが無い
   local j
   j=$(jq -nc '{model:{id:"claude-opus-5",display_name:"Opus 5"},workspace:{current_dir:"/tmp"},context_window:{used_percentage:5}}')
   # NO_NET だと種別を空に倒す経路に入ってしまうので、**キャッシュを読む経路を通すため
@@ -2974,8 +3170,8 @@ _os_run() {
   local log="$BATS_TEST_TMPDIR/statlog"
   _count_cmd "$_stub_bin" stat "$log"
   mkdir -p "$_stub_cache/git"
-  printf 'type,tier\037max\037default_claude_max_5x' > "$_stub_cache/subscription"
-  printf 'cents,limits\0370\n' > "$_stub_cache/usage_spend"
+  printf 'type,tier\037max\037default_claude_max_5x' > "$_stub_sub"
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\n' > "$_stub_usage"
   : > "$_stub_cache/git/$(md5 -q -s /tmp)"
   : > "$log"
   printf '%s' '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.198","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
@@ -3000,8 +3196,8 @@ _os_run() {
   _stub_env candmix ': > "$HOME/curl-called"; exit 1'
   # subscription は**置かない** = 欠損（`stat` の先頭の引数。`_stub_env` はキャッシュ dir を作らない）
   mkdir -p "$_stub_cache/git"
-  printf 'cents,limits\0370\n' > "$_stub_cache/usage_spend"
-  touch -t 202001010000 "$_stub_cache/usage_spend"      # 現行タグだが古い
+  printf 'cents,limits,tz,tf,loc\0370\037\037\037\n' > "$_stub_usage"
+  touch -t 202001010000 "$_stub_usage"      # 現行タグだが古い
   : > "$_stub_cache/git/$(md5 -q -s /tmp)"              # 新鮮
   printf '%s' '{"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":10}}' \
     | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
@@ -3144,7 +3340,10 @@ print(r.stdout.split(chr(10))[2])
   local plain
   plain=$(CLAUDE_STATUSLINE_CACHE_DIR="$c" /bin/bash -c 'printf "%s" '"'"'{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"'"$w"'"}}'"'"' | /bin/bash "'"$BATS_TEST_DIRNAME"'/statusline-command.sh"' | sed -n 3p | _strip)
   [[ "$plain" == *"+2"* ]]
-  [[ "$plain" != *"-0"* ]]
+  # **区切りのスペースまで含めて見る** — 裸の `*"-0"*` は last commit の日付
+  # (`09-02T10:24` の `9-02`) に誤ヒットし、毎月 1〜9 日だけ偽の赤になっていた
+  # (2026-09-02 に踏んだ)。削除行は必ず前が空白の独立要素なので " -0" で足りる。
+  [[ "$plain" != *" -0"* ]]
 }
 
 @test "dirty state: コンフリクトが !N (赤) で出ること" {
@@ -3297,6 +3496,7 @@ print(r.stdout.split(chr(10))[2])
 # main script 内の関数なので統合テストで pin する
 # ============================================================================
 @test "リセット時刻: 2回目以降はdateを叩かずメモから出すこと" {
+  _iso_cfg t6
   # リセットの epoch はリセットまで動かないのに、毎レンダー `date` を 2 回叩いていた
   # (実測 `date -j` 1 回 4.15ms、warm render の 15%)。epoch が一致する限り `date` を呼ばない。
   # **偽 `date` を PATH に置いて呼び出し回数を数える** — 表示だけ見ても「メモが効いているか」は
@@ -3330,6 +3530,7 @@ print(r.stdout.split(chr(10))[2])
 }
 
 @test "リセット時刻: 5h制限が絶対時刻(曜日なし)で出ること" {
+  _iso_cfg t7
   # **残り時間ではなく「何時まで」を出す** (v1.74.0、ユーザー選択)。曜日を付けないのが
   # 週間制限 (`土 16:00`) との区別になる。窓が最大 5 時間なので曜日は要らない。
   # `date -j` の出力と突き合わせる — リテラルの時刻を書くとテスト実行時刻に依存して flaky になる。
@@ -3345,6 +3546,7 @@ print(r.stdout.split(chr(10))[2])
 }
 
 @test "リセット時刻: タイムゾーン名を出さないこと(全部ローカル TZ なので冗長)" {
+  _iso_cfg t8
   # v1.78.0 で `JST 19:31` と出していたのをやめた（ユーザー選択）— 画面の時刻は例外なく
   # このマシンのローカル TZ なので、ゾーン名は情報を増やさない。どのゾーンかは docs に書く。
   # **リテラルの `JST` を書かない** — 実行環境の TZ に依存して flaky になるので `date` と比べる。
@@ -3358,6 +3560,7 @@ print(r.stdout.split(chr(10))[2])
 }
 
 @test "リセット時刻: 5h制限が既に過ぎていたら now と出すこと" {
+  _iso_cfg t9
   # 過ぎた epoch を絶対時刻だけで出すと `14:03` が「これから 14:03 にリセット」と読めてしまい、
   # 実際は過ぎているのに「あと 23 時間」と誤読させる (残り時間表記だった頃の `now` を引き継ぐ)。
   # **メモには入れない** — 時間で変わる値を覚えると、過ぎた後も古い時刻が出続ける。
@@ -3372,6 +3575,7 @@ print(r.stdout.split(chr(10))[2])
 }
 
 @test "リセット時刻: 週間制限が既に過ぎていても now と出すこと(5h と非対称にしない)" {
+  _iso_cfg t10
   # 曜日つきの `土 16:00` は数日前でも「これから」と読めるので、5h より誤読が強い。
   # arm を複製していた間はここに `now` が入っていなかった (`/simplify` 指摘)。
   local past out
@@ -3383,6 +3587,278 @@ print(r.stdout.split(chr(10))[2])
   [[ "$out" != *"$(date -j -r "$past" +"%a %H:%M")"* ]]
 }
 
+# --- 時刻表記 (Claude Code 2.1.257+ の timeFormat / timeZone) ---
+# **どのテストも `CLAUDE_CONFIG_DIR` を専用 dir に向ける** — 向けないと `CONFIG_DIR` が
+# `$HOME/.claude` に落ちて**開発者の実 settings.json を読む**ので、そちらに `timeFormat` を
+# 設定した日から結果が変わる (setup が `CLAUDE_CONFIG_DIR` を unset するのは別の理由なので、
+# ここでは各テストが自分で設定する)。
+_tfmt() {   # _tfmt SETTINGS_JSON EPOCH5 [EPOCH7] — Line 5 を _strip して返す
+  local cfg="$BATS_TEST_TMPDIR/tfcfg-$RANDOM"
+  mkdir -p "$cfg"
+  [[ -n "$1" ]] && printf '%s' "$1" > "$cfg/settings.json"
+  local seven="${3:-}"
+  local json='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":16,"resets_at":'"$2"'}'
+  [[ -n "$seven" ]] && json="$json"',"seven_day":{"used_percentage":9,"resets_at":'"$seven"'}'
+  json="$json"'}}'
+  CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$BATS_TEST_TMPDIR/tfc-$RANDOM" \
+    /bin/bash -c "printf '%s' '$json' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" | tail -1 | _strip
+}
+
+@test "時刻表記: timeZone を設定するとリセット時刻がそのゾーンで出ること" {
+  local ep=$(( $(date +%s) + 3750 ))
+  # **リテラルの時刻を書かない** — `TZ=` を通した `date` と突き合わせる
+  local want_utc want_local
+  want_utc=$(TZ=UTC date -j -r "$ep" +"%H:%M")
+  want_local=$(date -j -r "$ep" +"%H:%M")
+  [[ "$(_tfmt '{"timeZone":"UTC"}' "$ep")" == *"$want_utc"* ]]
+  # **ローカルと同じ時刻になる TZ ではテストにならない**ので、両者が違うときだけ排他も見る
+  [[ "$want_utc" == "$want_local" ]] || [[ "$(_tfmt '{"timeZone":"UTC"}' "$ep")" != *"$want_local"* ]]
+}
+
+@test "時刻表記: 不正な timeZone はシステムのゾーンに倒れること(libcの黙ったUTC化を防ぐ)" {
+  # **これが無いとゾーン検証を外す変更が静かに出荷される** — libc は不正な TZ を黙って UTC に
+  # するが、上流 (Intl で検証) はシステムのゾーンに戻す。落とさないと「UTC の時刻をローカルだと
+  # 思って読む」= 誤読になる。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(date -j -r "$ep" +"%H:%M")
+  [[ "$(_tfmt '{"timeZone":"Not/AZone"}' "$ep")" == *"$want"* ]]
+}
+
+@test "時刻表記: timeZone のパストラバーサルと絶対パスを弾くこと" {
+  # **`-e` の実在チェックだけでは足りない** — `..` を挟むと zoneinfo の外や別の入口から
+  # **実在するパスに届く**。`../zoneinfo/UTC` は実在するので `-e` は通り、libc も受理して
+  # ゾーンが変わる = ローカルだと思って UTC を読む経路になる。だから名前の形で先に弾く。
+  # **この値で pin する理由**: `../../etc/passwd` は zoneinfo が symlink (`/var/db/timezone/zoneinfo`)
+  # なので `..` がその先で解決して**実在しない** = `-e` 側が拾ってしまい、形の判定を壊しても緑になる。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want want_utc
+  want=$(date -j -r "$ep" +"%H:%M"); want_utc=$(TZ=UTC date -j -r "$ep" +"%H:%M")
+  [[ "$want" != "$want_utc" ]] || skip "ローカルが UTC なのでこのテストは判別できない"
+  [[ "$(_tfmt '{"timeZone":"../zoneinfo/UTC"}' "$ep")" == *"$want"* ]]      # 形で弾く
+  [[ "$(_tfmt '{"timeZone":"../zoneinfo/UTC"}' "$ep")" != *"$want_utc"* ]]
+  [[ "$(_tfmt '{"timeZone":"/etc/localtime"}' "$ep")" == *"$want"* ]]       # 絶対パス
+  [[ "$(_tfmt '{"timeZone":"../../etc/passwd"}' "$ep")" == *"$want"* ]]     # 実在しない側も一応
+}
+
+@test "時刻表記: 24-hour-utc は Z が付き timeZone より強いこと" {
+  # 上流 `F0e()` は `24-hour-utc` のとき **timeZone を読む前に return する**ので、
+  # 同時に指定されても UTC が勝つ。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(TZ=UTC date -j -r "$ep" +"%H:%M")
+  [[ "$(_tfmt '{"timeFormat":"24-hour-utc"}' "$ep")" == *"${want}Z"* ]]
+  [[ "$(_tfmt '{"timeFormat":"24-hour-utc","timeZone":"Europe/Dublin"}' "$ep")" == *"${want}Z"* ]]
+}
+
+@test "時刻表記: 12-hour で AM/PM 表記になること(先頭ゼロを詰める)" {
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(date -j -r "$ep" +"%-I:%M %p")
+  [[ "$(_tfmt '{"timeFormat":"12-hour"}' "$ep")" == *"$want"* ]]
+}
+
+@test "時刻表記: strftime パターンをそのまま使うこと" {
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(date -j -r "$ep" +"%H|%M")
+  [[ "$(_tfmt '{"timeFormat":"%H|%M"}' "$ep")" == *"$want"* ]]
+}
+
+@test "時刻表記: 週間側は曜日を補うが、パターンが自前で持つなら二重にしないこと" {
+  local e5=$(( $(date +%s) + 3750 )) e7=$(( $(date +%s) + 200000 ))
+  # 曜日を持たないパターン → 週間側に `%a ` を前置する (5h と週間の区別が消えないため)
+  local out wday
+  out=$(_tfmt '{"timeFormat":"%H|%M"}' "$e5" "$e7")
+  wday=$(date -j -r "$e7" +"%a")
+  [[ "$out" == *"$wday $(date -j -r "$e7" +"%H|%M")"* ]]
+  # 自前で `%a` を持つパターン → 前置しない (曜日が 2 回出ない)
+  out=$(_tfmt '{"timeFormat":"%a@%H"}' "$e5" "$e7")
+  [[ "$out" == *"$(date -j -r "$e7" +"%a@%H")"* ]]
+  [[ "$out" != *"$wday $wday"* ]]
+}
+
+@test "時刻表記: 不正な timeZone で stderr に何も漏らさないこと" {
+  # **`2>/dev/null` ではリダイレクト自身の失敗を黙らせられない**（CLAUDE.md の Gotchas）。
+  # `read -r -n 4 _magic < "/usr/share/zoneinfo/$tz"` は存在しない名前で毎レンダー 1 行漏らす。
+  # **ゾーン名の typo（`JST` / `Asia/Toyko`）が一番ありそうな誤設定**なので、静かに漏れ続ける。
+  # `_tfmt` は stdout だけを見るので、この漏れは既存テストでは捕まらない（全緑のまま漏れていた）。
+  local ep=$(( $(date +%s) + 3750 )) cfg cache v err
+  for v in JST Asia/Toyko Not/AZone America zone.tab '../zoneinfo/UTC' /etc/localtime; do
+    cfg="$BATS_TEST_TMPDIR/errcfg-$RANDOM"; cache="$BATS_TEST_TMPDIR/errcache-$RANDOM"; mkdir -p "$cfg"
+    printf '{"timeZone":"%s"}' "$v" > "$cfg/settings.json"
+    err="$BATS_TEST_TMPDIR/err-$RANDOM"
+    CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" CLAUDE_STATUSLINE_NO_NET=1 \
+      /bin/bash -c "printf '%s' '{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":16,\"resets_at\":$ep}}}' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" \
+      >/dev/null 2>"$err"
+    [[ "$(grep -c '' "$err")" == "0" ]] \
+      || { echo "timeZone=[$v] で stderr: $(cat "$err")" >&3; return 1; }
+  done
+}
+
+@test "時刻表記: timeZone にディレクトリや非TZifファイルを渡してもローカルに倒れること" {
+  # **`-e` の実在チェックだけでは足りない。** `/usr/share/zoneinfo` 配下にはディレクトリ
+  # (`America` / `Asia`) とゾーンでない実ファイル (`zone.tab` / `iso3166.tab` / `+VERSION`) がある。
+  # libc はどれも解釈できないので**黙って UTC に落ちる** = 「UTC をローカルだと思って読む」誤読。
+  # 先頭 4 バイトの `TZif` マジックで判定するので、この形は全部落ちる。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want want_utc
+  want=$(date -j -r "$ep" +"%H:%M"); want_utc=$(TZ=UTC date -j -r "$ep" +"%H:%M")
+  [[ "$want" != "$want_utc" ]] || skip "ローカルが UTC なのでこのテストは判別できない"
+  local v
+  for v in America zone.tab +VERSION; do
+    [[ -e "/usr/share/zoneinfo/$v" ]] || continue          # 環境に無い名前は飛ばす
+    [[ "$(_tfmt '{"timeZone":"'"$v"'"}' "$ep")" == *"$want"* ]]
+    [[ "$(_tfmt '{"timeZone":"'"$v"'"}' "$ep")" != *"$want_utc"* ]]
+  done
+  # 正常なゾーンは通ること (判定を厳しくしすぎて全部落とす退化を防ぐ)
+  [[ "$(_tfmt '{"timeZone":"UTC"}' "$ep")" == *"$want_utc"* ]]
+}
+
+@test "時刻表記: %%nn や %En %Ot でも5行契約が壊れないこと(出力側で落とす)" {
+  # **入力側の禁止リストでは閉じない** — `${tf//%n/}` は 1 パスの非重複置換なので `%%nn` が
+  # `%n` に化け、BSD strftime は `E`/`O` 修飾子も受けるので `%En` / `%Ot` が改行タブになる
+  # (どちらも実測で 5 行が 6 行になった)。最後の砦は `format_reset` の出力側。
+  local ep=$(( $(date +%s) + 3750 )) cfg cache lines v
+  for v in '%H:%M%%nnBOOM' '%H:%M%EnBOOM' '%H:%M%OtTAB'; do
+    cfg="$BATS_TEST_TMPDIR/injcfg-$RANDOM"; cache="$BATS_TEST_TMPDIR/injcache-$RANDOM"; mkdir -p "$cfg"
+    printf '{"timeFormat":"%s"}' "$v" > "$cfg/settings.json"
+    lines=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" \
+      /bin/bash -c "printf '%s' '{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":16,\"resets_at\":$ep}}}' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" \
+      | grep -c '')
+    [[ "$lines" == "5" ]] || { echo "書式 [$v] で $lines 行になった" >&3; return 1; }
+  done
+}
+
+@test "時刻表記: settings が object でない有効JSONでも抽出が死なないこと" {
+  # **`fromjson?` が吸うのは構文エラーだけ。** `[]` / `"x"` / `5` / `null` は有効な JSON なので
+  # 通り抜け、`$cfg.timeFormat` が `Cannot index array` で rc=5 = **抽出が丸ごと死ぬ**
+  # (実測で Line 1 が `jq error`、5 行が 3 行になった)。`| objects` で object 以外を落とす。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(date -j -r "$ep" +"%H:%M")
+  local v cfg cache out
+  for v in '[]' '"x"' '5' 'null' '[{"timeZone":"UTC"}]'; do
+    cfg="$BATS_TEST_TMPDIR/objcfg-$RANDOM"; cache="$BATS_TEST_TMPDIR/objcache-$RANDOM"; mkdir -p "$cfg"
+    printf '%s' "$v" > "$cfg/settings.json"
+    out=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" \
+      /bin/bash -c "printf '%s' '{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":16,\"resets_at\":$ep}}}' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'")
+    # モデル名が出る = 抽出が生きている (死ぬと Line 1 が `jq error` になる)
+    [[ "$(printf '%s' "$out" | head -1 | _strip)" == *"Opus 5"* ]] \
+      || { echo "settings=[$v] で Line 1 が壊れた" >&3; return 1; }
+    [[ "$(printf '%s' "$out" | grep -c '')" == "5" ]] \
+      || { echo "settings=[$v] で行数が 5 でない" >&3; return 1; }
+    [[ "$(printf '%s' "$out" | tail -1 | _strip)" == *"$want"* ]]   # 設定なし扱いに倒れる
+  done
+}
+
+@test "週間枠: 書式変更中に取得失敗しても毎描画curlにならないこと(storm)" {
+  # **`touch` だけで済ませられるのは書式が変わっていないときだけ。** ゾーン/書式が変わった直後に
+  # fetch が失敗すると、touch ではレコードの `tz,tf` が古いままなので次の描画でまた
+  # `_tfmt_changed=1` になり、**TTL を無視して毎描画 curl = storm** になる
+  # (Wi-Fi 断中に `/config` で Time format を変える、で踏む)。
+  _stub_env usagetfmt 'exit 1'          # curl は失敗する
+  mkdir -p "$_stub_cache"
+  printf '%s' '{"timeZone":"UTC"}' > "$_stub_home/.claude/settings.json"
+  # 旧レコード: tz/tf は空 = 設定と食い違う。**mtime は新しい**ので TTL では refetch されない
+  printf 'cents,limits,tz,tf,loc\037214\037\037\037\nFable\03739\037Sat 16:00' > "$_stub_usage"
+  echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  # 背景 fetch がレコードを書き直すのを待つ (tz が入る)
+  local i rec=""
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    rec=$(< "$_stub_usage")
+    [[ "$rec" == *"UTC"* ]] && break
+    sleep 0.05
+  done
+  # **cents は残る**（書式に依存しないので消す理由が無い）
+  [[ "$rec" == "cents,limits,tz,tf,loc"$'\037'"214"$'\037'"UTC"$'\037'* ]] \
+    || { echo "レコードが書き直されていない: [$rec]" >&3; return 1; }
+  # **古い書式の枠は持ち越さない**（違う書式の時刻を並べると誤読になる）
+  [[ "$rec" != *"Sat 16:00"* ]]
+  # 2 回目の描画では書式が一致するので curl は呼ばれない = storm しない
+  printf '#!/bin/bash\ntouch "%s/curl-was-called"\nexit 1\n' "$_stub_cache" > "$_stub_bin/curl"
+  chmod +x "$_stub_bin/curl"
+  echo '{"model":{"id":"claude-opus-4-6","display_name":"Opus 4.6"},"version":"2.1.258","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48}}' \
+    | "${_stub_pre[@]}" /bin/bash statusline-command.sh >/dev/null 2>&1
+  sleep 0.4
+  [[ ! -e "$_stub_cache/curl-was-called" ]]
+}
+
+@test "時刻表記: パターンの %n や生改行で5行契約が壊れないこと" {
+  # **書式はユーザーの settings 由来の任意文字列**。`%n` が通ると Line 5 が 2 行に割れて
+  # 「行ごとに配列を組んで単一 printf」の契約が崩れる。
+  local ep=$(( $(date +%s) + 3750 )) cfg cache lines
+  cfg="$BATS_TEST_TMPDIR/injcfg"; cache="$BATS_TEST_TMPDIR/injcache"; mkdir -p "$cfg"
+  printf '%s' '{"timeFormat":"%H:%M%n%nBOOM"}' > "$cfg/settings.json"
+  lines=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" \
+    /bin/bash -c "printf '%s' '{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"},\"context_window\":{\"used_percentage\":48},\"rate_limits\":{\"five_hour\":{\"used_percentage\":16,\"resets_at\":$ep}}}' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" \
+    | grep -c '')
+  [[ "$lines" == "5" ]]
+}
+
+@test "時刻表記: 壊れた settings.json でも抽出が死なないこと" {
+  # `--slurpfile` だと jq が JSON として読むので構文エラーで**抽出が丸ごと落ち、statusline が
+  # 空白になる**。`--rawfile` + `fromjson?` なので「設定なし」に倒れるだけであること。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want out
+  want=$(date -j -r "$ep" +"%H:%M")
+  out=$(_tfmt '{oops' "$ep")
+  [[ "$out" == *"$want"* ]]
+  # Line 1 も生きている (モデル名が出る)
+  local cfg="$BATS_TEST_TMPDIR/badcfg"; mkdir -p "$cfg"; printf '%s' '{oops' > "$cfg/settings.json"
+  local l1
+  l1=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$BATS_TEST_TMPDIR/badcache" \
+    /bin/bash -c "printf '%s' '{\"model\":{\"id\":\"claude-opus-5\",\"display_name\":\"Opus 5\"},\"workspace\":{\"current_dir\":\"/tmp\"}}' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" | head -1 | _strip)
+  [[ "$l1" == *"Opus 5"* ]]
+}
+
+@test "時刻表記: auto と未設定は24時間表記のまま(locale は追わない)" {
+  # 上流の `auto` は locale の hourCycle に従うが、BSD の `date` に「この locale の時刻書式」を
+  # 安全に出させる指定が無い (`%X` は秒まで付く)。**明示的に選ばれた preset だけ追う**方針の pin。
+  local ep=$(( $(date +%s) + 3750 ))
+  local want; want=$(date -j -r "$ep" +"%H:%M")
+  [[ "$(_tfmt '{"timeFormat":"auto"}' "$ep")" == *"$want"* ]]
+  [[ "$(_tfmt '' "$ep")" == *"$want"* ]]
+}
+
+@test "時刻表記: ロケールを変えたらメモを取り直すこと(曜日が英語のまま残らない)" {
+  # メモは epoch → **表示文字列**の写像なので、描画結果を変える入力は全部キーに要る。
+  # `%a` は `LC_ALL` → `LC_TIME` → `LANG` で決まるので、ロケールを入れていないと
+  # **週間枠の曜日が epoch が動くまで（最大 1 週間）英語のまま残る**
+  # （Ghostty の `LANG=en_US.UTF-8` を `.zshenv` で `ja_JP.UTF-8` に変えた実例で踏んだ）。
+  local ep=$(( $(date +%s) + 200000 ))
+  local cfg="$BATS_TEST_TMPDIR/loccfg" cache="$BATS_TEST_TMPDIR/loccache"
+  mkdir -p "$cfg"
+  local json='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":9,"resets_at":'"$ep"'}}}'
+  _go_loc() { printf '%s' "$json" | env -u LC_ALL -u LC_TIME LANG="$1" \
+    CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" CLAUDE_STATUSLINE_NO_NET=1 \
+    /bin/bash "$BATS_TEST_DIRNAME/statusline-command.sh" | tail -1 | _strip; }
+  local want_en want_ja
+  want_en=$(env -u LC_ALL -u LC_TIME LANG=en_US.UTF-8 date -j -r "$ep" +"%a")
+  want_ja=$(env -u LC_ALL -u LC_TIME LANG=ja_JP.UTF-8 date -j -r "$ep" +"%a")
+  [[ "$want_en" != "$want_ja" ]] || skip "この環境では ja/en の曜日が同じで判別できない"
+  [[ "$(_go_loc en_US.UTF-8)" == *"$want_en"* ]]
+  [[ "$(_go_loc en_US.UTF-8)" == *"$want_en"* ]]      # 2 回目 = メモ命中
+  # ロケールだけ変える（epoch は同じ）→ メモを捨てて取り直す
+  [[ "$(_go_loc ja_JP.UTF-8)" == *"$want_ja"* ]]
+  [[ "$(_go_loc ja_JP.UTF-8)" != *"$want_en"* ]]
+}
+
+@test "時刻表記: ゾーンや書式を変えたらメモを取り直すこと" {
+  # メモは epoch → **表示文字列**の写像なので、epoch が一致する限り古い書式が居座りうる。
+  local ep=$(( $(date +%s) + 3750 ))
+  local cfg="$BATS_TEST_TMPDIR/memocfg" cache="$BATS_TEST_TMPDIR/memocache"
+  mkdir -p "$cfg"
+  local json='{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":16,"resets_at":'"$ep"'}}}'
+  _go() { CLAUDE_CONFIG_DIR="$cfg" CLAUDE_STATUSLINE_CACHE_DIR="$cache" \
+    /bin/bash -c "printf '%s' '$json' | /bin/bash '$BATS_TEST_DIRNAME/statusline-command.sh'" | tail -1 | _strip; }
+  printf '%s' '{}' > "$cfg/settings.json"
+  local want_local want_utc
+  want_local=$(date -j -r "$ep" +"%H:%M"); want_utc=$(TZ=UTC date -j -r "$ep" +"%H:%M")
+  [[ "$(_go)" == *"$want_local"* ]]
+  [[ "$(_go)" == *"$want_local"* ]]      # 2 回目 = メモ命中
+  printf '%s' '{"timeZone":"UTC"}' > "$cfg/settings.json"
+  [[ "$(_go)" == *"$want_utc"* ]]        # メモを捨てて取り直す
+  printf '%s' '{"timeFormat":"12-hour","timeZone":"UTC"}' > "$cfg/settings.json"
+  [[ "$(_go)" == *"$(TZ=UTC date -j -r "$ep" +"%-I:%M %p")"* ]]
+}
+
 @test "リセット時刻: resets_at が無い/不正なら何も出さないこと" {
   _l4() { printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"five_hour":{"used_percentage":45'"$1"'}}}' \
     | /bin/bash statusline-command.sh | tail -1 | _strip; }
@@ -3391,6 +3867,7 @@ print(r.stdout.split(chr(10))[2])
 }
 
 @test "週間リセット: 曜日+時刻 (date -j) で出ること" {
+  _iso_cfg t12
   ep=$(( $(date +%s) + 200000 ))
   want=$(date -j -r "$ep" +"%a %H:%M")
   l4=$(printf '%s' '{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":48},"rate_limits":{"seven_day":{"used_percentage":9,"resets_at":'"$ep"'}}}' \

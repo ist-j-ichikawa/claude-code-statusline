@@ -2,8 +2,8 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.87.0-blue)
-![Built against](https://img.shields.io/badge/Claude_Code-2.1.251-purple)
+![Version](https://img.shields.io/badge/version-1.88.0-blue)
+![Built against](https://img.shields.io/badge/Claude_Code-2.1.258-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 ## Overview
@@ -48,7 +48,7 @@ Claude Code の各アシスタント応答後に表示されるカスタムス�
 ### 表示例
 
 ```
-Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.251
+Anthropic(Max 20x)  Opus 5  high  think  fast  default  my-project-41  v2.1.258
 ~/dev/my-project  🌲my-feature  from:develop  (+2 dirs)
 gh:acme/  feature/x  approved  +42 -17 ↑2 08-17T13:13 fix: update logic..
 ⣿⣶   60%/1M  3h  $4.83  prompt_cache:warm hit_ratio:91%
@@ -61,7 +61,24 @@ Line 3 の `gh:acme/` が owner だけなのは、repo 名 (`my-project`) が Li
 
 コンテキストバーの分母は使用率と同じ色で、`%` と一体で読めます (200k のモデルでは `48%/200k`)。
 
-時刻はすべて**このマシンのローカルタイムゾーン**です (Claude Code 自身も専用のタイムゾーン設定を持たず OS のゾーンを使うので、表示は一致します)。例外が無いのでゾーン名は表示していません。
+時刻はすべて**同じタイムゾーン・同じ書式**で表示します。例外が無いのでゾーン名は表示していません。
+
+Claude Code 2.1.257 以降は `settings.json` の **`timeFormat`** と **`timeZone`** に追従します（`/config` の Time format で選んだものがそのまま反映されます）。本体の時計と表記がずれないようにするためだけの機能です。
+
+| 設定 | 5h リセット | 週間リセット |
+|---|---|---|
+| 未設定 / `auto` | `19:31` | `土 16:00` |
+| `"12-hour"` | `7:31 PM` | `土 7:31 PM` |
+| `"24-hour"` | `19:31` | `土 16:00` |
+| `"24-hour-utc"` | `10:31Z` | `土 07:00Z` |
+| `"%H時%M分"`（strftime パターン） | `19時31分` | `土 19時31分` |
+| `"timeZone": "Europe/Dublin"` | そのゾーンの時刻 | 同じ |
+
+- **`auto` は locale まで追いません** — 24 時間表記の locale では上の「未設定」と同じ表示です。12 時間表記の locale で本体が `7:31 PM` を出す場合は、`timeFormat` に `"12-hour"` を明示してください
+- **`"24-hour-utc"` は `timeZone` より優先されます**（Claude Code 本体と同じ挙動）
+- 上の表の `PM` は英語ロケールでの例です。`%p` は端末の `LC_TIME` に従うので、日本語ロケールなら `7:31 午後` になります
+- 読むのは**ユーザー設定** (`~/.claude/settings.json`) だけです。プロジェクト側の `.claude/settings.json` に書いた場合は反映されず、従来どおりローカルの 24 時間表記になります
+- 不正なタイムゾーン名は無視してこのマシンのゾーンに戻します（本体と同じ挙動）
 
 ### 変更の表示
 
@@ -155,6 +172,18 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git ~/.claude
 - `refreshInterval` — アイドル中もレート制限の残り時間や Git 状態を更新します (30 秒推奨)
 - `hideVimModeIndicator` — vim mode は Line 1 先頭に自前描画するので、組み込みの `-- INSERT --` を抑止して二重表示を消します
 - `subagentStatusLine` — agent panel の行を描きます。省略すれば Claude Code 既定の行のままです
+
+**あわせて `timeFormat` の設定をおすすめします**（`statusLine` の中ではなく **top-level**。Claude Code 2.1.257 以降）。
+
+```json
+{
+  "timeFormat": "24-hour"
+}
+```
+
+ステータスラインのリセット時刻は 24 時間表記（`19:31`）です。一方 Claude Code 本体の時計は既定が `"auto"` = **端末の locale 任せ**で、`LANG=en_US.UTF-8` のような環境では `7:31 PM` になります。つまり**何も設定しないと同じ画面に 12 時間表記と 24 時間表記が並びます**（en 系 locale では既定でこうなります）。`"24-hour"` を入れると本体がステータスラインに合わせるので、ステータスラインの表示は 1 文字も変わりません。
+
+12 時間表記が好みなら `"12-hour"` でも揃います（その場合はステータスライン側が `7:31 PM` に追従します。Line 5 が 3 文字ほど伸びます）。**`install.sh` はこのキーを書きません** — 時刻の好みは人によるので、`refreshInterval` / `hideVimModeIndicator`（どちらも二重表示や更新漏れという不具合の回避）とは性質が違うと判断しました。
 
 スクリプトは実行ビット付きでコミットしてあるので `chmod` は不要です。`lib.sh` は両スクリプトが読む共有ライブラリで、同じディレクトリにある必要があります (clone すれば同梱されています)。
 

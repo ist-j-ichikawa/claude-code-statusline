@@ -19,6 +19,11 @@ readonly CACHE_BASE="${CLAUDE_STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statu
 # (過去に 3 箇所を 1 つずつ踏んだ) を機械的に潰せない。メタテストが直書きを禁じている以上、
 # 展開そのものを共有するのが筋。
 readonly CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+# **キャッシュ名に混ぜるキーは `CONFIG_DIR` から 1 回だけ派生させる**（複数アカウントの分離用）。
+# `CACHE_BASE` は UID 単位なので、`CLAUDE_CONFIG_DIR` を分けて同時に走らせると**同じファイルを
+# 共有する**。共有すると ① 別アカウントの `credits:$` や枠が表示に出る ② レコードが
+# 「自分の設定と食い違う」と判定し合って**毎レンダー refetch / mv** になる。fork ゼロの文字列置換。
+readonly CFG_KEY="${CONFIG_DIR//\//_}"
 # securestorage 側も**同じ規則で 1 箇所から派生させる** — `.credentials.json` の置き場と Keychain の
 # サービス名の suffix がここから出る。関数の中でインラインに展開すると `CONFIG_DIR` と同じ
 # 「対応漏れを機械的に潰せない」状態を作り、メタテストも緩めることになる。
@@ -123,8 +128,8 @@ readonly GIT_FMT='branch,detached,repo,remote,ins,del,conf,ahead,behind,age,msg,
 # `set -u` で statusline が丸ごと空白になる。別々なら、タグ編集は「facts を捨てて cold-start」に倒れる。
 readonly GIT_FIELDS='branch detached repo_id remote ins del conflicts ahead behind age msg op'
 readonly SUB_FMT='type,tier'
-readonly USAGE_FMT='cents,limits'
-readonly RESET_FMT='e5,t5,e7,t7'
+readonly USAGE_FMT='cents,limits,tz,tf,loc'
+readonly RESET_FMT='e5,t5,e7,t7,tz,tf,loc'
 
 # git_cache_file DIR — sets _gc (no subshell)
 git_cache_file() {
@@ -186,10 +191,14 @@ get_credentials_blob() {
 }
 
 # --- Subscription type (cached, background refresh) ---
-# 形式の判定はレコード先頭のタグ (`SUB_FMT`) が行うので、**ファイル名は安定**（孤児が出ない）。
+# 形式の判定はレコード先頭のタグ (`SUB_FMT`) が行う（**版はファイル名に持たせない**）。
+# ただし**名前には config dir を混ぜる** — Keychain のサービス名は config dir ごとに変わる
+# = このレコードは**アカウント固有**なのに、`CACHE_BASE` は UID 単位なので混ぜないと
+# `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが**別アカウントのプラン名とレート枠**
+# （`Anthropic(Max 20x)`）を出す。**TTL 3600s なので取り違えが最も長く居座るのがここ**。
 # v1.74.0 は形式を変えたのに名前を据え置き、旧形式を読んだ**既存ユーザー全員が最大 1 時間
 # `Anthropic(Max)`**（枠が欠けた形）になった。v1.74.1 で `-v2` を付け、v1.77.0 でタグ方式へ。
-readonly SUB_CACHE="${CACHE_BASE}/subscription"
+readonly SUB_CACHE="${CACHE_BASE}/subscription${CFG_KEY}"
 readonly SUB_CACHE_MAX_AGE=3600
 
 # fetch_subscription — sets _sub_type (no subshell)
@@ -243,8 +252,15 @@ fetch_subscription() {
 # --- Extra-usage spend (usage-credits, cached, background refresh) ---
 # stdin に無い唯一の課金情報。/usage OAuth エンドポイントの spend.used を cents で取得。
 # `CLAUDE_STATUSLINE_NO_NET` を設定するとネットワーク取得を止める (オフライン/プライバシー用)。
-# 形式の判定は 1 行目のタグ (`USAGE_FMT`) が行うので、**ファイル名は安定**（孤児が出ない）。
-readonly USAGE_CACHE="${CACHE_BASE}/usage_spend"
+# 形式の判定は 1 行目のタグ (`USAGE_FMT`) が行う（**版はファイル名に持たせない**）。
+# ただし**名前には config dir を混ぜる**（理由は下記）。
+# **ファイル名に config dir を混ぜる**（`RESET_CACHE` と同じ理由・同じ `CFG_KEY`）。混ぜないと
+# `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが 1 つの `usage_spend` を共有し、**別アカウントの
+# 実課金額と枠が画面に出る**。加えて tz/tf をレコードに持つようになったので、片方に
+# `settings.json` が無いだけで互いに「形式違い」と判定し合い、**毎レンダー curl + mv** に落ちる
+# （2 アカウント交互 8 レンダーで curl 8 回を実測）。旧 `usage_spend` は参照されなくなるが、
+# `TMPDIR` 配下なので OS の掃除に任せる（孤児 1 個 < 誤表示 + storm）。
+readonly USAGE_CACHE="${CACHE_BASE}/usage_spend${CFG_KEY}"
 readonly USAGE_CACHE_MAX_AGE=300
 
 # fetch_usage_spend — sets _usage_cents と _scoped_limits (background curl; hot path はキャッシュ読みのみ)
@@ -266,15 +282,24 @@ fetch_usage_spend() {
   [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
   # 1 行目 = `タグ US cents`、2 行目以降 = モデル別週間枠。**タグが違えば値を捨てて即取り直す**
   # (SUB_CACHE と同じ作法。TTL を待つと形式変更のたびに 300s 欠ける)
-  local _u_fmt=""
+  local _u_fmt="" _u_tz="" _u_tf="" _u_loc=""
   if [[ -r "$USAGE_CACHE" ]]; then
-    { IFS=$'\037' read -r _u_fmt _usage_cents; IFS= read -r -d '' _scoped_limits; } < "$USAGE_CACHE"
+    { IFS=$'\037' read -r _u_fmt _usage_cents _u_tz _u_tf _u_loc; IFS= read -r -d '' _scoped_limits; } < "$USAGE_CACHE"
   fi
   if [[ "$_u_fmt" != "$USAGE_FMT" ]]; then _usage_cents=""; _scoped_limits=""; fi
+  # **枠のリセット時刻は表示文字列でキャッシュしている**ので、ゾーン/書式が変わったら取り直す。
+  # **落とすのは枠だけ** — `cents` は書式に依存しないので、一緒に消すと `credits:$` が理由なく
+  # 300s 消える（「無表示 < 誤読」は誤読を避ける規則で、消せるものを消す許可ではない）。
+  local _tfmt_changed=""
+  [[ "$_u_tz" == "$_tz" && "$_u_tf" == "$_tf_key" && "$_u_loc" == "$_LOC_KEY" ]] || _tfmt_changed=1
+  if [[ -n "$_tfmt_changed" ]]; then _scoped_limits=""; fi
   if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] \
-     && { [[ "$_u_fmt" != "$USAGE_FMT" ]] || cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; }; then
+     && { [[ "$_u_fmt" != "$USAGE_FMT" ]] || [[ -n "$_tfmt_changed" ]] \
+          || cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; }; then
     (
       local blob token out cents=0 limits="" _usable=""
+      # **失敗しても新しい tz/tf を書けるように、読めた cents を持ち込む**（下の延命分岐で使う）
+      local _keep_cents="$_usage_cents" _tfmt_only="$_tfmt_changed"
       blob=$(get_credentials_blob)
       # here-string ではなくパイプ — bash 3.2 の `<<<` は一時ファイルを作るので、
       # トークンを含む blob をディスクに落とさない (argv 露出を避けるのと同じ理由)
@@ -312,7 +337,7 @@ fetch_usage_spend() {
         # 小数を切り捨てるだけだと表示分が `15:59` / `16:00` で揺れ、300s キャッシュのたびに変わる。
         # 表示は `%H:%M` なので分丸めが必要な精度そのもの。stdin 由来の `week:` は安定した epoch が
         # 来るのでこの問題は無い (揺れるのは `/usage` 側だけ)。
-        limits=$(jq -r '
+        limits=$(jq -r --arg wfmt "$_fmt_seven" '
           (.limits // []) | map(select(
               (type == "object") and (.group? == "weekly")
               and ((.scope?.model?.display_name? // "") != "")
@@ -321,7 +346,7 @@ fetch_usage_spend() {
               (((.resets_at // "") | tostring
                 | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
                 | fromdateiso8601? | (. / 60 | round) * 60
-                | strflocaltime("%a %H:%M")?) // ""))")
+                | strflocaltime($wfmt)? | gsub("[\r\n\t\u001f\u001e]"; "")) // ""))")
           | .[]' <<< "$out" 2>/dev/null)
       fi
       # **必ず何かは書く** — 書かないと cache_stale が (ファイル不在=stale で) 毎レンダー refetch して
@@ -336,10 +361,22 @@ fetch_usage_spend() {
       # 延命は**現行タグのファイルに対してだけ**（`cache_fmt_is` が判定を持つ）。
       # 判定は **パース結果**（`fetch_subscription` と同じ作法）— 応答が空でも、
       # エラー本文が来た場合でも「使えなかった」なら既存値を残す
-      if [[ -z "$_usable" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
+      # **`touch` だけで済ませられるのは「書式が変わっていないとき」だけ。**
+      # ゾーン/書式が変わった直後に fetch が失敗すると、`touch` ではレコードの `tz,tf` が古いまま
+      # なので次の描画でまた `_tfmt_changed=1` になり、**TTL を無視して毎描画 curl = storm** になる
+      # （Wi-Fi 断中に `/config` で Time format を変える、で踏む）。この場合だけ「読めた cents +
+      # 新しい tz/tf + 枠 0 件」でレコードを書き直して、書式の不一致そのものを解消する。
+      # **古い書式の枠は持ち越さない** — 持ち越すと違う書式の時刻を並べる = 誤読になる。
+      if [[ -z "$_usable" && -n "$_tfmt_only" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
+        [[ "$_keep_cents" =~ ^[0-9]+$ ]] || _keep_cents=0
+        printf '%s\037%s\037%s\037%s\037%s\n' "$USAGE_FMT" "$_keep_cents" "$_tz" "$_tf_key" "$_LOC_KEY" \
+          > "${USAGE_CACHE}.tmp-$$" \
+          && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
+      elif [[ -z "$_usable" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
         touch "$USAGE_CACHE"
       else
-        printf '%s\037%s\n%s' "$USAGE_FMT" "$cents" "$limits" > "${USAGE_CACHE}.tmp-$$" \
+        printf '%s\037%s\037%s\037%s\037%s\n%s' "$USAGE_FMT" "$cents" "$_tz" "$_tf_key" "$_LOC_KEY" "$limits" \
+          > "${USAGE_CACHE}.tmp-$$" \
           && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
       fi
     # `>/dev/null 2>&1` は必須 (継承 stdout で捕捉側の EOF が遅れる。fetch_subscription の注記参照)。
@@ -396,8 +433,7 @@ render_scoped_limits() {
 # **ファイル名に config dir を混ぜる** — `CACHE_BASE` は UID 単位なので、`CLAUDE_CONFIG_DIR` で
 # 複数アカウントを併用して同時に走らせると 5h の epoch が違い、互いに上書きし合って
 # **毎レンダー date + mv** になり最適化前より遅くなる。fork ゼロの文字列置換でキーを分ける。
-_rc_key="$CONFIG_DIR"
-readonly RESET_CACHE="${CACHE_BASE}/resets${_rc_key//\//_}"
+readonly RESET_CACHE="${CACHE_BASE}/resets${CFG_KEY}"
 
 # format_reset EPOCH FMT — sets _reset を `date` の FMT で整形した文字列にする (1 fork: date)
 # 5h は `%H:%M`（時刻のみ）、週間は `%a %H:%M`（曜日つき）で、**曜日の有無が両者の区別**になる
@@ -409,6 +445,12 @@ format_reset() {
   # `""` / `null` も数値マッチで落ちるので、別途の空判定は要らない
   [[ "$1" =~ ^[0-9]+$ ]] || return
   _reset=$(date -j -r "$1" +"$2" 2>/dev/null)
+  # **書式は `timeFormat` 由来の任意文字列なので、出力側で必ず制御文字を落とす。**
+  # 入力側の禁止リストは strftime の修飾子に追いつけない（`%%nn` は 1 パス置換をすり抜け、
+  # `%En` / `%Ot` は BSD strftime が改行タブとして解釈する）。**改行が 1 個混ざるだけで
+  # Line 5 が 2 行に割れて 5 行契約が壊れ**、US/RS はリセットメモのレコードを割る。
+  _reset="${_reset//$'\n'/}"; _reset="${_reset//$'\t'/}"; _reset="${_reset//$'\r'/}"
+  _reset="${_reset//$'\037'/}"; _reset="${_reset//$'\036'/}"
 }
 
 # _memo_reset EPOCH CACHED_EPOCH CACHED_TEXT FMT OUTVAR — sets OUTVAR と `_memo_dirty`
@@ -433,27 +475,33 @@ _memo_reset() {
 
 # resolve_resets FIVE_EPOCH SEVEN_EPOCH — sets _five_txt / _seven_txt
 resolve_resets() {
-  local fe="$1" se="$2" c5="" t5="" c7="" t7=""
+  local fe="$1" se="$2" c5="" t5="" c7="" t7="" mtz="" mtf="" mloc=""
   _memo_dirty=0
   # **read の rc は見ない** — 末尾改行が無いので rc=1 でも内容は入る (宛名スキャンと同じ罠)。
   # gate は `-r`（`read < "$f" 2>/dev/null` は入力側の失敗を黙らせられない）。
   local mfmt=""
   if [[ -r "$RESET_CACHE" ]]; then
-    IFS=$'\037' read -r mfmt c5 t5 c7 t7 < "$RESET_CACHE"
+    IFS=$'\037' read -r mfmt c5 t5 c7 t7 mtz mtf mloc < "$RESET_CACHE"
   fi
   # 形式が違えばメモを空扱いにする（`date` に落ちるだけなので誤表示の経路は無い）
-  [[ "$mfmt" == "$RESET_FMT" ]] || { c5="" t5="" c7="" t7=""; }
+  [[ "$mfmt" == "$RESET_FMT" ]] || { c5="" t5="" c7="" t7="" mtz="" mtf="" mloc=""; }
+  # **ゾーンと書式もメモのキーに入れる** — メモは epoch → **表示文字列**の写像なので、
+  # `timeZone` / `timeFormat` を変えた直後に epoch だけ一致すると**古い書式の文字列が居座る**
+  # (次のリセットまで最大 1 週間)。不一致なら捨てて `date` に落ちるだけ = 誤表示の経路は無い。
+  [[ "$mtz" == "$_tz" && "$mtf" == "$_tf_key" && "$mloc" == "$_LOC_KEY" ]] || { c5="" t5="" c7="" t7=""; }
   # **タイムゾーン名は出さない**（v1.79.0 でユーザー選択。v1.78.0 で `JST 19:31` と出していた）—
-  # 画面の時刻は**すべて例外なくこのマシンのローカル TZ** なので、ゾーン名は情報を増やさない。
-  # Claude Code 自身も専用の TZ 設定を持たず OS のゾーンを使うので、両者が食い違うこともない。
-  # 「どのゾーンか」は README / docs に書く（1 度読めば済む話を毎描画に置かない）。
-  _memo_reset "$fe" "$c5" "$t5" "%H:%M" _five_txt
-  _memo_reset "$se" "$c7" "$t7" "%a %H:%M" _seven_txt
+  # 画面の時刻は**すべて例外なく同じゾーン**（既定はこのマシンのローカル、`timeZone` を設定したなら
+  # そのゾーン）なので、ゾーン名は情報を増やさない。「どのゾーンか」は README / docs に書く。
+  # `24-hour-utc` のときはリセット時刻に `Z` が付くので、そこだけは表記自体が UTC を示す
+  # (Line 3 の last commit は書式が固定なので `Z` は付かない。ゾーンは同じ)。
+  _memo_reset "$fe" "$c5" "$t5" "$_fmt_five" _five_txt
+  _memo_reset "$se" "$c7" "$t7" "$_fmt_seven" _seven_txt
   # 書くのはリセットを跨いだ時だけ。atomic mv は 1 fork だが 5h に 1 回なので影響しない
   # (中間ファイル名に PID を入れるのは並走ペインが同じ .tmp を潰し合わないため)。
   if ((_memo_dirty)); then
     [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-    printf '%s\037%s\037%s\037%s\037%s' "$RESET_FMT" "$fe" "$_five_txt" "$se" "$_seven_txt" \
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s' \
+      "$RESET_FMT" "$fe" "$_five_txt" "$se" "$_seven_txt" "$_tz" "$_tf_key" "$_LOC_KEY" \
       > "${RESET_CACHE}.tmp-$$" && mv "${RESET_CACHE}.tmp-$$" "$RESET_CACHE"
   fi
 }
@@ -514,8 +562,29 @@ vim_mode=""
 effort_level="" thinking_enabled="false" fast_mode="false" output_style=""
 cost_cents=0 dur_sec=0
 pc_warm="" pc_hit=""
+tf_setting="" tz_setting=""
 _jq_ok=1
-_jq_out=$(jq -r '
+# **時刻表記の設定はユーザー settings から読む**（Claude Code 2.1.257+ の `timeFormat` / `timeZone`）。
+# **`--rawfile` で渡して `fromjson?` で開ける** — こうすると ① fork が増えない（既存の 1 回に相乗り）
+# ② **壊れた settings.json でも jq が abort しない**。`--slurpfile` だと jq が JSON として読むので
+# 構文エラーで**抽出が丸ごと死に、statusline が空白になる**（settings は人が手で編集するので現実に壊れる）。
+# 生文字列として受けて `fromjson?` で失敗を捨てれば、壊れていても「設定なし」に倒れるだけ。
+# **`fromjson?` だけでは足りない — `| objects` が必須。** `?` が吸うのは構文エラーだけなので、
+# `[]` や `"x"` や `5` のような**有効な JSON で object でない値**は通り抜け、`$cfg.timeFormat` が
+# `Cannot index array` で rc=5 = 抽出が丸ごと死ぬ（実測で Line 1 が `jq error`、5 行が 3 行になった）。
+# 存在しないときは `/dev/null`（`--rawfile` は実在するパスを要求する。空文字列 → `fromjson?` → 既定）。
+#
+# **読むのはユーザー settings 1 枚だけ。** 上流の優先順位は managed > CLI > project local > project >
+# user だが、project 側のパスは `workspace.current_dir` に依存する = **この jq が返す値**なので、
+# jq を起動する前には決まらない（`--rawfile` のパスは起動時に固定される）。`/config` の Display 系は
+# ユーザーファイルに書かれる（上流 settings docs）ので実用上ここで足りる。取りこぼした場合は
+# **従来どおりのローカル 24 時間表記に倒れるだけ**（誤った書式を出す経路にはならない）。
+# 再検討条件は「project 側の `timeFormat` で食い違った」報告。
+# **gate は `-f` + `-r`** — `-r` だけだとディレクトリを通すが、`--rawfile` はディレクトリで
+# rc=2 abort する（= 抽出が丸ごと死ぬ）。`settings.json/` を作れる経路は現実にある。
+_settings_file="${CONFIG_DIR}/settings.json"
+[[ -f "$_settings_file" && -r "$_settings_file" ]] || _settings_file=/dev/null
+_jq_out=$(jq -r --rawfile _settings "$_settings_file" '
   @sh "model=\(.model.display_name // "Unknown")",
   @sh "model_id=\(.model.id // "")",
   @sh "current_dir=\(.workspace.current_dir // ".")",
@@ -549,7 +618,10 @@ _jq_out=$(jq -r '
   @sh "pc_warm=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
   @sh "pc_hit=\(.prompt_cache.hit_ratio // null | if . == null then "" else (. * 100 | round) end)",
   @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)",
-  @sh "now_epoch=\(now|floor)"
+  @sh "now_epoch=\(now|floor)",
+  (($_settings | fromjson? | objects) // {}) as $cfg
+    | @sh "tf_setting=\($cfg.timeFormat // "" | tostring)",
+      @sh "tz_setting=\($cfg.timeZone // "" | tostring)"
 ' 2>/dev/null) || _jq_ok=0
 if ((_jq_ok)); then eval "$_jq_out" || true; fi
 # **0 なら `date` に落とす** — eval が失敗した時に `_NOW=0` を使うと、`cache_stale` は
@@ -557,6 +629,95 @@ if ((_jq_ok)); then eval "$_jq_out" || true; fi
 # 正常経路では追加コストなし（jq が既に値を返している）。
 [[ "$now_epoch" =~ ^[0-9]+$ ]] && ((now_epoch > 0)) || now_epoch=$(date +%s)
 readonly _NOW="$now_epoch"
+
+# --- 時刻表記 (Claude Code 2.1.257+ の timeFormat / timeZone) ---
+# **本体の時計と表記を揃えるためだけの機能**。ゾーン名は依然として出さない（画面のすべての時刻が
+# 同じゾーンなので名前は情報を増やさない）。上流の解決順は `F0e()` の実測に合わせる:
+#   `24-hour-utc` は **`timeZone` を無視して UTC に固定**（上流も timeZone を読む前に return する）
+#   → それ以外は `timeZone` を解決 → preset か、`%` を含めばパターン。
+#
+# **`auto`（既定）は追わない。** 上流の `auto` は locale に従う (Intl の hourCycle) が、BSD の
+# `date` に「この locale の時刻書式」を安全に出させる指定が無い（`%X` は秒まで付く）。24 時間の
+# locale では現状の `%H:%M` と一致するので、**明示的に選ばれた 3 preset とパターンだけを追う**。
+#
+# **TZ は環境変数 1 本で通す** — `export TZ` すれば `date -j` も jq の `strflocaltime`（背景 subshell が
+# 継承する）も同じゾーンになるので、時刻を作る箇所ごとに引数を配らなくて済む。
+# **不正な名前は必ず落とす** — libc は不正な TZ を**黙って UTC にする**が、上流は**システムのゾーン**に
+# フォールバックする（Intl で検証して失敗なら undefined）。落とさないと「UTC で表示された時刻を
+# ローカルだと思って読む」= 誤読を作る。`/usr/share/zoneinfo` の実在チェックで fork ゼロで判定する。
+# `..` と先頭 `/` と先頭 `:` を先に弾く — `../../etc/passwd` は zoneinfo 配下から**実在してしまう**。
+_fmt_five="%H:%M" _fmt_seven="%a %H:%M" _tz="" _loc_key=""
+resolve_time_format() {
+  local tf="$1" tz="$2" utc=""
+  # **書式は必ずサニタイズする** — 値はユーザーの settings から来る任意文字列で、`date` の書式に
+  # そのまま渡る。`%n` / `%t` / 生の改行・タブは **5 行契約を壊し**（Line 5 が 2 行に割れる）、
+  # US/RS はリセットメモのレコードを割って**別フィールドを読ませる**。上流も `stn()` で
+  # サニタイズ + 100 文字で切っているので、長さの上限も合わせる。
+  # **入力側の禁止リストだけでは閉じない** — `${tf//%n/}` は 1 パスの非重複置換なので `%%nn` が
+  # `%n` に化け、BSD strftime は `E`/`O` 修飾子も受けるので `%En` / `%Ot` でも改行タブが出る
+  # (実測で 5 行が 6 行になった)。**最後の砦は `format_reset` と背景 jq の出力側**（下記）で、
+  # ここは「素朴な指定を素朴に落とす」だけの第 1 段。
+  tf="${tf//%n/}"; tf="${tf//%t/}"
+  tf="${tf//$'\n'/}"; tf="${tf//$'\t'/}"; tf="${tf//$'\r'/}"
+  tf="${tf//$'\037'/}"; tf="${tf//$'\036'/}"
+  tf="${tf:0:100}"
+  case "$tf" in
+    24-hour-utc) utc=1 ;;
+  esac
+  # ゾーンの解決（`24-hour-utc` は上流と同じく timeZone を読まずに UTC 固定）
+  if [[ -n "$utc" ]]; then
+    tz="UTC"
+  else
+    case "$tz" in
+      ""|*..*|/*|:*) tz="" ;;
+    esac
+    # **実在チェックだけでは足りない。** `-e` はディレクトリ (`America` / `Asia`) も、ゾーンでない
+    # 実ファイル (`zone.tab` / `iso3166.tab` / `+VERSION`) も通す。libc はどれも解釈できないので
+    # **黙って UTC に落ちる**（実測: `timeZone:"America"` でローカル 12:23 が 03:23 になった）。
+    # **先頭 4 バイトの TZif マジックで判定する** — ディレクトリは `read` が失敗して空になるので
+    # 同時に弾ける。fork ゼロ（`read` は組み込み。`file` も `-f` も要らない）。
+    if [[ -n "$tz" ]]; then
+      local _magic=""
+      # **gate は `-f`（`2>/dev/null` では黙らせられない）** — リダイレクト自身の失敗はシェルが
+      # 報告するので、存在しない名前（`JST` や `Asia/Toyko` のような typo = 一番ありそうな誤設定）で
+      # **毎レンダー stderr に 1 行漏れる**。`-f` はディレクトリと FIFO も同時に外すので
+      # マジック判定の前段として過不足がない（`--rawfile` を `-f` + `-r` で gate したのと同じ形）。
+      if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
+        IFS= read -r -n 4 _magic < "/usr/share/zoneinfo/$tz"
+      fi
+      [[ "$_magic" == TZif ]] || tz=""
+    fi
+  fi
+  _tz="$tz"
+  [[ -n "$_tz" ]] && export TZ="$_tz"
+  # 書式の解決。**曜日の有無が 5h と週間の区別**なので、どの分岐でも週間側だけ `%a` を持つ。
+  case "$tf" in
+    12-hour)     _fmt_five="%-I:%M %p"; _fmt_seven="%a %-I:%M %p" ;;
+    24-hour)     _fmt_five="%H:%M";     _fmt_seven="%a %H:%M" ;;
+    24-hour-utc) _fmt_five="%H:%MZ";    _fmt_seven="%a %H:%MZ" ;;
+    *%*)
+      # パターンは 5h 側はそのまま。週間側は **自前で曜日を持っていなければ** `%a ` を前置する
+      # (持っているのに前置すると曜日が 2 回出る)。
+      _fmt_five="$tf"
+      case "$tf" in
+        *%a*|*%A*) _fmt_seven="$tf" ;;
+        *)         _fmt_seven="%a $tf" ;;
+      esac ;;
+    *)           _fmt_five="%H:%M";     _fmt_seven="%a %H:%M" ;;   # auto / 未知 / 未設定
+  esac
+  # メモの照合に使う正規化済みの値（サニタイズ後の書式指定と、検証を通ったゾーン）
+  _tf_key="$tf"
+  # **ロケールも照合キーに入れる** — メモは epoch → **表示文字列**の写像なので、
+  # 描画結果を変える入力は全部キーに入っていないと古い文字列が居座る。`%a` / `%A` / `%p` は
+  # `date` と jq の `strflocaltime` が **`LC_ALL` → `LC_TIME` → `LANG`** の順で見るので、
+  # ここが変わると `Sat 16:00` が `土 16:00` に変わる。ゾーンと書式だけをキーにしていると、
+  # 週間枠は epoch が動くまで（最大 1 週間）英語の曜日が残る（Ghostty の `LANG=en_US.UTF-8` を
+  # `.zshenv` で `ja_JP.UTF-8` に変えた実例で踏んだ）。**環境変数の読みだけなので fork ゼロ**。
+  _loc_key="${LC_ALL:-${LC_TIME:-${LANG:-}}}"
+}
+_tf_key=""
+resolve_time_format "$tf_setting" "$tz_setting"
+readonly _LOC_KEY="$_loc_key"
 
 # Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
 # Empty unless stdin actually provided a **known forge** repo identity — both call sites use this as the gate.
@@ -1310,8 +1471,10 @@ else
   line_sess+=("${DIM}      -%${RST}")
 fi
 
-# Session elapsed (cost.total_duration_ms) — 長時間 agentic セッション / 並走運用で「何時間回してる?」
-# を即答するため。Claude Code に常駐表示が無く、stdin に既にあるので fork ゼロ。
+# Session elapsed (cost.total_duration_ms) — 長時間 agentic セッション / 並走運用で「このセッションを
+# 何時間開いているか」を即答するため。Claude Code に常駐表示が無く、stdin に既にあるので fork ゼロ。
+# **実体はアイドル込みの壁時計**（席を外していた分も足す）。**「何時間回してる?」と読ませない** —
+# 実働時間は `cost.total_api_duration_ms` 側。実測の根拠は `docs/internals.md`「Line 4」に 1 本化。
 # 60 秒未満は出さない (開始直後の "0m" はノイズ)。フィールド欠落 (旧 Claude Code) も 0 で非表示に倒れる。
 if ((dur_sec >= 60)); then
   fmt_elapsed "$dur_sec" _dur
