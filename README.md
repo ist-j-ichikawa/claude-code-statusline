@@ -2,9 +2,15 @@
 
 j-ichikawa's custom statusline for [Claude Code](https://code.claude.com/) CLI.
 
-![Version](https://img.shields.io/badge/version-1.89.0-blue)
+![Version](https://img.shields.io/badge/version-1.90.0-blue)
 ![Built against](https://img.shields.io/badge/Claude_Code-2.1.258-purple)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Status](https://img.shields.io/badge/status-frozen-lightgrey)
+
+> **v1 はここで凍結しました（2026-09-03）。** Claude Code **2.1.258** までの追従で止め、以後は機能追加も定期的な上流追従も行いません。
+> **利用者に必要な操作はありません。** ただし **v1.90.0 に上げると 2 つ表示が変わります**（v1.89.0 の不具合修正）— サブエージェント行のモデル名から日付が落ち（`Haiku 4.5.20251001` → `Haiku 4.5`）、説明文に制御文字が混ざっても行が崩れなくなります。**それ以降は表示が変わることはありません。**
+> **不具合の報告は受け付けます。** 新しい Claude Code で表示が壊れた・要望がある、という声があれば凍結を解いて直します（[issues](https://github.com/ist-j-ichikawa/claude-code-statusline/issues)）。
+> ゼロから作り直す **v2** を同じリポジトリで検討中です（実装を `bun` に、行を 3 行に、キャッシュを全廃する方向。細部は未決）。v1 の設定を変える必要は生じません。
 
 ## Overview
 
