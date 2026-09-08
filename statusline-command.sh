@@ -1,33 +1,388 @@
 #!/bin/bash
-# Claude Code Statusline — see README.md for details
-# https://code.claude.com/docs/en/statusline
+# v2/statusline.sh — 並列セッションで困る 3 つ（「これはどのセッションか」「どのアカウントに
+# 課金されるか」「枠の残り」）に絞った 3 行。**デザインは v1 から拝借**（色と要素の作法は
+# `../lib.sh` を source して共有）。
+#
+# **Built against Claude Code 2.1.260**（`experiments/upstream/2.1.260/` に教典 3 つを snapshot 済み）。
+# 2.1.259 → 260 の実質差分は `prompt_cache` に `last_miss_cause` / `miss_causes` が増えただけで、
+# **このスクリプトが読むフィールドは 1 つも変わっていない**（消滅・改名なしを diff で確認）。
+# **これはアルファ = 今の痛みを止めるためのもので、ゼロベースの v2 設計はこの後**。
+# だから要素を増やすより「載せない理由」を先に固める（`experiments/handoff.md` の未決）。
+#
+#   1 行目: provider(契約プラン) · 宛名 · モデル(tier 色) · effort · 版
+#            ← どのセッションか / どのアカウントに課金されるか
+#   2 行目: パス · 🌲worktree · ブランチ · 進行中の操作 · conflicts · ahead/behind
+#            ← どこで何を触っているか / いま git の途中か
+#   3 行目: コンテキスト・課金額・cold(セッション) │ 5h・週間・モデル別枠(アカウント)
+#            ← いくら使ったか / あとどれだけ
+#
+# v1 との違い（ゼロから作る方針の第 1 歩）:
+#   - **git のキャッシュを持たない**。同期で **1 回**だけ呼ぶ（v1 は約 10 回 + 5 秒キャッシュ +
+#     背景更新で、代償として表示が最大 5 秒古かった）。本体のデバウンス 300ms に対して十分速い。
+#     **キャッシュはアカウント情報の 1 個だけ**（下記）。git・stdin 由来の要素は一切持たない。
+#   - **変更行数 `+42 -17` は出さない** — 2026-09-04 の本体アップデートで diff パネルが付き、
+#     `5 files changed +2 -26` を出すようになった（`/diff` でトグル、パネルが開いている間は常時見える）。
+#     本体が出すものは載せない。**`ahead/behind` は残す** — パネルに無い情報で、しかも
+#     `status --porcelain=v2 -b` の `branch.ab` にタダで乗ってくる（プロセスは増えない）。
+#   - **ネットワークと Keychain に触る要素が 3 つだけある**（2026-09-04 に追加）— 契約プラン・
+#     モデル別週間枠・（provider は env と `model.id` だけなのでタダ）。**同期パスは触らない**:
+#     hot path はキャッシュを読むだけで、取得は背景 subshell 1 本。**Keychain の blob 1 回で
+#     契約プランと OAuth token の両方が取れる**ので、キャッシュも背景も 1 本で足りる。
+#   - 5h と週間の枠は stdin の `rate_limits` に、セッションの課金額は stdin の
+#     `cost.total_cost_usd` に来る（**この 2 つは fork もネットワークもゼロ**）。
+#   - **落としたのは実課金の `credits:$` だけ** — このアカウントは `/usage` の応答が
+#     `spend.enabled: false` / `can_purchase_credits: false` で **usage credits が構造的に
+#     使えない**ので、出しても永久に空（2026-09-04 実測）。プラン名とモデル別週間枠は出す。
+#   - **US 区切りと形式タグを持つのはアカウントのレコード 1 つだけ**。stdin の抽出は 1 回の
+#     jq で、あとは bash の文字列操作だけ。
+#   - `git` は **optional locks を飛ばす**（公式 `/statusline` プロンプトのガイドライン）。
+#   - untracked は数えない（`-uno`）。大きいリポでコストがサイズに比例するのを避ける
+#     （5878 ファイルのリポで 41.3 → 16.8ms、サイズ非依存になる）。**2026-09-04 に「数えない」で
+#     決着**（累積なので `/cost` の `Total code changes` から取り戻せる = 物差しで落ちる）。
 set -uo pipefail
+# ── 色と fork-free ヘルパー（旧 lib.sh を取り込んだもの）────────────────────
+# **1 ファイルで完結させる**（2026-09-08）。v1 を消して release tag で版を分ける方針にしたので、
+# `source` で 2 本に割る理由が無くなった。**取り込みは丸ごと** — 旧 `lib.sh` の 63%（12 関数 /
+# 31 定数）は v2 が実際に使っており、選択抽出すると 1 行関数（`gradient` / `rainbow`）の範囲を
+# 誤る。v1 専用だったもの（`osc8` / `editor_url` / `fmt_elapsed` / vim 色 / `FORK_GLYPH` 等）は
+# この下では落としてある。
+readonly RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
+readonly CTX_OK=$'\033[38;5;82m'
+readonly DIM=$'\033[2m'
+readonly ANTH=$'\033[38;5;180m' BDCK=$'\033[38;5;72m' VTEX=$'\033[38;5;33m' FNDY=$'\033[38;5;39m'
+readonly GIT=$'\033[38;5;202m'
+# 変更行数と ahead/behind の色。**ANSI 31/32 を使わない** — あれは端末テーマがマップし直すので、
+# 実測では olive (#b5bf70) と brick (#c36c68) に化けて「緑と赤」に見えなかった。
+# **値は GitHub Primer の diff トークン（ダークモード）に合わせる** — `--fgColor-success`
+# `#3fb950` / `--fgColor-danger` `#f85149`（ユーザー提示。2026-08-17）。**ダーク基準**にするのは
+# statusline が載る端末が暗いから（Primer ライトの `#1a7f37` / `#cf222e` は暗い地では沈む）。
+# 256 色の最近傍を計算して採用: add → 71 `#5faf5f`（Δ37）/ del → 203 `#ff5f5f`（Δ27）。
+# 最初はスクリーンショットから採色して del=131 `#af5f5f` にしていたが、あれは**アンチエイリアスで
+# 背景と混ざった値**（Δ78）で、実際のトークンより暗く濁っていた。
+# **アラームの赤 (ANSI 31) とは分ける** — `!N` コンフリクト / detached / コンテキスト 90%+ /
+# 遅れた版は「問題」、`+N -N ↑N ↓N` は「量」なので、色の役割を混ぜない。
+readonly DIFF_ADD=$'\033[38;5;71m'    # GitHub dark --fgColor-success 相当 (#5faf5f)
+readonly DIFF_DEL=$'\033[38;5;203m'   # GitHub dark --fgColor-danger  相当 (#ff5f5f)
+readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL の両方がここから派生する
+readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
+# 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
+# 公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
+readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable 5: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
+# Fable 5.1 以降: 発表記事の図版が Venus / Magellan のレーダー画像なので別パレットにする
+# (**「ヒーローアートワーク」ではない** — 5.1 の発表ページは記事のヒーロー画像を持たず、この
+# レーダー画像と標高マップは本文「Computational analysis and modeling」節の図版。Fable 5.1 自身が
+# Magellan のレーダー画像から Venus の 1/3 の高解像度標高マップを作った、という成果の説明図)
+# (蝶標本は `FABLE_PAL` として **Fable 5 専用に残す** — 旧モデルを選んだ人の画面は変えない)。
+# 実写の明度分位から 1 周ぶんの物語を取る: 暗いレーダー地表 → tan の地形 → amber の空 → 明るい山頂。
+# **アートワークの生値そのままにはしない** — 実測の最暗は `#4a4338` (238 = 純グレー) で黒地では
+# 先頭文字がほぼ沈み、最明は near-white で light テーマで飛ぶ。**知覚明度を 38 ずつ等間隔**に
+# 引き直した (`L = 0.2126R + 0.7152G + 0.0722B` = 相対輝度で 103.5/140.6/179.4/212.1、ΔL +37/+39/+33。
+# 式は `/model-colors` の規則と同じもので **CIE L* ではない**)。**180 は使わない** — すぐ左の `Anthropic` ラベルと同じ色なので
+# 1 塊に見えて要素の境界が消える。214 は Sonnet 4.5 の flat 色と同値だが、スイープ内部の 1 ストップ
+# なので衝突しない (Opus 5 が 173 = Opus 4.x 色を内部に持つのと同じ前例)。
+readonly FABLE51_PAL=(95 137 214 187)            # Fable 5.1: Venus レーダー — brick→tan→amber→cream の 1 回スイープ
+readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ — 濃緑→黄緑
+# Opus 5: 鳥卵標本図版 (支配色が無いので単色を選べない)。Sonnet 5 と同じ「単色相を暗→明にスイープ」構造で、
+# 色相を Opus の coral 一族に取る: dark orange→CORAL→gold。彩度と明度レンジを稼ぐのが要点 —
+# 実測に忠実な低彩度の tan/olive はターミナルでくすんで「グラデーション」に見えなかった (v1.50.0 で差し替え)。
+# 両端とも mid/high 彩度なので light テーマでも飛ばない (near-white の 216/223 は不可)。
+# **ストップは知覚明度で 30 以上離す** — 隣接ストップの明度差が 10 未満だと見分けられず、スロットの無駄に
+# なる (v1.53.0 までの 5 ストップ版は 130/166 と 173/209 が各 8.5 差でほぼ同色。実質 3 段だった)。
+readonly OPUS5_PAL=(130 $CORAL_N 215)
+readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
+# 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
+# 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
+# 「注意すべき状態」の語彙（detached / conflicts / 削除行 / behind / コンテキスト 90%+）なので、
+# 新しい色相を増やさずにアラームの強さだけを借りる。Line 1 に赤はこれが初出。
+# 非ブランド色なので可読性で調整して良い（もっと強くするなら 196、弱めるなら 214）。
+readonly VEROLD="$RED"
+# output style (`/output-style`) — `default` 以外の時だけ出す。**白 = Line 1 に唯一残っていた
+# 「色相を持たない」枠**（ユーザー選択 2026-08-17）。最初の light orchid (176) は Agent 名の
+# ピンク (213) とほぼ同色で、`claude agents` 経由のセッションで実際に見分けが付かなかった。
+# 色相が無いので**将来モデル色が増えても衝突しない**のが白を選ぶ理由（think 117 / fast 190 の
+# 隣に寒色や黄緑を足すと系統が混む）。宛名の無色（既定前景色）とは Agent 名を挟んで離れて並ぶ。
+readonly OSTYLE=$'\033[38;5;231m'
+readonly BOLD=$'\033[1m'
+# effort は **Claude Code 自身の `/effort` ピッカーの配色に合わせる**（実測 2026-08-15）。
+# 単色だった頃はレベルが上がっても見た目が変わらず、`high` と `max` を色で区別できなかった。
+# low=gold → medium=green → high=薄紫 → xhigh=濃紫 → max=多色 のランプで、
+# **上がるほど彩度と派手さが増す**ので位置関係が色だけで読める。非ブランド色なので調整可。
+readonly EFFORT_LOW=$'\033[38;5;178m'      # gold
+readonly EFFORT_MED=$'\033[38;5;71m'       # green
+readonly EFFORT_HIGH=$'\033[38;5;105m'     # 薄紫（periwinkle）
+# **リテラルは 1 箇所** — 既定/未知のレベルは high と同じ薄紫。両方に 105 を書くと
+# 片方だけ調整したときに「未知は high と同色」という意図が黙って崩れる
+readonly EFFORT="$EFFORT_HIGH"
+readonly EFFORT_XHIGH=$'\033[38;5;99m'     # 濃紫（violet）
+# max だけ多色。ピッカーでも `m`/`a`/`x` が紫→桃→橙に振られているので、順序に意味がある
+# gradient（1 回スイープ）で描く。
+readonly EFFORT_MAX_PAL=(99 170 209)
 
-# Shared colors + presentation helpers (also used by subagent-statusline-command.sh)
-# 相対起動 (bash statusline-command.sh) では BASH_SOURCE にスラッシュが無く %/* が縮まないため "." に fallback
-_selfdir="${BASH_SOURCE%/*}"; [[ "$_selfdir" == "$BASH_SOURCE" ]] && _selfdir="."
-source "$_selfdir/lib.sh"
+readonly THINK=$'\033[38;5;117m'
+readonly FAST=$'\033[38;5;190m'  # fast mode — greenyellow, 非ブランド(速度感)。fast は Opus 専用なので model coral と同一行でも色相が離れ衝突しにくい。EFFORT/THINK 同様 tunable
+readonly SPEND=$'\033[38;5;220m'  # usage-credits の**実課金額** (画面ラベルは `credits:`) — 明るい gold, 非ブランド
+# セッションコスト — 落ち着いた金色 (ブロンズ)。**SPEND と同じ色相で明度だけ下げる**のが要点:
+# 同系色なので「どちらも金額」と読め、明度差で「実課金 (明) / 参考値 (暗)」の序列が付く。
+# v1.74.0 まで無色だったのは SPEND と隣接して混同するからで、Line 4/5 の行分割で
+# コスト (セッション行) と credits (アカウント行) が別行になり、その前提が消えた。
+readonly COST=$'\033[38;5;136m'
+readonly DRAFT=$'\033[38;5;245m'  # PR review_state=draft — GitHub の draft バッジ準拠のニュートラルグレー, 非ブランド
+# vim mode badges: bold + bg color + black fg — louder than Claude Code's footer "-- INSERT --" hint.
+# **vim 側の慣習に合わせる: INSERT=青 / VISUAL=橙**。lualine の gruvbox_dark（`insert.a.bg`
+# = `#83a598` 青 / `visual.a.bg` = `#fe8019` 橙）と vim-airline 既定が一致する流儀で、
+# 256 色の近似は 109 / 208。**緑にしない** — 緑は lightline 系（lualine 16color）では INSERT だが、
+# gruvbox/airline では NORMAL または COMMAND の色なので、モードを誤読させる。
+# NORMAL は非表示なので緑は使わない（REPLACE も Claude Code の `vim.mode` に無い）。
+readonly VIM_INSERT=$'\033[1;30;48;5;109m'  # bold black on gruvbox blue (INSERT)
+readonly VIM_VISUAL=$'\033[1;30;48;5;208m'  # bold black on gruvbox orange (VISUAL / V-LINE)
 
-# --- Main-only constants ---
-# キャッシュはユーザー単位に隔離する。固定の共有パスだと (1) 共有 Mac の別ユーザーが 700 の
-# ディレクトリに書けず git 行が永久 cold-start + usage_spend も書けず毎レンダー refetch (curl storm)、
-# (2) テストが本物のキャッシュを触ってライブ statusline に偽の値を出す。macOS の TMPDIR は既に
-# ユーザー単位。CLAUDE_STATUSLINE_CACHE_DIR はテスト/install の密閉 seam。
-readonly CACHE_BASE="${CLAUDE_STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statusline-$UID}"
-# 設定ディレクトリは 1 箇所で解決する — `.credentials.json` / `sessions/` / `cache/changelog.md` /
-# リセットのメモキーが全部ここから派生する。展開を各所に複製すると「CLAUDE_CONFIG_DIR 対応漏れ」
-# (過去に 3 箇所を 1 つずつ踏んだ) を機械的に潰せない。メタテストが直書きを禁じている以上、
-# 展開そのものを共有するのが筋。
+# Claude Code worktree レイアウトの marker（外部契約文字列）。両 statusline が参照し drift を防ぐ。
+readonly WT_MARKER='/.claude/worktrees/'
+
+# `/fork` が session_name 末尾に付ける U+2442 (OCR FORK)。2.1.220 で実測。
+# **8 進エスケープで書く** — 生グリフをソースに置くと Write/Edit で化けうる (US 区切りと同じ理由)。
+# `$'⑂'` は bash 4+ 専用なので使えない。
+readonly FORK_GLYPH=$'\342\221\202'
+
+# --- Helpers (fork-free: printf -v / [[ ]] only) ---
+has_val() { [[ -n "$1" && "$1" != "null" ]]; }
+
+# osc8 URL TEXT VARNAME — sets VARNAME to OSC 8 hyperlink (no subshell)
+# URL 側だけ percent-encode する (表示テキストの `;` 等はそのまま出す)。対象は 4 文字で、
+# **`%` を最初に**やる — 後回しにすると `feat/a%3Bb`（git 上は合法）が `feat/a;b` と同じ出力に
+# 畳まれて別ブランチへリンクする。`;` は OSC 8 の `OSC 8 ; params ; URI ST` のパラメータ区切り、
+# `#`/`?` は URI の fragment/query 区切りで、どれも git のブランチ名と macOS のパスには入りうる
+# (`#` を残すと `/Users/x/notes#1/repo` が `/Users/x/notes` を開く = 無言で別の対象を指す)。
+# 空白と非 ASCII は生のまま出す — 現に動いており、encode 側に倒すと percent-decode しない端末で
+# 今動いているリンクを壊す。壊れた実測が出たら対象に足す。
+osc8() {
+  local _u="${1//%/%25}"
+  _u="${_u//;/%3B}"; _u="${_u//#/%23}"; _u="${_u//\?/%3F}"
+  printf -v "$3" '\033]8;;%s\a%s\033]8;;\a' "$_u" "$2"
+}
+
+# editor_url PATH VARNAME — sets VARNAME to file:// URL for OSC 8 hyperlink (no subshell)
+editor_url() { printf -v "$2" 'file://%s' "$1"; }
+
+# rainbow  VARNAME TEXT COLOR... — 文字ごとにパレットを循環。順序に意味が無いパレット向け
+#   (Fable: 蝶標本の多色を均等に出したい)。
+# gradient VARNAME TEXT COLOR... — パレットを1回スイープ。順序に意味があるパレット向け
+#   (Sonnet 5 / Opus 5: 暗→明の方向が絵になる)。先頭文字は必ずパレット先頭色になるが、
+#   それ以外の色位置は文字数依存なので特定の語には固定できない。
+# どちらも fork ゼロ (printf -v)。パレット未指定なら無色テキストへ degrade —
+# 呼び出しは ${PAL[@]+"${PAL[@]}"} で展開すること (bash 3.2 の set -u は空配列の "${a[@]}" で即死し、
+# _paint の空パレットガードに到達する前に statusline 全体が空白になる)。
+rainbow()  { _paint 0 "$@"; }
+gradient() { _paint 1 "$@"; }
+_paint() {
+  local _sweep=$1 _vn="$2" _txt="$3" _out="" _i _len=${#3} _idx
+  shift 3                          # 以降 "$@" = パレット (変数名は先に _vn へ退避済み)
+  local _pal=("$@") _n=$#
+  (( _n == 0 )) && { printf -v "$_vn" '%s' "$_txt"; return; }
+  # sweep の分母。1 文字なら 0 になるので下で if でガードする — **三項演算子は使えない**:
+  # bash 3.2 は `((cond ? a/0 : 0))` で未選択の分岐も評価して "division by 0" を出し、
+  # 呼び出し側の変数が未設定のまま set -u に当たって statusline が丸ごと空白になる (bash 4+ は平気)
+  local _den=$(( 2 * (_len - 1) ))
+  for ((_i=0; _i<_len; _i++)); do
+    # sweep の添字は四捨五入。切り捨てだと最終ストップが末尾 1 文字にしか載らず
+    # (35 字の Bedrock id で 17/17/1 字)、一番明るい色がほぼ見えなくなる
+    if   ((_sweep && _den > 0)); then _idx=$(( (2 * _i * (_n - 1) + _len - 1) / _den ))
+    elif ((_sweep));             then _idx=0
+    else                              _idx=$(( _i % _n )); fi
+    _out+=$'\033[38;5;'"${_pal[_idx]}"'m'"${_txt:_i:1}"
+  done
+  printf -v "$_vn" '%s%s' "$_out" "$RST"
+}
+
+# model_key VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to a canonical "tier version"
+# ("opus 5" / "sonnet 4.5" / "fable" / "" = unknown)。display_name と model id の両形、Bedrock の
+# inference-profile を 1 つの正規形に畳む。
+# 正規形は**必ず小文字**になる (tier 名はループのリテラルから取るので bash 4+ の ${var,,} が不要)。
+# **サポート下限は 4.x** (3.x 系は全廃止済み)。旧形式 id (版が tier より前、`claude-3-5-sonnet-…`)
+# は版スロットに日付が入る (`sonnet 20241022`) が、generic tier 色に落ちるだけで壊れない。
+model_key() {
+  local _s="$2|${3:-}" _t _mi _out=""
+  shopt -s nocasematch
+  for _t in fable opus sonnet haiku; do
+    [[ "$_s" == *"$_t"* ]] || continue
+    if [[ "$_s" =~ $_t[-\ ]([0-9]+)([-.][0-9]+)? ]]; then
+      _out="$_t ${BASH_REMATCH[1]}"
+      # 版スロットには**日付が来ることがある** — minor を持たない tier の dated id
+      # (`claude-opus-4-20250514` / `claude-opus-5-20260101`) では第 2 group が `-20250514` になる。
+      # 5 桁以上を日付とみなして捨て、正規形を常に `tier N[.N]` に保つ。これがあるので
+      # model_color の arm は完全一致で足り「新モデルはパレット 1 行 + arm 1 行」が本当に成立する。
+      _mi="${BASH_REMATCH[2]}"
+      [[ ${#_mi} -le 3 ]] && _out="$_out${_mi/-/.}"   # "-5" も ".5" も ".5" に寄せる
+    else
+      _out="$_t"          # 版が読めない ("Opus" 単体等) — generic tier 色に落ちる
+    fi
+    break
+  done
+  shopt -u nocasematch
+  printf -v "$1" '%s' "$_out"
+}
+
+# model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
+# tier color (no subshell)。Shared by Line 1 (main) and the subagent rows so both use identical
+# model coloring。判定は model_key の正規形に対する**完全一致**で、残る順序ルールは
+# 「generic tier の arm を最後に置く」の 1 つだけ。新モデルはパレット 1 行 + arm 1 行で足せる。
+# Fable/Sonnet 5/Opus 5 は公式単色が無いので多色描画 (rainbow/gradient)。
+# **Fable は 2 本ある** — `fable 5` だけが蝶標本の循環で、5.1 と**版が読めない裸の `Fable`**
+# (`/usage` の `limits[]` は `"Fable"` しか返さない) は Venus のスイープに落ちる。既定モデルが
+# 5.1 なので、Line 5 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
+model_color() {
+  local _ms="$2" _key
+  model_key _key "$2" "${3:-}"
+  case "$_key" in
+    "fable 5")                  rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
+    fable*)                     gradient "$1" "$_ms" ${FABLE51_PAL[@]+"${FABLE51_PAL[@]}"} ;;
+    "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
+    "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
+    "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
+    opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
+    sonnet*)                    printf -v "$1" '%s' "${TEAL}${_ms}${RST}" ;;
+    haiku*)                     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}" ;;
+    *)                          printf -v "$1" '%s' "$_ms" ;;
+  esac
+}
+
+# fmt_elapsed SECONDS VARNAME — 経過秒を "41m" / "4h" / "27h" にする (no subshell)。
+# 単位は常に 1 つ。**m/h 帯は Line 3 の commit age と同表記だが 24h 以降は分かれる** —
+# 経過は `27h` のまま (セッションを開いている総時間が知りたい)、commit age は `1d` に丸める。
+# **この値はアイドル込みの壁時計** = 「Claude が働いていた時間」ではない。根拠は
+# `docs/internals.md`「Line 4」(実働は `cost.total_api_duration_ms` 側)。
+# **H:MM にはしない** — リセット時刻（`19:31` / `土 16:00`）と桁の形が似て区別できなくなる。
+# 経緯は CHANGELOG 1.60.0（当時は 5h が残り時間 `4:01` で、H:MM が 2 個並ぶ問題だった）。
+fmt_elapsed() {
+  local s=$1
+  [[ "$s" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' ''; return; }
+  if ((s < 3600)); then printf -v "$2" '%dm' $((s / 60))
+  else                  printf -v "$2" '%dh' $((s / 3600)); fi
+}
+
+# fmt_ctx_size TOKENS VARNAME — コンテキスト窓の分母表記 ("500k" / "1M" / "1.5M")。
+# format_tokens は必ず小数 1 桁を出す ("1.0M") が、分母では ".0" が邪魔なので落とす。
+fmt_ctx_size() {
+  format_tokens "$1" "$2"
+  local _v="${!2}"
+  printf -v "$2" '%s' "${_v/.0/}"
+}
+
+# plan_label VARNAME SUB_TYPE RATE_TIER — 契約種別 + レート枠を公式表記で組む (fork ゼロ)。
+# 公式プラン名は Free / Pro / **Max 5x** / **Max 20x** / Team / Enterprise (claude.com/pricing、
+# support.claude.com の Max プラン記事)。`subscriptionType` の生値は小文字なので正式表記に畳む。
+# **`${var^}` は使わない** (bash 4+)。case が写像そのものなので不要。
+#
+# **`rateLimitTier` の値を列挙しない** — 未文書で増えうるフィールドなので、suffix が `Nx` の形かだけを
+# 見る。`default_claude_max_5x` → `5x`、`default_claude_max_20x` → `20x`、`default_claude_ai` (Pro 相当、
+# 上流 issue #43639 で実在) → 枠なし。値を許可リストで受けると v1.69.0 の `nameSource` と同じ
+# 「未文書フィールドを列挙して実物で無言に壊れる」を繰り返す。
+# 枠は契約種別と**独立**に付く — 実測で Enterprise 契約が `default_claude_max_5x` を持つ (= 契約が
+# Enterprise でもレート枠は Max 5x 相当)。だから Team/Enterprise 専用の値を知らなくても壊れない。
+plan_label() {
+  local _st="$2" _rt="$3" _name _tier=""
+  case "$_st" in
+    free)       _name="Free" ;;
+    pro)        _name="Pro" ;;
+    max)        _name="Max" ;;
+    team)       _name="Team" ;;
+    enterprise) _name="Enterprise" ;;
+    *)          _name="$_st" ;;   # 未知の契約種別は生のまま出す (旧/新 Claude Code の graceful degradation)
+  esac
+  # **桁数に上限を置かない** — `[0-9]x|[0-9][0-9]x` は `100x` を落とすので、「suffix が `Nx` か
+  # だけを見る」という約束を満たしていなかった（列挙の粒度が値から桁数へ移っただけ。`/code-review` 指摘）
+  local _sfx="${_rt##*_}"
+  if [[ "$_sfx" == *x && "${_sfx%x}" =~ ^[0-9]+$ ]]; then _tier=" $_sfx"; fi
+  printf -v "$1" '%s%s' "$_name" "$_tier"
+}
+
+# effort_color VARNAME LEVEL — sets VARNAME to LEVEL rendered in its effort color (no subshell)。
+# Line 1 と subagent 行の両方から呼び、語彙と配色を揃える。
+# **未知のレベルは既定の薄紫に落とす** — 上流がレベルを増やしても無色にならず、色だけが既知の
+# ランプから外れる（旧 Claude Code / 新レベルの両方で graceful degradation）。
+# `effort` は数値のトークン予算で来ることもある（subagent 側）ので、その場合も既定色に落ちる。
+effort_color() {
+  case "$2" in
+    low)    printf -v "$1" '%s' "${EFFORT_LOW}$2${RST}" ;;
+    medium) printf -v "$1" '%s' "${EFFORT_MED}$2${RST}" ;;
+    high)   printf -v "$1" '%s' "${EFFORT_HIGH}$2${RST}" ;;
+    xhigh)  printf -v "$1" '%s' "${EFFORT_XHIGH}$2${RST}" ;;
+    max)    gradient "$1" "$2" ${EFFORT_MAX_PAL[@]+"${EFFORT_MAX_PAL[@]}"} ;;
+    *)      printf -v "$1" '%s' "${EFFORT}$2${RST}" ;;
+  esac
+}
+
+# ver_older A B — A が B より古ければ rc=0 (fork ゼロ・純パラメータ展開)。
+# **文字列比較にしない** — `2.1.9` と `2.1.10` の大小が逆になる（辞書順では `9` > `1`）。
+# **数値として読めない成分が 1 つでもあれば「古くない」に倒す** — 上流が `2.2.0-rc.1` のような
+# 形を出したときに「遅れている」と誤って立てるより、無表示（dim）に落ちるほうを選ぶ。
+# 成分は 3 つまで見る（4 つ目以降が付いた形では 3 つ目までの比較に落ちる = 誤検出しない側）。
+ver_older() {
+  local i av bv arest="$1" brest="$2"
+  # 空文字は `av=""` が数値マッチに落ちるので、別途の空判定は要らない
+  for i in 1 2 3; do
+    av="${arest%%.*}" bv="${brest%%.*}"
+    [[ "$av" =~ ^[0-9]+$ && "$bv" =~ ^[0-9]+$ ]] || return 1
+    # **`10#` で明示基数** — `2.1.08` のようなゼロ埋めを 8 進数と解釈されると
+    # `value too great for base` が毎レンダー stderr に漏れる（regex は `08` を通すので防げない。
+    # subagent 側が同じ作法を既に持っている。`/code-review` 指摘）
+    ((10#$av < 10#$bv)) && return 0
+    ((10#$av > 10#$bv)) && return 1
+    # 次の成分へ。残りが無い側は 0 として扱う（`2.1` と `2.1.0` は同じ）
+    [[ "$arest" == *.* ]] && arest="${arest#*.}" || arest=0
+    [[ "$brest" == *.* ]] && brest="${brest#*.}" || brest=0
+  done
+  return 1
+}
+
+# braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
+# 8 braille levels per char × 5 chars = 40 steps of precision
+braille_bar() {
+  local pct=$1 width=5
+  [[ "$pct" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '     '; return; }
+  local b0=' ' b1='⣀' b2='⣄' b3='⣤' b4='⣦' b5='⣶' b6='⣷' b7='⣿'
+  local _bb="" level=$((pct * width * 7 / 100)) i seg varname
+  ((level > width * 7)) && level=$((width * 7))
+  ((level < 0)) && level=0
+  for ((i = 0; i < width; i++)); do
+    seg=$((level - i * 7))
+    ((seg < 0)) && seg=0
+    ((seg > 7)) && seg=7
+    varname="b${seg}"
+    _bb+="${!varname}"
+  done
+  printf -v "$2" '%s' "$_bb"
+}
+
+# color_by_threshold VAL HI MID VARNAME — sets VARNAME to context-bar color (no subshell)
+# OK = lime green (CTX_OK), distinct from Bedrock teal and standard ANSI green
+color_by_threshold() {
+  local val=$1 hi=$2 mid=$3
+  [[ "$val" =~ ^[0-9]+$ ]] || { printf -v "$4" '%s' "$DIM"; return; }
+  if ((val >= hi)); then printf -v "$4" '%s' "$RED"
+  elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
+  else printf -v "$4" '%s' "$CTX_OK"; fi
+}
+
+# format_tokens TOK VARNAME — sets VARNAME to compact token count e.g. 12.3k / 1.5M (no subshell)
+format_tokens() {
+  local tok=$1
+  [[ "$tok" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '?'; return; }
+  if ((tok >= 1000000)); then printf -v "$2" '%d.%dM' $((tok / 1000000)) $((tok % 1000000 / 100000))
+  elif ((tok >= 1000)); then printf -v "$2" '%d.%dk' $((tok / 1000)) $((tok % 1000 / 100))
+  else printf -v "$2" '%d' "$tok"
+  fi
+}
+
+
 readonly CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-# **キャッシュ名に混ぜるキーは `CONFIG_DIR` から 1 回だけ派生させる**（複数アカウントの分離用）。
-# `CACHE_BASE` は UID 単位なので、`CLAUDE_CONFIG_DIR` を分けて同時に走らせると**同じファイルを
-# 共有する**。共有すると ① 別アカウントの `credits:$` や枠が表示に出る ② レコードが
-# 「自分の設定と食い違う」と判定し合って**毎レンダー refetch / mv** になる。fork ゼロの文字列置換。
-readonly CFG_KEY="${CONFIG_DIR//\//_}"
-# securestorage 側も**同じ規則で 1 箇所から派生させる** — `.credentials.json` の置き場と Keychain の
-# サービス名の suffix がここから出る。関数の中でインラインに展開すると `CONFIG_DIR` と同じ
-# 「対応漏れを機械的に潰せない」状態を作り、メタテストも緩めることになる。
-# `HASH_DIR` が空 = suffix なし（既定アカウント）。`:+` なので `set -u` でも落ちない。
+
+# **資格情報は `CONFIG_DIR` とは別の変数から派生させる。** 上流は credentials だけ
+# `CLAUDE_SECURESTORAGE_CONFIG_DIR` 側に置き、Keychain のサービス名の suffix もそちらの値で
+# 決める（**定義済みなら空でも優先**され、空なら suffix 無し）。`CONFIG_DIR` で代用すると、
+# 2 つを別々に設定している環境で**別アカウントの blob を読んでプラン名と枠を出す**（誤読）。
+# ハッシュの元は**env の値そのまま** — 上流は NFC 正規化だけで、path の解決も末尾スラッシュの
+# 除去もしない。
 if [[ -n "${CLAUDE_SECURESTORAGE_CONFIG_DIR+x}" ]]; then
   readonly SECURESTORAGE_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}"
   readonly SECURESTORAGE_HASH_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR}"
@@ -35,1516 +390,742 @@ else
   readonly SECURESTORAGE_DIR="$CONFIG_DIR"
   readonly SECURESTORAGE_HASH_DIR="${CLAUDE_CONFIG_DIR:+$CONFIG_DIR}"
 fi
-readonly GIT_CACHE_DIR="${CACHE_BASE}/git"
-readonly GIT_CACHE_MAX_AGE=5
-# untracked の行数を数える上限。**コストは総バイト数に比例するのに上限は件数なので近似指標**
-# (「500 件以下なのに遅い」を上限のせいと誤診しないための注記)。実測と理由は build_git の
-# untracked の節 (④) に 1 箇所だけ置いてある。
-readonly UNTRACKED_FILE_CAP=500
-# `_NOW` は**既に 1 回だけ走っている jq から取る**（`now|floor`）ので、ここでは `date` を叩かない。
-# 定義は jq の eval 直後（`date` fork が 1 個減る = 実測 -3.6ms。UTC epoch なので TZ 非依存）。
 
-# --- Main-only helpers (generic presentation helpers — has_val/osc8/editor_url/
-# rainbow/gradient/model_color/braille_bar/color_by_threshold/format_tokens — live in lib.sh) ---
+# **v2 専用の色はここに置く**（`lib.sh` は v1 凍結中なので触らない。source は読むだけ）。
+# `cold` = 氷の青（xterm 81）。**最初 AMBER 214 にして外した** — ① 語が "cold" なのに暖色で
+# **意味と色が逆** ② 隣の `$`（COST 136 ブロンズ）と同系で**並ぶと溶ける**（実機で確認）
+# ③ 214 は Fable 5.1 の Venus パレット（95/137/214/187）と番号が衝突する。
+# 81 は lib.sh の使用済み番号（33 39 71 72 79 82 99 105 117 136 178 180 183 190 202 203
+# 213 214 220 231 245 248）に無く、**3 行目の他の色（緑 82 / ブロンズ 136 / タン 180）が
+# 全部暖色〜緑なので、寒色は 1 つで際立つ**。provider のブランド色（33/39/72）は避けた。
+readonly COLD=$'\033[38;5;81m'
 
-# pr_state_color STATE VARNAME — sets VARNAME to ANSI color for PR review state (no subshell)
-pr_state_color() {
-  case "$1" in
-    approved)          printf -v "$2" '%s' "$GRN" ;;
-    changes_requested) printf -v "$2" '%s' "$RED" ;;
-    pending)           printf -v "$2" '%s' "$YLW" ;;
-    draft)             printf -v "$2" '%s' "$DRAFT" ;;
-    *)                 printf -v "$2" '%s' "$DIM" ;;
-  esac
-}
-
-# cache_fmt_is FILE TAG — FILE の先頭フィールドが TAG なら rc=0（`read` のみ = fork ゼロ）。
-# **延命 touch の前に必ず通す** — 形式違いのファイルを touch すると「新鮮だが使えない値」が
-# 居座り、表示が TTL 分だけ欠ける。subscription と usage で同じ判定を別々に書いていたので
-# 1 本に寄せた（`/simplify` 指摘）。
-cache_fmt_is() {
-  local _f=$1 _tag=$2 _cur=""
-  [[ -r "$_f" ]] || return 1
-  IFS=$'\037' read -r _cur _ < "$_f"
-  [[ "$_cur" == "$_tag" ]]
-}
-
-# prefetch_mtimes FILE... — **1 回の `stat` で mtime をまとめて取る**。`cache_stale` はこの結果を
-# 使うので、3 つの stale 判定で `stat` を 3 回 fork しない（実測 9.802ms → 3.146ms = **-6.7ms**、
-# 暖まった描画の 16%。「制限あり 41.5ms / なし 31.0ms」の差はほぼこれだった）。
-# **`stat` の出力をそのまま表として使う**（`%N %m` = 「パス 空白 mtime」の行）— 自前の区切りに
-# 詰め直すと、書く側と読む側で区切りの綴りを一致させ続ける必要が出るだけで何も増えない。
-# **キーは行頭でアンカーする**（先頭に `\n` を 1 個足す）— 名前で引くので、欠損ファイルで行が
-# ずれて**別ファイルの mtime を読む**罠に当たらない（`%m` だけだと実測で 3 番目の値が 2 番目に入る）。
-# map に無いファイルは `cache_stale` が個別 `stat` に落ちる（= 従来の挙動）。
-prefetch_mtimes() {
-  _MTIME_AT_START=""
-  # 末尾改行が無くても `read` は内容を入れる（rc は見ない。このリポで繰り返し踏んでいる罠）
-  IFS= read -r -d '' _MTIME_AT_START < <(stat -f '%N %m' "$@" 2>/dev/null) || true
-  _MTIME_AT_START=$'\n'"$_MTIME_AT_START"
-}
-
-cache_stale() {
-  local cache=$1 max_age=${2:-$GIT_CACHE_MAX_AGE} _mt=""
-  # キーは 1 回だけ組む（3 度綴ると 1 つ typo しても黙って個別 `stat` に落ちるだけでテストは緑）。
-  # **`local` を別行にする** — 同じ `local` 行で前の変数を参照すると `set -u` で
-  # "unbound variable" になる（`local a=$1 b="[$a]"` は **3.2 でも 5.3 でも**落ちる。実測）。
-  local _k=$'\n'"$cache "
-  # **`-f` が「不在」と「通常ファイルでない」を 1 箇所で吸う**（まとめ取りの前に置く）—
-  # `stat` はディレクトリや FIFO にも成功するので map にも入る。後ろに置くと、`md5` が PATH に
-  # 無く `_gc` が git/ ディレクトリに落ちた時だけ判定を素通りする。
-  [[ -f "$cache" ]] || return 0
-  # まとめ取りの結果があれば fork ゼロで引く（行頭アンカーなので行ずれの影響を受けない）
-  if [[ "${_MTIME_AT_START:-}" == *"$_k"* ]]; then
-    _mt="${_MTIME_AT_START#*"$_k"}"; _mt="${_mt%%$'\n'*}"
-  else
-    _mt=$(stat -f %m "$cache" 2>/dev/null)
-  fi
-  # **ファイルはあるが mtime が読めない時は「古くない」に倒す**（`/code-review` 指摘）—
-  # `return 0` にすると `stat` が壊れた環境で 3 つのキャッシュが毎レンダー stale になり、
-  # 背景 git + `curl` が `refreshInterval` ごとに走る storm になる（このリポが名指しで
-  # 避けている破綻）。鮮度が分からないなら取り直さないほうが安全。
-  [[ "$_mt" =~ ^[0-9]+$ ]] || return 1
-  (( _NOW - _mt > max_age ))
-}
-
-# --- キャッシュの形式タグ ---
-# **フィールド一覧そのものをタグにして、レコードの先頭に入れる**（v1.77.0）。
-# 読み側はタグが一致しなければ「キャッシュ無し」として扱い、**その場で取り直す**。
+# **枠のゲージは context と同じ `braille_bar`（幅 5・空きは空白・数値つき）を使い、
+# 色は要素まるごと 1 色に統一する**（2026-09-07 にユーザー指示「block 単位で色の統一を」）。
+# ラベル・バー・`N%`・リセット時刻が同じ色になる: `5h` は ANTH、`week` は dim、
+# モデル別枠は**名前が終わった色**（下の `_ecol`）。
 #
-# 以前はファイル名に `-vN` を付けていたが 3 つ問題があった: ① 製品版 (`version-1.76.0`) と
-# 紛らわしい ② git が `-v4` / 他が `-v2` で**意味のない序列**が見える ③ **番号を上げるのは
-# 手作業で、実際に忘れて出荷した**（v1.74.0 の subscription。既存ユーザー全員が旧形式を
-# 新コードで読み、レート枠が最大 1 時間欠けた）。さらに旧ファイルが孤児として並ぶので、
-# どれが現行か名前から読めなかった。
+# **却下した 3 案**（すべて実機の画面を見て撤回した）:
+# ① **幅 3 + 軌道 `⠿` + 数値なし** — 軌道の `⠿` は 6 ドットで、低い fill（`⣀` 2 / `⣄` 3 /
+#    `⣤` 4 ドット）より**密**なので見た目が反転し、どこまで埋まっているか読めない。加えて
+#    **数値を落とすと何も読めない**（実際に読んでいるのは数字で、バーは地模様。低い % では
+#    地模様がほぼ空になり 5% と 40% が区別できない）。
+#    教訓: **ゲージは数値の代わりではなく、数値の隣に置く比較の道具**。context が最初からその形。
+# ② **context と同じ閾値色（緑/黄/赤）** — ラベルと数値が識別色でバーだけ緑になり、
+#    **要素が 2 つに割れて見える**。CLAUDE.md の「1 要素に色系統を 2 つ入れない」がこれ。
+#    context のバーが緑で成立するのは、**あの要素が識別色を持たない**（ラベルも無く閾値色が
+#    唯一の色）から。識別色を持つ要素に足すと境界が読めなくなる。
+# ③ **名前と同じ gradient をバーにスイープ** — 埋まり桁が 1 つだと `gradient` の添字が 0 に
+#    なり、**パレット先頭の一番暗い色**が当たる（Fable 5.1 は `95` = brick）。名前は
+#    `brick→tan→amber→cream` と流れて cream で終わるので、直後のバーが brick に戻って**逆走**する。
 #
-# タグを中に入れると: 名前が安定して**孤児が出ない**（同じ名前を上書き）/ 形式を変える人は
-# **必ずこの一覧を編集する**ので番号より忘れにくい / 一致しなければ即取り直すので
-# 「古い形式のファイルが TTL 分だけ表示を欠かせる」が起きない。読みは fork ゼロのまま。
-readonly GIT_FMT='branch,detached,repo,remote,ins,del,conf,ahead,behind,age,msg,op'
-# `render_git` が使う変数名の列（宣言と分解の 2 箇所を 1 本から作る）。**`GIT_FMT` とは別に持つ** —
-# 名前がずれており（`repo`/`conf` 対 `repo_id`/`conflicts`）、揃えて導出させると**ディスクの形式タグを
-# 編集した人が bash のローカル変数名を暗黙にリネームする**ことになり、関数本体は旧名を参照して
-# `set -u` で statusline が丸ごと空白になる。別々なら、タグ編集は「facts を捨てて cold-start」に倒れる。
-readonly GIT_FIELDS='branch detached repo_id remote ins del conflicts ahead behind age msg op'
-readonly SUB_FMT='type,tier'
-readonly USAGE_FMT='cents,limits,tz,tf,loc'
-readonly RESET_FMT='e5,t5,e7,t7,tz,tf,loc'
+# **帰結として近接警告の色は無い。** `5h` が 95% でも色は変わらない（`⣿⣿⣿⣿⣤` と数値で読む）。
+# 赤 31 を足すなら**バーだけでなく要素まるごと赤**にするのが筋（未決。バーだけ赤は②に戻る）。
 
-# git_cache_file DIR — sets _gc (no subshell)
-git_cache_file() {
-  [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
-  # 名前はディレクトリの md5 だけ。形式の判定はレコード先頭のタグ (`GIT_FMT`) が行う
-  _gc="${GIT_CACHE_DIR}/$(md5 -q -s "$1")"
-}
+# ── アカウント情報のキャッシュ（**これだけがディスクに書く**）──────────────
+# **v2 は原則キャッシュを持たない**。例外がここ 1 つだけで、理由は「同期で払えない」から:
+# Keychain 読み（`security` + `jq`）と `/usage` の `curl -m 4` は描画を止める長さになる。
+# **`v1` とは別ディレクトリ**にする（park 中の v1 と混ざらない。seam の env 名も別）。
+# **ファイル名に config dir を混ぜる** — `CACHE_BASE` は UID 単位なので、混ぜないと
+# `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが**別アカウントのプラン名と枠を表示する**。
+readonly CACHE_BASE="${CLAUDE_STATUSLINE_V2_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statusline-v2-$UID}"
+readonly CFG_KEY="${CONFIG_DIR//\//_}"
+readonly ACCT_CACHE="${CACHE_BASE}/account${CFG_KEY}"
+readonly ACCT_TTL=300
+# **形式タグ = フィールド一覧そのもの**。不一致なら値を捨てて即取り直す（TTL を待たせない）。
+# **版番号をファイル名に持たせない**（製品版と紛らわしく、番号上げを忘れる）。
+# **形式タグは「フィールド一覧」ではなく schema 番号にする。** 一覧をタグにすると**項目を 1 つ
+# 足すだけで全ユーザーの既存レコードが無効化**され、並走している全セッションが同じ瞬間に
+# 取り直す（2026-09-08 までに `,reset` と `,tz` の 2 回それをやった）。`schema` は
+# **既存キーの意味が変わったときだけ**上げる — 追加では上げない。
+readonly ACCT_SCHEMA=1
+# レコードの区切り。**`printf` の書式に直接埋めない**ので変数で持つ。
+readonly _USEP=$'\037'
 
-# --- Credentials blob (Keychain → file fallback) ---
-# **Keychain のサービス名は config dir ごとに変わる** (2.1.233 のバイナリで実測。docs も CHANGELOG も
-# 無記載)。上流の組み立ては `Claude Code` + `-credentials` + suffix で、suffix は
-#   - `CLAUDE_SECURESTORAGE_CONFIG_DIR` が**定義済み**: 値が空なら無し / 非空ならその値の sha256 先頭 8 桁
-#   - 未定義: `CLAUDE_CONFIG_DIR` が空なら無し / 非空なら**その env の値そのまま**の sha256 先頭 8 桁
-# `Claude Code-credentials` を決め打ちで引くと、別 config dir のセッションで**既定アカウントの blob**を
-# 読む = 別アカウントのプラン名と credits:$ を出す (無表示 < 誤読)。既定ユーザー (どちらも未設定) は
-# suffix 無しなので `shasum` の fork は増えない。
-# **上流は env の値を NFC 正規化してから hash する。path の解決 (`resolve`) も末尾スラッシュの
-# 除去もしない** (2.1.238 の `Rre()`/`En()` で実測) — なので**相対パスでも綴りが同じなら一致する**。
-# 一致しないのは**非 NFC の値だけ** (bash では正規化できない)。その場合は「引いた名前が見つからない」
-# だけなので要素が落ちる = 安全側。**`shasum` が無い等で suffix を算出できないときは Keychain ごと
-# 飛ばす** — 決め打ち名に落ちると別アカウントの blob を読む誤読になるため。
-get_credentials_blob() {
-  # 置き場と suffix の元は top-level の `SECURESTORAGE_DIR` / `SECURESTORAGE_HASH_DIR` から取る
-  local _ss_dir="$SECURESTORAGE_DIR" _hash_dir="$SECURESTORAGE_HASH_DIR" _svc="Claude Code-credentials"
-  local _keychain_ok=1
-  if [[ -n "$_hash_dir" ]]; then
-    _keychain_ok=0
-    local _h
-    _h=$(printf '%s' "$_hash_dir" | shasum -a 256 2>/dev/null) || _h=""
-    _h="${_h%% *}"
-    if [[ "$_h" =~ ^[0-9a-f]{8} ]]; then _svc="${_svc}-${_h:0:8}" _keychain_ok=1; fi
-  fi
-  if ((_keychain_ok)) && command -v security &>/dev/null; then
-    local blob
-    # **`-a` を付ける** — 上流は読み (`find-generic-password -a <USER> -s <svc> -w`) も書きも
-    # account 属性込みで識別する (2.1.238 の `Tkd()`/`hYT()`)。service だけで引くと、同名 item が
-    # 2 つある keychain (別マシンから同期した / `$USER` が違う時に作った) で**別アカウントの blob**を
-    # 読む = suffix 対応で閉じたはずの誤読が残る。**`-s` の後に置く** (テストが `$3` で名前を pin する)。
-    # `USER` が無い環境 (`env -i`) では付けない — `-a ""` は一致しなくなるため。
-    local _acct="${USER:-${LOGNAME:-}}"
-    if [[ -n "$_acct" ]]; then
-      blob=$(security find-generic-password -s "$_svc" -a "$_acct" -w 2>/dev/null)
-    else
-      blob=$(security find-generic-password -s "$_svc" -w 2>/dev/null)
-    fi
-    # `printf '%s'` を使う — blob は外部文字列で、`echo` は先頭が `-n`/`-e` の値を食う
-    if [[ -n "$blob" ]]; then printf '%s\n' "$blob"; return 0; fi
-  fi
-  # docs は「credentials on Linux and Windows」もこの下と明記 (macOS は Keychain が主で、ここは
-  # その fallback)。ハードコードすると別 config dir で subscription と extra-usage が無言で消える
-  # (宛名と同じ根本原因)。**`CONFIG_DIR` ではなく `_ss_dir`** — 上流はこのファイルだけ
-  # `CLAUDE_SECURESTORAGE_CONFIG_DIR` 側に置く。
-  local creds="${_ss_dir}/.credentials.json"
-  # gate は `-f` ではなく **`-r`** — root 所有や mode 000 の credentials では `$(<file)` が
-  # "Permission denied" を stderr に吐く (旧 `cat file 2>/dev/null` は黙っていた)。
-  # **`$(<file 2>/dev/null)` と書いてはいけない** — bash 3.2 では `$(<file)` の特殊構文が壊れて
-  # **常に空文字**になり、subscription と extra-usage が丸ごと死ぬ (bash 5 では動くので手元で気付けない)。
-  [[ -r "$creds" ]] && printf '%s\n' "$(<"$creds")"
-}
-
-# --- Subscription type (cached, background refresh) ---
-# 形式の判定はレコード先頭のタグ (`SUB_FMT`) が行う（**版はファイル名に持たせない**）。
-# ただし**名前には config dir を混ぜる** — Keychain のサービス名は config dir ごとに変わる
-# = このレコードは**アカウント固有**なのに、`CACHE_BASE` は UID 単位なので混ぜないと
-# `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが**別アカウントのプラン名とレート枠**
-# （`Anthropic(Max 20x)`）を出す。**TTL 3600s なので取り違えが最も長く居座るのがここ**。
-# v1.74.0 は形式を変えたのに名前を据え置き、旧形式を読んだ**既存ユーザー全員が最大 1 時間
-# `Anthropic(Max)`**（枠が欠けた形）になった。v1.74.1 で `-v2` を付け、v1.77.0 でタグ方式へ。
-readonly SUB_CACHE="${CACHE_BASE}/subscription${CFG_KEY}"
-readonly SUB_CACHE_MAX_AGE=3600
-
-# fetch_subscription — sets _sub_type (no subshell)
-# `CLAUDE_STATUSLINE_NO_NET` は「外部への問い合わせをしない」seam なので Keychain 読みもここで止める
-# (ネットワークではないが、macOS のアクセス許可ダイアログを出しうる外部参照。install.sh の試走・テストが
-# ユーザーの Keychain に触らないための入口でもある)
-fetch_subscription() {
-  _sub_type="" _rate_tier=""
-  [[ -n "${CLAUDE_STATUSLINE_NO_NET:-}" ]] && return
-  [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-  # **先にキャッシュを読んでタグを検証する** — 形式が違えば値を捨てるだけでなく
-  # **「古い」と同じ扱いにして即取り直す**（TTL 3600s を待たせない = v1.74.0 の症状を作らない）。
-  # **read の rc は見ない** — 末尾改行が無く rc=1 でも内容は入る (宛名スキャンと同じ罠)。
-  # gate は `-r`（`read < "$f" 2>/dev/null` は入力側の失敗を黙らせられない）。
-  local _fmt=""
-  if [[ -r "$SUB_CACHE" ]]; then
-    IFS=$'\037' read -r _fmt _sub_type _rate_tier < "$SUB_CACHE"
-  fi
-  if [[ "$_fmt" != "$SUB_FMT" ]]; then _sub_type="" _rate_tier=""; fi
-  if [[ "$_fmt" != "$SUB_FMT" ]] || cache_stale "$SUB_CACHE" "$SUB_CACHE_MAX_AGE"; then
-    (
-      local blob record="" sub_type="" _stf="${SUB_CACHE}.tmp-$$"
-      blob=$(get_credentials_blob)
-      if [[ -n "$blob" ]]; then
-        # blob は accessToken を含む。here-string (`<<<`) は bash 3.2 では一時ファイル経由に
-        # なるのでパイプで渡す (トークンを argv に出さないのと同じ理由でファイルにも落とさない)。
-        # subscriptionType (契約種別) と rateLimitTier (レート枠) を **1 回の jq** で US 区切りで取る。
-        record=$(printf '%s' "$blob" | jq -r '"\(.claudeAiOauth.subscriptionType // "")\u001f\(.claudeAiOauth.rateLimitTier // "")"' 2>/dev/null)
-        sub_type="${record%%$'\037'*}"
-      fi
-      # 取れなくても必ず書く — 書かないと cache_stale がファイル不在で毎レンダー背景 fetch を起こし、
-      # Keychain 読みの storm になる (extra-usage と同じ理由。credentials を持たない API キー /
-      # env 運用のユーザーは恒常的に踏む)。空を書いても display は has_val で非表示に倒れる。
-      # 既存値があるときは潰さず touch で延命する (Keychain が一時的に読めないだけで表示が消えるのを防ぐ)。
-      # 延命判定は **契約種別が取れたか**で見る (レート枠だけ欠けても契約名は出せる)。
-      # 延命は**現行タグのファイルに対してだけ**（`cache_fmt_is` が判定を持つ）
-      if [[ -z "$sub_type" ]] && cache_fmt_is "$SUB_CACHE" "$SUB_FMT"; then
-        touch "$SUB_CACHE"          # 既存値は潰さず延命する
-      else
-        printf '%s\037%s' "$SUB_FMT" "$record" > "$_stf" && mv "$_stf" "$SUB_CACHE"
-      fi
-    # `>/dev/null 2>&1` が **背景化の必須条件** — 付けないと subshell が親の stdout を継承したまま
-    # 生き続け、statusline を捕捉する側 (Claude Code) は最後の fd 保持者が終わるまで EOF を見ない。
-    # `& disown` だけでは「出力をブロックしない」は成立しない (実測: 冷キャッシュの大リポで
-    # 50ms → 300ms、遅い curl で 3.1s。3 箇所すべてに必要)。stderr も閉じるのは、
-    # 背景の警告 (Keychain 不許可等) が statusline 出力に混ざらないようにするため。
-    ) >/dev/null 2>&1 & disown
-  fi
-}
-
-# --- Extra-usage spend (usage-credits, cached, background refresh) ---
-# stdin に無い唯一の課金情報。/usage OAuth エンドポイントの spend.used を cents で取得。
-# `CLAUDE_STATUSLINE_NO_NET` を設定するとネットワーク取得を止める (オフライン/プライバシー用)。
-# 形式の判定は 1 行目のタグ (`USAGE_FMT`) が行う（**版はファイル名に持たせない**）。
-# ただし**名前には config dir を混ぜる**（理由は下記）。
-# **ファイル名に config dir を混ぜる**（`RESET_CACHE` と同じ理由・同じ `CFG_KEY`）。混ぜないと
-# `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが 1 つの `usage_spend` を共有し、**別アカウントの
-# 実課金額と枠が画面に出る**。加えて tz/tf をレコードに持つようになったので、片方に
-# `settings.json` が無いだけで互いに「形式違い」と判定し合い、**毎レンダー curl + mv** に落ちる
-# （2 アカウント交互 8 レンダーで curl 8 回を実測）。旧 `usage_spend` は参照されなくなるが、
-# `TMPDIR` 配下なので OS の掃除に任せる（孤児 1 個 < 誤表示 + storm）。
-readonly USAGE_CACHE="${CACHE_BASE}/usage_spend${CFG_KEY}"
-readonly USAGE_CACHE_MAX_AGE=300
-
-# fetch_usage_spend — sets _usage_cents と _scoped_limits (background curl; hot path はキャッシュ読みのみ)
-#
-# **モデル別の週間制限も同じレスポンスから取る** — stdin の `rate_limits` は `five_hour` と
-# `seven_day` の 2 つだけで (docs の完全スキーマで確認)、`weekly_scoped` は来ない。`/usage` の
-# `limits[]` に入っているので、**追加のネットワークも fork もゼロ**で足せる。
-# 読むのは消費者向けに整形済みの `limits[]` だけ — トップレベルの `nimbus_quill`/`amber_ladder`/
-# `tangelo` 等のコードネーム鍵は feature flag 名で churn するので使わない。
-# `is_active`/`severity` でも絞らない (各 1 観測しかなく意味論が不明 = 未文書フィールド列挙の罠)。
-#
-# キャッシュ形式: 1 行目が cents、2 行目以降が `モデル名 US % US リセット epoch` の 1 行 1 枠。
-# 旧形式 (cents 1 行だけ) を読んでも枠が 0 件になるだけなのでファイル名の版は上げない。
-# **NO_NET の効き方が `fetch_subscription` と非対称**（意図的）: あちらは Keychain 読みごと止めて
-# 空に倒すが、こちらは **fetch だけ止めてキャッシュは読む** — credits:$ と枠は「前回取れた値」を
-# 出しても害が無く、オフラインでも直近の値が見えるほうが有用。テストもこの差に依存している。
-fetch_usage_spend() {
-  _usage_cents=""; _scoped_limits=""
-  [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-  # 1 行目 = `タグ US cents`、2 行目以降 = モデル別週間枠。**タグが違えば値を捨てて即取り直す**
-  # (SUB_CACHE と同じ作法。TTL を待つと形式変更のたびに 300s 欠ける)
-  local _u_fmt="" _u_tz="" _u_tf="" _u_loc=""
-  if [[ -r "$USAGE_CACHE" ]]; then
-    { IFS=$'\037' read -r _u_fmt _usage_cents _u_tz _u_tf _u_loc; IFS= read -r -d '' _scoped_limits; } < "$USAGE_CACHE"
-  fi
-  if [[ "$_u_fmt" != "$USAGE_FMT" ]]; then _usage_cents=""; _scoped_limits=""; fi
-  # **枠のリセット時刻は表示文字列でキャッシュしている**ので、ゾーン/書式が変わったら取り直す。
-  # **落とすのは枠だけ** — `cents` は書式に依存しないので、一緒に消すと `credits:$` が理由なく
-  # 300s 消える（「無表示 < 誤読」は誤読を避ける規則で、消せるものを消す許可ではない）。
-  local _tfmt_changed=""
-  [[ "$_u_tz" == "$_tz" && "$_u_tf" == "$_tf_key" && "$_u_loc" == "$_LOC_KEY" ]] || _tfmt_changed=1
-  if [[ -n "$_tfmt_changed" ]]; then _scoped_limits=""; fi
-  if [[ -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]] \
-     && { [[ "$_u_fmt" != "$USAGE_FMT" ]] || [[ -n "$_tfmt_changed" ]] \
-          || cache_stale "$USAGE_CACHE" "$USAGE_CACHE_MAX_AGE"; }; then
-    (
-      local blob token out cents=0 limits="" _usable=""
-      # **失敗しても新しい tz/tf を書けるように、読めた cents を持ち込む**（下の延命分岐で使う）
-      local _keep_cents="$_usage_cents" _tfmt_only="$_tfmt_changed"
-      blob=$(get_credentials_blob)
-      # here-string ではなくパイプ — bash 3.2 の `<<<` は一時ファイルを作るので、
-      # トークンを含む blob をディスクに落とさない (argv 露出を避けるのと同じ理由)
-      token=$(printf '%s' "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-      if [[ -n "$token" ]]; then
-        # ヘッダは **`-H @-`** で stdin から渡す。argv には `@-` しか出ないので `ps` 漏れは無く、
-        # **各行が必ずヘッダとして解釈される**のでトークンに何が入っていても curl のオプションには化けない。
-        # `--config -` を使っていた頃は各行が設定ディレクティブだったので、`"` や改行を含む値が
-        # `output = <path>` の注入になりえた。字種の拒否リストで守るのではなく、
-        # ディレクティブとして読まれる面そのものを無くす方針 (install.sh の `printf %q` と同じ)。
-        out=$(printf 'Authorization: Bearer %s\nanthropic-beta: oauth-2025-04-20\n' "$token" \
-          | curl -s -m 4 -H @- https://api.anthropic.com/api/oauth/usage 2>/dev/null)
-        # **`NA` を返させて「使える応答か」を判別する** — `curl -s` は `-f` を付けていないので
-        # 401/429/5xx の**エラー JSON も本文として来る**。`// 0` の既定値があるため、それでも
-        # 数値 `0` が出てしまい「取得成功・課金 0」と区別できない（`/code-review` 指摘）。
-        # `.spend.used.amount_minor` の有無で分岐すれば追加の fork なしで判別できる。
-        cents=$(jq -r 'if (.spend.used.amount_minor? // null) == null then "NA"
-                       else ((.spend.used.amount_minor) / pow(10; (.spend.used.exponent // 2) - 2)) | round end' <<< "$out" 2>/dev/null)
-        if [[ "$cents" =~ ^[0-9]+$ ]]; then _usable=1; else cents=0; fi
-        # モデル別の週間枠。**`resets_at` は ISO8601 文字列**で epoch ではない。jq の
-        # `fromdateiso8601` は小数秒 (`.346608`) と `+00:00` オフセットを受け付けないので剥がしてから
-        # 渡し、`?` と `// ""` で形式が変わった枠だけ落とす (全体を abort させない)。
-        # **型ガードを通す** — 型不正の枠が 1 つあると jq が abort し、**枠が全滅する**
-        # (subagent の全 abort と同じクラス)。cents は別の jq 呼び出しなので巻き込まれない
-        # (2 回に分けているのはこの隔離のため。1 回にまとめると枠の abort が cents を消す)。
-        # **名前から改行・タブ・US を落とす** — US 区切りのレコードに生の改行や US が入ると
-        # 1 枠が 2 行に割れて桁がずれ、その枠も次の枠も落ちる (subagent 側の gsub と同じ理由)。
-        # **リセット時刻はここで表示文字列まで作る** — epoch を置いて描画側で `format_reset`
-        # を呼ぶと **枠 1 つあたり `date` 1 fork** がレンダーごとに乗る。枠は複数ありうるうえ
-        # `refreshInterval` で 30s ごとに再実行されるので、300s しか変わらない値のために fork を
-        # 払い続けることになる。`strflocaltime` の出力は `date -j -r EPOCH +"%a %H:%M"` と一致する
-        # (ロケール挙動も同じ。`Sat 16:00` と `土 16:00` の両方で実測して突き合わせ済み)。
-        # **分単位に丸める** — `/usage` の `resets_at` は毎リクエスト再計算されて分境界をまたぐ
-        # (実測: 同じリセットが `06:59:59.987654+00:00` と `07:00:00.155204+00:00` の両方で返る)。
-        # 小数を切り捨てるだけだと表示分が `15:59` / `16:00` で揺れ、300s キャッシュのたびに変わる。
-        # 表示は `%H:%M` なので分丸めが必要な精度そのもの。stdin 由来の `week:` は安定した epoch が
-        # 来るのでこの問題は無い (揺れるのは `/usage` 側だけ)。
-        limits=$(jq -r --arg wfmt "$_fmt_seven" '
-          (.limits // []) | map(select(
-              (type == "object") and (.group? == "weekly")
-              and ((.scope?.model?.display_name? // "") != "")
-              and ((.percent? | type) == "number")))
-          | map("\(.scope.model.display_name | gsub("[\r\n\t\u001f]"; " "))\u001f\(.percent | round)\u001f\(
-              (((.resets_at // "") | tostring
-                | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-                | fromdateiso8601? | (. / 60 | round) * 60
-                | strflocaltime($wfmt)? | gsub("[\r\n\t\u001f\u001e]"; "")) // ""))")
-          | .[]' <<< "$out" 2>/dev/null)
-      fi
-      # **必ず何かは書く** — 書かないと cache_stale が (ファイル不在=stale で) 毎レンダー refetch して
-      # curl storm になる (extra-usage 0 のユーザーが大多数なので致命的)。
-      # **ただし取得できなかったときは既存値を touch で延命する** (`fetch_subscription` と同じ作法) —
-      # Wi-Fi 断や `curl -m 4` のタイムアウトで `out` が空になると cents=0 / 枠 0 件になり、
-      # 上書きすると **ディスクに良い値があるのに credits:$ と全枠が 300s 消える**。
-      # touch なら storm も防げて表示も保たれる (取れた時だけ内容を差し替える)。
-      # 中間ファイル名に PID を入れる — 固定名だと同一 dir の並走セッション (refreshInterval で
-      # 定期再実行 × 複数ペイン) が同じ .tmp に同時書き込みし、mv が atomic でも内容が混ざる
-      # 1 行目 = cents、2 行目以降 = モデル別週間枠。枠が 0 件でも 1 行目は必ず書く。
-      # 延命は**現行タグのファイルに対してだけ**（`cache_fmt_is` が判定を持つ）。
-      # 判定は **パース結果**（`fetch_subscription` と同じ作法）— 応答が空でも、
-      # エラー本文が来た場合でも「使えなかった」なら既存値を残す
-      # **`touch` だけで済ませられるのは「書式が変わっていないとき」だけ。**
-      # ゾーン/書式が変わった直後に fetch が失敗すると、`touch` ではレコードの `tz,tf` が古いまま
-      # なので次の描画でまた `_tfmt_changed=1` になり、**TTL を無視して毎描画 curl = storm** になる
-      # （Wi-Fi 断中に `/config` で Time format を変える、で踏む）。この場合だけ「読めた cents +
-      # 新しい tz/tf + 枠 0 件」でレコードを書き直して、書式の不一致そのものを解消する。
-      # **古い書式の枠は持ち越さない** — 持ち越すと違う書式の時刻を並べる = 誤読になる。
-      if [[ -z "$_usable" && -n "$_tfmt_only" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
-        [[ "$_keep_cents" =~ ^[0-9]+$ ]] || _keep_cents=0
-        printf '%s\037%s\037%s\037%s\037%s\n' "$USAGE_FMT" "$_keep_cents" "$_tz" "$_tf_key" "$_LOC_KEY" \
-          > "${USAGE_CACHE}.tmp-$$" \
-          && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
-      elif [[ -z "$_usable" ]] && cache_fmt_is "$USAGE_CACHE" "$USAGE_FMT"; then
-        touch "$USAGE_CACHE"
-      else
-        printf '%s\037%s\037%s\037%s\037%s\n%s' "$USAGE_FMT" "$cents" "$_tz" "$_tf_key" "$_LOC_KEY" "$limits" \
-          > "${USAGE_CACHE}.tmp-$$" \
-          && mv "${USAGE_CACHE}.tmp-$$" "$USAGE_CACHE"
-      fi
-    # `>/dev/null 2>&1` は必須 (継承 stdout で捕捉側の EOF が遅れる。fetch_subscription の注記参照)。
-    # ここが最も効く — `curl -s -m 4` は最大 4 秒粘るので、無いとレンダーが 4 秒止まる
-    ) >/dev/null 2>&1 & disown
-  fi
-}
-
-# render_scoped_limits — _scoped_limits の各行を line_lim に足す (**fork ゼロ**)。
-# `Fable:39%` の形で、**モデル名は Line 1 と同じ model_color** (Fable なら FABLE_PAL の多色)。
-# `:N%` は**無色の通常輝度**（宛名やパス名と同じ扱い）。リセット時刻だけ week: と同じ dim。
-# 3 番目のフィールドは**背景側で整形済みのリセット表示文字列**なので、ここで `date` を呼ばない
-# (枠 1 つあたり 1 fork × refreshInterval ごとの再実行になる)。
-render_scoped_limits() {
-  [[ -n "$_scoped_limits" ]] || return
-  local _rest="$_scoped_limits" _line _tmp _name _pct _reset_txt _col
-  while [[ -n "$_rest" ]]; do
-    _line="${_rest%%$'\n'*}"
-    if [[ "$_rest" == *$'\n'* ]]; then _rest="${_rest#*$'\n'}"; else _rest=""; fi
-    [[ -n "$_line" ]] || continue
-    _name="${_line%%$'\037'*}"
-    _tmp="${_line#*$'\037'}"
-    _pct="${_tmp%%$'\037'*}"
-    _reset_txt="${_tmp#*$'\037'}"
-    # 名前と % が揃わない行は落とす (形式が変わっても他の枠と cents は生きる)
-    [[ -n "$_name" && "$_pct" =~ ^[0-9]+$ ]] || continue
-    # **0% は出さない** — **週間の枠どうしで揃える**（アカウント全体の `week:` も
-    # `((seven_pct > 0))` で 0 を落とす）。**5h は 0% でも出す** — 行の左端の一目確認用なので
-    # `has_val` だけで gate しており、ここを「制限は 0% なら隠す」と読み替えて 5h に広げてはいけない
-    # (テスト `Line5: 週間枠は 0% を落とすが 5h は 0% でも出すこと` が赤で止める)。
-    # 落とす理由は桁の割に情報が無いこと — `Sonnet 5:0% 土 16:00` は 24 桁使って
-    # 「今週まだ使っていない」しか伝えない (リセット時刻まで連れてくる)。上流は 2.1.236 で
-    # 「まだ何も使っていない枠」も返すようになったので、この経路は今後増える。
-    ((_pct > 0)) || continue
-    model_color _col "$_name"
-    # **`:N%` は無色の通常輝度**（宛名やパス名と同じ扱い）。dim だと数値が沈んで読めない。
-    # 閾値色（緑/黄/赤）は試したうえで却下 — モデル名が既に色を持つので 1 要素に 2 系統の色が
-    # 入って賑やかになる。色はモデルの識別に使い、数値は輝度で立てる。
-    # `model_color` は末尾に RST を付けて返すので、ここで重ねない
-    line_lim+=("${_col}:${_pct}%")
-    [[ -n "$_reset_txt" ]] && line_lim+=("${DIM}${_reset_txt}${RST}")
-  done
-}
-
-# --- Reset-time memo (stdin 由来の epoch → 表示文字列) ---
-# **`date` を叩くのは epoch が変わったときだけ** = 5h / 7d に 1 回。従来は毎レンダー 2 回叩いていて、
-# 実測で `date -j` 1 回 4.15ms を 1 描画に 2 回 = 約 8ms 払っていた。
-# リセット時刻の epoch はリセットまで動かないので、整形結果を覚えておけば丸ごと省ける
-# (使用率そのものは使うたび変わるのでキャッシュ不可 — 覚えるのは epoch→時刻の写像だけ)。
-#
-# **cache の値は epoch が一致したときしか使わない**。だから「cache に stdin 由来値を置かない」
-# 不変条件に触れない — 不一致は `date` に落ちるだけで、他セッションの値が表示に出る経路が無い。
-#
-# **ファイル名に config dir を混ぜる** — `CACHE_BASE` は UID 単位なので、`CLAUDE_CONFIG_DIR` で
-# 複数アカウントを併用して同時に走らせると 5h の epoch が違い、互いに上書きし合って
-# **毎レンダー date + mv** になり最適化前より遅くなる。fork ゼロの文字列置換でキーを分ける。
-readonly RESET_CACHE="${CACHE_BASE}/resets${CFG_KEY}"
-
-# format_reset EPOCH FMT — sets _reset を `date` の FMT で整形した文字列にする (1 fork: date)
-# 5h は `%H:%M`（時刻のみ）、週間は `%a %H:%M`（曜日つき）で、**曜日の有無が両者の区別**になる
-# (`19:31` = 5h / `土 16:00` = 週間。5h の窓は最大 5 時間なので曜日は要らない)。
-# **呼ぶのは `_memo_reset` からだけ** — あちらが epoch でメモ化するので、この fork は
-# リセットを跨いだ時にしか走らない。ユーザーが絶対時刻を選択。2026-08-15。
-format_reset() {
-  _reset=""
-  # `""` / `null` も数値マッチで落ちるので、別途の空判定は要らない
-  [[ "$1" =~ ^[0-9]+$ ]] || return
-  _reset=$(date -j -r "$1" +"$2" 2>/dev/null)
-  # **書式は `timeFormat` 由来の任意文字列なので、出力側で必ず制御文字を落とす。**
-  # 入力側の禁止リストは strftime の修飾子に追いつけない（`%%nn` は 1 パス置換をすり抜け、
-  # `%En` / `%Ot` は BSD strftime が改行タブとして解釈する）。**改行が 1 個混ざるだけで
-  # Line 5 が 2 行に割れて 5 行契約が壊れ**、US/RS はリセットメモのレコードを割る。
-  _reset="${_reset//$'\n'/}"; _reset="${_reset//$'\t'/}"; _reset="${_reset//$'\r'/}"
-  _reset="${_reset//$'\037'/}"; _reset="${_reset//$'\036'/}"
-}
-
-# _memo_reset EPOCH CACHED_EPOCH CACHED_TEXT FMT OUTVAR — sets OUTVAR と `_memo_dirty`
-# **5h と週間で同型なので 1 本にする** — arm を複製すると「過ぎた epoch は `now`」のような
-# 全枠に効くべき判定を片方だけに書いてしまう (実際に 5h だけに入れて非対称になった)。
-_memo_reset() {
-  local ep="$1" cep="$2" ctxt="$3" fmt="$4" out="$5"
-  printf -v "$out" '%s' ""
-  [[ "$ep" =~ ^[0-9]+$ ]] || return
-  # **過ぎた epoch は `now`** — 絶対時刻だけ出すと `14:03` や `土 16:00` が「これからリセット」と
-  # 読めてしまい、実際は過ぎている (窓がロールオーバー済み / stdin の値が遅れている) のに
-  # 「あと N 時間」と誤読させる。曜日つきの週間側ほど強く効く。
-  # **メモには入れない** — 時間で変わる値を覚えると、epoch が一致する限り hit して古い表示が残る。
-  if ((ep <= _NOW)); then printf -v "$out" '%s' "now"; return; fi
-  if [[ "$ep" == "$cep" && -n "$ctxt" ]]; then printf -v "$out" '%s' "$ctxt"; return; fi
-  format_reset "$ep" "$fmt"
-  printf -v "$out" '%s' "$_reset"
-  # **書くのは値が取れた時だけ** — 空を覚えると `-n "$ctxt"` を自分で満たせず、毎レンダー
-  # `date` + `mv` を払い続ける (メモ化がコスト増になる唯一の経路)
-  [[ -n "$_reset" ]] && _memo_dirty=1
-}
-
-# resolve_resets FIVE_EPOCH SEVEN_EPOCH — sets _five_txt / _seven_txt
-resolve_resets() {
-  local fe="$1" se="$2" c5="" t5="" c7="" t7="" mtz="" mtf="" mloc=""
-  _memo_dirty=0
-  # **read の rc は見ない** — 末尾改行が無いので rc=1 でも内容は入る (宛名スキャンと同じ罠)。
-  # gate は `-r`（`read < "$f" 2>/dev/null` は入力側の失敗を黙らせられない）。
-  local mfmt=""
-  if [[ -r "$RESET_CACHE" ]]; then
-    IFS=$'\037' read -r mfmt c5 t5 c7 t7 mtz mtf mloc < "$RESET_CACHE"
-  fi
-  # 形式が違えばメモを空扱いにする（`date` に落ちるだけなので誤表示の経路は無い）
-  [[ "$mfmt" == "$RESET_FMT" ]] || { c5="" t5="" c7="" t7="" mtz="" mtf="" mloc=""; }
-  # **ゾーンと書式もメモのキーに入れる** — メモは epoch → **表示文字列**の写像なので、
-  # `timeZone` / `timeFormat` を変えた直後に epoch だけ一致すると**古い書式の文字列が居座る**
-  # (次のリセットまで最大 1 週間)。不一致なら捨てて `date` に落ちるだけ = 誤表示の経路は無い。
-  [[ "$mtz" == "$_tz" && "$mtf" == "$_tf_key" && "$mloc" == "$_LOC_KEY" ]] || { c5="" t5="" c7="" t7=""; }
-  # **タイムゾーン名は出さない**（v1.79.0 でユーザー選択。v1.78.0 で `JST 19:31` と出していた）—
-  # 画面の時刻は**すべて例外なく同じゾーン**（既定はこのマシンのローカル、`timeZone` を設定したなら
-  # そのゾーン）なので、ゾーン名は情報を増やさない。「どのゾーンか」は README / docs に書く。
-  # `24-hour-utc` のときはリセット時刻に `Z` が付くので、そこだけは表記自体が UTC を示す
-  # (Line 3 の last commit は書式が固定なので `Z` は付かない。ゾーンは同じ)。
-  _memo_reset "$fe" "$c5" "$t5" "$_fmt_five" _five_txt
-  _memo_reset "$se" "$c7" "$t7" "$_fmt_seven" _seven_txt
-  # 書くのはリセットを跨いだ時だけ。atomic mv は 1 fork だが 5h に 1 回なので影響しない
-  # (中間ファイル名に PID を入れるのは並走ペインが同じ .tmp を潰し合わないため)。
-  if ((_memo_dirty)); then
-    [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE"
-    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s' \
-      "$RESET_FMT" "$fe" "$_five_txt" "$se" "$_seven_txt" "$_tz" "$_tf_key" "$_LOC_KEY" \
-      > "${RESET_CACHE}.tmp-$$" && mv "${RESET_CACHE}.tmp-$$" "$RESET_CACHE"
-  fi
-}
-
-# --- 最新版から遅れているときだけ版を立てる ---
-# **最新版は Claude Code 自身が置いたキャッシュから読む** — `<config dir>/cache/changelog.md` の
-# 冒頭の `## X.Y.Z` が最新リリース (Claude Code が定期取得する。`~/.claude.json` の
-# `changelogLastFetched` が取得時刻)。**ネットワークもキャッシュ書き込みも fork もゼロ**で、
-# 「latest を知る」という本来ネットワークが要る情報を**ローカル読み 1 回**で得る。
-# 却下: npm registry を背景 curl する案 — 遅れの検知は「latest との差」だけが要件で、
-# Claude Code が既に取ってきた答えがディスクにあるのに 2 本目のネットワークを足す理由が無い。
-# **事実 (latest) と色は分ける** — 他の要素 (build_git/render_git、model_key/model_color) と同じ
-# 作法。抽出が壊れたのか色の判定が変わったのかをテストから切り分けられる。
-
-# latest_cc_version VARNAME — sets VARNAME に changelog キャッシュ冒頭の `## X.Y.Z` (無ければ空)
-# **読む行数に上限を置く** — `## ` を持たない形式に変わったとき、上限が無いと 500KB 超を毎レンダー
-# 読み切る (transcript の forkedFrom スキャンと同じ cap の作法)。見出しは冒頭数行にあるので 20 行で十分。
-latest_cc_version() {
-  local line scan=0 cl="${CONFIG_DIR}/cache/changelog.md"
-  printf -v "$1" '%s' ""
-  # gate は `-r`（`< "$f" 2>/dev/null` はリダイレクトが先に評価されるので入力側の失敗を黙らせられない）
-  [[ -r "$cl" ]] || return
-  while IFS= read -r line; do
-    # `## ` で始まる最初の行が最新版。`# Changelog` の見出しは `## ` に当たらない
-    if [[ "$line" == '## '* ]]; then printf -v "$1" '%s' "${line#'## '}"; return; fi
-    ((++scan >= 20)) && return
-  done < "$cl"
-}
-
-# resolve_version_color VERSION — sets _ver_col
-# **遅れの判定は数値比較** (`ver_older`) — 文字列比較だと `2.1.9` > `2.1.10` になる。
-# 読めない / 形式が変わった / 追いついている ときは**すべて dim に落ちる** = 無表示に倒す
-# （このリポの「無表示 < 誤読させる表示」。changelog は未文書の内部ファイルなので特に）。
-# **窓もタイムスタンプも持たない** — 状態は「今の版 vs 最新版」だけで決まるので、更新すれば
-# 次のレンダーで自然に dim へ戻る。書き込みが無い＝並走ペインの競合も無い。
-resolve_version_color() {
-  local latest=""
-  _ver_col="$DIMVER"
-  latest_cc_version latest
-  ver_older "$1" "$latest" && _ver_col="$VEROLD"
-}
-
-
-
-# --- JSON extraction (single jq call) ---
-# **stdin は変数に読まない** — `$( )` が継承するので、渡し直す口（here-string / プロセス置換）が要らない。
-
-# Initialize all jq variables — prevents set -u instant death if eval fails
-model="" model_id="" current_dir="." used_pct=""
-exceeds_200k="false" cc_version="" session_name="" session_id="" transcript_path=""
-agent_name="" ctx_window_size=0
-five_pct="" five_reset_epoch="" seven_pct="" seven_reset_epoch=""
-wt_name="" wt_path="" wt_orig_branch="" added_dirs_count=0 ws_git_worktree=""
-ws_repo_host="" ws_repo_owner="" ws_repo_name="" ws_repo_id="" ws_repo_forge=""
-pr_review_state=""
-now_epoch=0
-vim_mode=""
-effort_level="" thinking_enabled="false" fast_mode="false" output_style=""
-cost_cents=0 dur_sec=0
-pc_warm="" pc_hit=""
-tf_setting="" tz_setting=""
-_jq_ok=1
-# **時刻表記の設定はユーザー settings から読む**（Claude Code 2.1.257+ の `timeFormat` / `timeZone`）。
-# **`--rawfile` で渡して `fromjson?` で開ける** — こうすると ① fork が増えない（既存の 1 回に相乗り）
-# ② **壊れた settings.json でも jq が abort しない**。`--slurpfile` だと jq が JSON として読むので
-# 構文エラーで**抽出が丸ごと死に、statusline が空白になる**（settings は人が手で編集するので現実に壊れる）。
-# 生文字列として受けて `fromjson?` で失敗を捨てれば、壊れていても「設定なし」に倒れるだけ。
-# **`fromjson?` だけでは足りない — `| objects` が必須。** `?` が吸うのは構文エラーだけなので、
-# `[]` や `"x"` や `5` のような**有効な JSON で object でない値**は通り抜け、`$cfg.timeFormat` が
-# `Cannot index array` で rc=5 = 抽出が丸ごと死ぬ（実測で Line 1 が `jq error`、5 行が 3 行になった）。
-# 存在しないときは `/dev/null`（`--rawfile` は実在するパスを要求する。空文字列 → `fromjson?` → 既定）。
-#
-# **読むのはユーザー settings 1 枚だけ。** 上流の優先順位は managed > CLI > project local > project >
-# user だが、project 側のパスは `workspace.current_dir` に依存する = **この jq が返す値**なので、
-# jq を起動する前には決まらない（`--rawfile` のパスは起動時に固定される）。`/config` の Display 系は
-# ユーザーファイルに書かれる（上流 settings docs）ので実用上ここで足りる。取りこぼした場合は
-# **従来どおりのローカル 24 時間表記に倒れるだけ**（誤った書式を出す経路にはならない）。
-# 再検討条件は「project 側の `timeFormat` で食い違った」報告。
-# **gate は `-f` + `-r`** — `-r` だけだとディレクトリを通すが、`--rawfile` はディレクトリで
-# rc=2 abort する（= 抽出が丸ごと死ぬ）。`settings.json/` を作れる経路は現実にある。
+# ── 抽出: 1 回の jq で全部 ────────────────────────────────────────────────
+# **入れ子の index は各段に `?` を付ける**（`?` は直前の 1 段にしか効かない） — `.effort.level` は `effort` が**文字列や数値に変わった
+# 瞬間に jq 全体を abort** させ、`jq error` の 1 行だけになる（= 表示が丸ごと落ちる）。`?` は
+# 文字列・数値・配列のどれを食っても空を返す（実測）。**算術と時刻整形は `type != "number"` で
+# 守る** — `?` は index の失敗しか捕まえないので、`round` / `* 100` / `strflocaltime` に
+# 文字列が入る経路は別に塞ぐ。**`// ""` だけでは足りない**（欠損は防げても型変更は防げない）。
+# payload は未文書なので、上流が型を変える可能性は「無い」と決められない。
+# `// ""` を必ず付ける（古い Claude Code では要素が出ないだけで壊れない）。
+model="" model_id="" effort_level="" current_dir="." wt_name="" used_pct="" ctx_size=0
+five_pct="" five_at="" seven_pct="" seven_at="" session_id="" cc_version="" cost_cents=0
+pc_state="" pc_cause="" _NOW=0 fast_mode=false _jq_ok=1
+tz_setting="" tf_setting="" five_ep="" seven_ep=""
+# **時刻表記の設定はユーザー settings から読む**（2.1.257+ の `timeZone`）。**既存の 1 回の jq に
+# `--rawfile` で相乗りさせる**ので fork は増えない。**`--slurpfile` は使わない** — jq が JSON として
+# 読むので、人が手で壊した settings.json で**抽出が丸ごと死んで statusline が空白になる**。
+# **`fromjson? | objects` を `// {}` で受けるのが必須** — `?` が吸うのは構文エラーだけなので
+# `[]` や `5` は通り抜け、さらに**素朴に書くと空ストリームになって `@sh` の行が丸ごと消える**
+# （実測: `tz=` の行が出ず、eval しても変数が未定義のまま = `set -u` で死ぬ）。`as $cfg` で束ねる。
+# **存在しないときは `/dev/null`**（`--rawfile` は実在するパスを要求する）。**gate は `-f` + `-r`** —
+# `-r` だけだとディレクトリを通し、`--rawfile` はディレクトリで abort する。
+# **読むのはユーザー settings 1 枚だけ** — project 側のパスは `current_dir` 依存で、その値は
+# この jq が返すものなので起動前に決まらない。取りこぼしても従来表記に倒れる（誤表示にならない）。
 _settings_file="${CONFIG_DIR}/settings.json"
 [[ -f "$_settings_file" && -r "$_settings_file" ]] || _settings_file=/dev/null
-_jq_out=$(jq -r --rawfile _settings "$_settings_file" '
-  @sh "model=\(.model.display_name // "Unknown")",
-  @sh "model_id=\(.model.id // "")",
-  @sh "current_dir=\(.workspace.current_dir // ".")",
-  @sh "used_pct=\(.context_window.used_percentage // "")",
-  @sh "exceeds_200k=\(.exceeds_200k_tokens // false)",
-  @sh "cc_version=\(.version // "")",
-  @sh "session_name=\(.session_name // "")",
-  @sh "session_id=\(.session_id // "")",
-  @sh "transcript_path=\(.transcript_path // "")",
-  @sh "agent_name=\(.agent.name // "")",
-  @sh "ctx_window_size=\(.context_window.context_window_size // 0)",
-  @sh "five_pct=\(.rate_limits.five_hour.used_percentage // null | if . == null then "" else round end)",
-  @sh "five_reset_epoch=\(.rate_limits.five_hour.resets_at // null | if . == null then "" else floor end)",
-  @sh "seven_pct=\(.rate_limits.seven_day.used_percentage // null | if . == null then "" else round end)",
-  @sh "seven_reset_epoch=\(.rate_limits.seven_day.resets_at // null | if . == null then "" else floor end)",
-  @sh "wt_name=\(.worktree.name // "")",
-  @sh "wt_path=\(.worktree.path // "")",
-  @sh "wt_orig_branch=\(.worktree.original_branch // "")",
-  @sh "added_dirs_count=\(.workspace.added_dirs // [] | length)",
-  @sh "ws_git_worktree=\(.workspace.git_worktree // "")",
-  @sh "ws_repo_host=\(.workspace.repo.host // "")",
-  @sh "ws_repo_owner=\(.workspace.repo.owner // "")",
-  @sh "ws_repo_name=\(.workspace.repo.name // "")",
-  @sh "pr_review_state=\(.pr.review_state // "")",
-  @sh "vim_mode=\(.vim.mode // "")",
-  @sh "effort_level=\(.effort.level // "")",
-  @sh "thinking_enabled=\(.thinking.enabled // false)",
-  @sh "fast_mode=\(.fast_mode // false)",
-  @sh "output_style=\(.output_style.name // "")",
-  @sh "cost_cents=\(.cost.total_cost_usd // 0 | . * 100 | round)",
-  @sh "pc_warm=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
-  @sh "pc_hit=\(.prompt_cache.hit_ratio // null | if . == null then "" else (. * 100 | round) end)",
-  @sh "dur_sec=\(.cost.total_duration_ms // 0 | . / 1000 | floor)",
-  @sh "now_epoch=\(now|floor)",
+_jq=$(jq -r --rawfile _settings "$_settings_file" '
   (($_settings | fromjson? | objects) // {}) as $cfg
-    | @sh "tf_setting=\($cfg.timeFormat // "" | tostring)",
-      @sh "tz_setting=\($cfg.timeZone // "" | tostring)"
-' 2>/dev/null) || _jq_ok=0
-if ((_jq_ok)); then eval "$_jq_out" || true; fi
-# **0 なら `date` に落とす** — eval が失敗した時に `_NOW=0` を使うと、`cache_stale` は
-# 「古くない」で安全側に倒れる一方、リセットの `now` 判定と commit age が誤表示になる。
-# 正常経路では追加コストなし（jq が既に値を返している）。
-[[ "$now_epoch" =~ ^[0-9]+$ ]] && ((now_epoch > 0)) || now_epoch=$(date +%s)
-readonly _NOW="$now_epoch"
+  | @sh "tz_setting=\($cfg.timeZone // "" | tostring)",
+  @sh "tf_setting=\($cfg.timeFormat // "" | tostring)",
+  @sh "model=\(.model?.display_name? // "")",
+  @sh "model_id=\(.model?.id? // "")",
+  @sh "effort_level=\(.effort?.level? // "")",
+  @sh "current_dir=\(.workspace?.current_dir? // .cwd? // ".")",
+  @sh "wt_name=\(.worktree?.name? // "")",
+  @sh "used_pct=\(.context_window?.used_percentage? // null | if type != "number" then "" else round end)",
+  @sh "ctx_size=\(.context_window?.context_window_size? // 0 | if type != "number" then 0 else . end)",
+  @sh "five_pct=\(.rate_limits?.five_hour?.used_percentage? // null | if type != "number" then "" else round end)",
+  @sh "five_ep=\(.rate_limits?.five_hour?.resets_at? // null | if type != "number" then "" else floor end)",
+  @sh "five_at=\(.rate_limits?.five_hour?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (floor|strflocaltime("%H:%M")) end)",
+  @sh "seven_pct=\(.rate_limits?.seven_day?.used_percentage? // null | if type != "number" then "" else round end)",
+  @sh "seven_ep=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" else floor end)",
+  @sh "seven_at=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (floor|strflocaltime("%w %H:%M")) end)",
+  @sh "session_id=\(.session_id? // "")",
+  @sh "cost_cents=\(.cost?.total_cost_usd? // 0 | if type != "number" then 0 else . * 100 | round end)",
+  @sh "fast_mode=\(.fast_mode // false)",
+  @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
+  @sh "pc_cause=\((.prompt_cache?.last_miss_cause?.causes? // []) | if type != "array" or length == 0 then "" else (.[0] | tostring | gsub("[[:cntrl:]]"; " ")) end)",
+  @sh "cc_version=\(.version? // "")",
+  @sh "_NOW=\(now|floor)"
+' 2>/dev/null) && eval "$_jq" || _jq_ok=""
+# **空の出力も失敗**として扱う — jq は**空の stdin では rc=0 で何も出さない**ので、
+# rc だけ見ると素通りする（実測: 空入力で `jq error` が出なかった）。抽出プログラムは常に
+# 18 行の `@sh` を出すので、**出力が空 = 失敗**と断定できる。
+[[ -n "$_jq" ]] || _jq_ok=""
 
-# --- 時刻表記 (Claude Code 2.1.257+ の timeFormat / timeZone) ---
-# **本体の時計と表記を揃えるためだけの機能**。ゾーン名は依然として出さない（画面のすべての時刻が
-# 同じゾーンなので名前は情報を増やさない）。上流の解決順は `F0e()` の実測に合わせる:
-#   `24-hour-utc` は **`timeZone` を無視して UTC に固定**（上流も timeZone を読む前に return する）
-#   → それ以外は `timeZone` を解決 → preset か、`%` を含めばパターン。
+# ── 時刻表記: `timeZone` に追従し、曜日は英語 3 文字に固定する ──────────────
+# **曜日は locale に頼らない。** jq には `%w`（0=日曜の数値）を出させて、bash 側で固定の英語名に
+# 引く。`%a` は `LC_TIME` 依存で、Ghostty が入れる `en_US.UTF-8` を `~/.zshenv` が上書きしている
+# この環境では**日本語の「土」が出ていた**。`LC_ALL=C` を jq に被せる案は却下 — `gsub` の
+# 文字クラスまで巻き込むうえ、**「英語で出す」という意図がコードに現れない**。
 #
-# **`auto`（既定）は追わない。** 上流の `auto` は locale に従う (Intl の hourCycle) が、BSD の
-# `date` に「この locale の時刻書式」を安全に出させる指定が無い（`%X` は秒まで付く）。24 時間の
-# locale では現状の `%H:%M` と一致するので、**明示的に選ばれた 3 preset とパターンだけを追う**。
+# **ゾーンは `export TZ` 1 本で通す** — 描画側の jq も背景 subshell の jq も同じゾーンになるので、
+# 時刻を作る箇所ごとに引数を配らなくて済む（**だから `fetch_account` より前に決める**）。
+# **不正な名前は必ず落とす** — libc は不正な `TZ` を**黙って UTC にする**が、上流はシステムの
+# ゾーンに戻す。落とさないと「UTC の時刻をローカルだと思って読む」= 誤読になる。判定は
+# **先頭 4 バイトの TZif マジック**（fork ゼロ。`-e` の実在チェックだけでは `Asia` のような
+# ディレクトリや `zone.tab` を通してしまう）。`..` / 先頭 `/` / 先頭 `:` は形で先に弾く
+# （`../../etc/passwd` は zoneinfo 配下から**実在してしまう**）。
 #
-# **TZ は環境変数 1 本で通す** — `export TZ` すれば `date -j` も jq の `strflocaltime`（背景 subshell が
-# 継承する）も同じゾーンになるので、時刻を作る箇所ごとに引数を配らなくて済む。
-# **不正な名前は必ず落とす** — libc は不正な TZ を**黙って UTC にする**が、上流は**システムのゾーン**に
-# フォールバックする（Intl で検証して失敗なら undefined）。落とさないと「UTC で表示された時刻を
-# ローカルだと思って読む」= 誤読を作る。`/usr/share/zoneinfo` の実在チェックで fork ゼロで判定する。
-# `..` と先頭 `/` と先頭 `:` を先に弾く — `../../etc/passwd` は zoneinfo 配下から**実在してしまう**。
-_fmt_five="%H:%M" _fmt_seven="%a %H:%M" _tz="" _loc_key=""
-resolve_time_format() {
-  local tf="$1" tz="$2" utc=""
-  # **書式は必ずサニタイズする** — 値はユーザーの settings から来る任意文字列で、`date` の書式に
-  # そのまま渡る。`%n` / `%t` / 生の改行・タブは **5 行契約を壊し**（Line 5 が 2 行に割れる）、
-  # US/RS はリセットメモのレコードを割って**別フィールドを読ませる**。上流も `stn()` で
-  # サニタイズ + 100 文字で切っているので、長さの上限も合わせる。
-  # **入力側の禁止リストだけでは閉じない** — `${tf//%n/}` は 1 パスの非重複置換なので `%%nn` が
-  # `%n` に化け、BSD strftime は `E`/`O` 修飾子も受けるので `%En` / `%Ot` でも改行タブが出る
-  # (実測で 5 行が 6 行になった)。**最後の砦は `format_reset` と背景 jq の出力側**（下記）で、
-  # ここは「素朴な指定を素朴に落とす」だけの第 1 段。
-  tf="${tf//%n/}"; tf="${tf//%t/}"
-  tf="${tf//$'\n'/}"; tf="${tf//$'\t'/}"; tf="${tf//$'\r'/}"
-  tf="${tf//$'\037'/}"; tf="${tf//$'\036'/}"
-  tf="${tf:0:100}"
-  case "$tf" in
-    24-hour-utc) utc=1 ;;
+# **`timeFormat` はプリセット 3 つだけ追う。** `%` を含むユーザー定義パターンは**採らない** —
+# `%n` / `%t` が **3 行契約を割り**、US がキャッシュのレコードを割る（v1 はサニタイズの多段で
+# 塞いだが、アルファでその面積を持つ価値がない）。`auto` も追わない（BSD の `date` / jq に
+# 「この locale の時刻書式」を安全に出させる指定が無い）。**12 時間と `Z` 付けは bash 側の
+# 変換で済ませる**ので、jq に渡す書式文字列は `%H:%M` / `%w %H:%M` の 2 つに固定される
+# = **書式の注入経路がそもそも無い。**
+readonly WDAY=(Sun Mon Tue Wed Thu Fri Sat)
+_tz="" _tf12="" _tfz=""
+case "$tf_setting" in
+  24-hour-utc) _tz="UTC"; _tfz="Z" ;;
+  12-hour)     _tf12=1 ;;
+esac
+if [[ -z "$_tz" ]]; then
+  case "$tz_setting" in
+    ""|*..*|/*|:*) : ;;
+    *) if [[ -f "/usr/share/zoneinfo/$tz_setting" ]]; then
+         # **gate は `-f`**（`2>/dev/null` ではリダイレクト自身の失敗を黙らせられず、
+         # `JST` や `Asia/Toyko` のような typo で**毎レンダー stderr に 1 行漏れる**）
+         IFS= read -r -n 4 _magic < "/usr/share/zoneinfo/$tz_setting" || _magic=""
+         [[ "$_magic" == TZif ]] && _tz="$tz_setting"
+       fi ;;
   esac
-  # ゾーンの解決（`24-hour-utc` は上流と同じく timeZone を読まずに UTC 固定）
-  if [[ -n "$utc" ]]; then
-    tz="UTC"
-  else
-    case "$tz" in
-      ""|*..*|/*|:*) tz="" ;;
-    esac
-    # **実在チェックだけでは足りない。** `-e` はディレクトリ (`America` / `Asia`) も、ゾーンでない
-    # 実ファイル (`zone.tab` / `iso3166.tab` / `+VERSION`) も通す。libc はどれも解釈できないので
-    # **黙って UTC に落ちる**（実測: `timeZone:"America"` でローカル 12:23 が 03:23 になった）。
-    # **先頭 4 バイトの TZif マジックで判定する** — ディレクトリは `read` が失敗して空になるので
-    # 同時に弾ける。fork ゼロ（`read` は組み込み。`file` も `-f` も要らない）。
-    if [[ -n "$tz" ]]; then
-      local _magic=""
-      # **gate は `-f`（`2>/dev/null` では黙らせられない）** — リダイレクト自身の失敗はシェルが
-      # 報告するので、存在しない名前（`JST` や `Asia/Toyko` のような typo = 一番ありそうな誤設定）で
-      # **毎レンダー stderr に 1 行漏れる**。`-f` はディレクトリと FIFO も同時に外すので
-      # マジック判定の前段として過不足がない（`--rawfile` を `-f` + `-r` で gate したのと同じ形）。
-      if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
-        IFS= read -r -n 4 _magic < "/usr/share/zoneinfo/$tz"
-      fi
-      [[ "$_magic" == TZif ]] || tz=""
-    fi
+fi
+if [[ -n "$_tz" ]]; then
+  export TZ="$_tz"
+  # **ゾーンが決まったときだけ整形をやり直す**（1 回の `jq -n` = このときだけ fork が 1 増える）。
+  # 既定（`timeZone` 未設定）では 0 回なので、**hot path の床は jq 1 + git 1 のまま**。
+  # 書式は上の 2 つに固定なので `--arg` で渡す必要も無い。
+  _rt=$(jq -rn --arg fe "$five_ep" --arg se "$seven_ep" '
+    @sh "five_at=\($fe | if . == "" then "" else tonumber | if . <= now then "now" else strflocaltime("%H:%M") end end)",
+    @sh "seven_at=\($se | if . == "" then "" else tonumber | if . <= now then "now" else strflocaltime("%w %H:%M") end end)"
+  ' 2>/dev/null) && eval "$_rt" || true
+fi
+
+# fmt_time VARNAME VALUE — jq が出した `"%w %H:%M"` / `"%H:%M"` / `"now"` / `""` を表示形にする
+# （曜日を英語名に、必要なら 12 時間と `Z` を適用。**fork ゼロ**）
+fmt_time() {
+  local _v="$2"
+  if [[ -z "$_v" || "$_v" == now ]]; then printf -v "$1" '%s' "$_v"; return; fi
+  local _wd="" _hm="$_v"
+  if [[ "$_v" =~ ^([0-6])" "(.*)$ ]]; then
+    _wd="${WDAY[${BASH_REMATCH[1]}]} "; _hm="${BASH_REMATCH[2]}"
   fi
-  _tz="$tz"
-  [[ -n "$_tz" ]] && export TZ="$_tz"
-  # 書式の解決。**曜日の有無が 5h と週間の区別**なので、どの分岐でも週間側だけ `%a` を持つ。
-  case "$tf" in
-    12-hour)     _fmt_five="%-I:%M %p"; _fmt_seven="%a %-I:%M %p" ;;
-    24-hour)     _fmt_five="%H:%M";     _fmt_seven="%a %H:%M" ;;
-    24-hour-utc) _fmt_five="%H:%MZ";    _fmt_seven="%a %H:%MZ" ;;
-    *%*)
-      # パターンは 5h 側はそのまま。週間側は **自前で曜日を持っていなければ** `%a ` を前置する
-      # (持っているのに前置すると曜日が 2 回出る)。
-      _fmt_five="$tf"
-      case "$tf" in
-        *%a*|*%A*) _fmt_seven="$tf" ;;
-        *)         _fmt_seven="%a $tf" ;;
-      esac ;;
-    *)           _fmt_five="%H:%M";     _fmt_seven="%a %H:%M" ;;   # auto / 未知 / 未設定
-  esac
-  # メモの照合に使う正規化済みの値（サニタイズ後の書式指定と、検証を通ったゾーン）
-  _tf_key="$tf"
-  # **ロケールも照合キーに入れる** — メモは epoch → **表示文字列**の写像なので、
-  # 描画結果を変える入力は全部キーに入っていないと古い文字列が居座る。`%a` / `%A` / `%p` は
-  # `date` と jq の `strflocaltime` が **`LC_ALL` → `LC_TIME` → `LANG`** の順で見るので、
-  # ここが変わると `Sat 16:00` が `土 16:00` に変わる。ゾーンと書式だけをキーにしていると、
-  # 週間枠は epoch が動くまで（最大 1 週間）英語の曜日が残る（Ghostty の `LANG=en_US.UTF-8` を
-  # `.zshenv` で `ja_JP.UTF-8` に変えた実例で踏んだ）。**環境変数の読みだけなので fork ゼロ**。
-  _loc_key="${LC_ALL:-${LC_TIME:-${LANG:-}}}"
+  if [[ -n "$_tf12" && "$_hm" == *:* ]]; then
+    local _h="${_hm%%:*}" _ap="AM"
+    local _m="${_hm#*:}"
+    _h=$((10#$_h))
+    ((_h >= 12)) && _ap="PM"
+    ((_h > 12)) && _h=$((_h - 12))
+    ((_h == 0)) && _h=12
+    _hm="${_h}:${_m} ${_ap}"
+  fi
+  printf -v "$1" '%s' "${_wd}${_hm}${_tfz}"
 }
-_tf_key=""
-resolve_time_format "$tf_setting" "$tz_setting"
-readonly _LOC_KEY="$_loc_key"
+fmt_time five_at "$five_at"
+fmt_time seven_at "$seven_at"
+# **jq が読めなかったことを黙らない** — 抽出が丸ごと失敗すると全変数が初期値のままになり、
+# **要素が静かに消えて 1 行だけの出力**になる（fixture を壊して実測）。それは「入力が壊れている」
+# ではなく「何も起きていない」に読める = 誤読。v1 は `jq error` を赤で出していたので踏襲する。
+# **表示できないことより、読めないと言えないことの方が悪い。**
+#
+# **算術に入れる値は数値に正規化する** — jq が落ちて eval されなかったときに
+# `((cost_cents > 0))` が syntax error になり、毎描画 stderr が漏れる（ahead/behind で 1 回踏んだ）。
+[[ "$cost_cents" =~ ^[0-9]+$ ]] || cost_cents=0
+[[ "$_NOW" =~ ^[0-9]+$ ]] || _NOW=0
 
-# Claude Code 2.1.145+ workspace.repo: precompute "owner/repo" once, share between build_git and cold-start.
-# Empty unless stdin actually provided a **known forge** repo identity — both call sites use this as the gate.
-# **ホスト決め打ちの許可リストを残す** — 表示する略号 (`gh:`/`gl:`) と tree URL の形は forge ごとに
-# 違うので、任意ホストを通すと「知らない forge にそれっぽいリンクを張る」誤誘導になる。上流が
-# 対応しているのは GitHub と GitLab の 2 つ (2.1.233/2.1.234) なので、この 2 つだけ。
-# **完全一致で見る** — https の `Cie()` はポートを残す (`github.com:443`) ので、自前ホストや
-# ポート付きは一致せず要素が落ちる = 安全側 (出さない)。
-if has_val "$ws_repo_owner" && has_val "$ws_repo_name"; then
-  case "$ws_repo_host" in
-    github.com) ws_repo_forge="gh" ;;
-    gitlab.com) ws_repo_forge="gl" ;;
-  esac
-fi
-if [[ -n "$ws_repo_forge" ]]; then
-  ws_repo_id="${ws_repo_owner}/${ws_repo_name}"
-fi
-
-# worktree sessions: workspace.current_dir points to original repo
-if [[ -n "$wt_path" ]]; then
-  current_dir="$wt_path"
-fi
-
-# --- Git info (5s cached) ---
-# build_git DIR — git の「事実」だけを US(0x1f) 区切りで 1 行に出す (ANSI も stdin 由来値も混ぜない)。
-# 表示は render_git() が一手に引き受ける。事実だけをキャッシュするのが要点:
-#  - レコードは **`GIT_FMT` タグ + 12 フィールド**: branch detached repo_id remote ins del
-#    conflicts ahead behind age msg op（位置で読むので、この一覧と `GIT_FMT` と `render_git` の
-#    分解ループの変数列は常に同時に直す）
-#  - 3 経路 (非 detached / detached / cold-start) で gate を揃える必要が消える
-#    — cold-start は「多くのフィールドが空の facts」に退化するだけで、判断は presenter に 1 箇所化される
-#  - cache key は md5(dir) だけなので、stdin 由来値 (pr.review_state 等) を混ぜると同一 dir の
-#    別セッションが最大 5s 相手の値を出す。facts しか置かなければ構造的に起こらない
-# フィールド順: branch detached repo_id remote ins del conflicts ahead behind age msg
-build_git() {
-  local dir=$1 branch detached=0
-
-  branch=$(git -C "$dir" branch --show-current 2>/dev/null)
-  if [[ -z "$branch" ]]; then
-    branch=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
-    [[ -n "$branch" ]] && detached=1
-  fi
-  # Not a git repo (or fresh repo with no commits): nothing to cache
-  [[ -z "$branch" ]] && return
-
-  local repo_id="" remote="" ins=0 del=0 conflicts=0
-  local ahead=0 behind=0 age="" msg="" op="" _hostpart=""
-
-  # 進行中の git 操作 (rebase / merge / cherry-pick / revert / bisect)。
-  # **`HEAD@<sha>` だけでは「sha を直接 checkout した」と「rebase 中」が区別できない** — 実測で
-  # worktree が rebase 中に detached になり、Line 3 が `HEAD@3869b01` だけになって
-  # 「表示が変」と読まれた (どちらも同じ見た目なので状況を取れない)。
-  # git dir は worktree だと `<repo>/.git/worktrees/<name>` なので `rev-parse` で引く
-  # (背景実行なのでこの 1 fork は hot path に乗らない)。**中の判定は `[[ ]]` と `$(<file)` だけ**で
-  # fork を増やさない。進捗ファイルは interactive rebase が `msgnum`/`end`、
-  # `git am` 系の rebase-apply が `next`/`last` (名前が違うので両方見る)。
-  # **読めない / 数値でないときは番号を出さず操作名だけ** (無表示に倒す)。
-  # **進捗ファイルは arm で決める** — レイアウトは排他 (interactive rebase = `msgnum`/`end`、
-  # `git am` 系の rebase-apply = `next`/`last`) なので、後から 4 通り試す形にすると
-  # 「どちらでもない読み落ち」をフォールバックが隠す。
-  local _gd _cf="" _tf="" _cur _tot
-  _gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
-  if [[ -n "$_gd" ]]; then
-    # **arm はディスクレイアウト 1 つに 1 本**。操作名は arm の中で導出する — `rebase-apply` を
-    # 2 arm に分けると進捗ファイルの組（`next`/`last`）が複製され、名前が変わったとき片方だけ
-    # 直す事故になる（`/simplify` 指摘）
-    if   [[ -d "$_gd/rebase-merge" ]]; then op="rebase"; _cf="$_gd/rebase-merge/msgnum"; _tf="$_gd/rebase-merge/end"
-    elif [[ -d "$_gd/rebase-apply" ]]; then
-      # `rebase-apply` は `git am` でも作られる。`applying` があれば am（`git rebase --abort` を
-      # 打とうとして「am には無い」と気づく手戻りを防ぐ）
-      if [[ -f "$_gd/rebase-apply/applying" ]]; then op="am"; else op="rebase"; fi
-      _cf="$_gd/rebase-apply/next"; _tf="$_gd/rebase-apply/last"
-    elif [[ -f "$_gd/MERGE_HEAD" ]];        then op="merge"
-    elif [[ -f "$_gd/CHERRY_PICK_HEAD" ]];  then op="cherry-pick"
-    elif [[ -f "$_gd/REVERT_HEAD" ]];       then op="revert"
-    elif [[ -f "$_gd/BISECT_LOG" ]];        then op="bisect"
-    fi
-    # rebase 以外は `_cf`/`_tf` が空なので `-r` が偽 = 素通り。読めない/数値でなければ操作名だけ出す
-    if [[ -r "$_cf" && -r "$_tf" ]]; then
-      _cur=$(<"$_cf"); _tot=$(<"$_tf")
-      [[ "$_cur" =~ ^[0-9]+$ && "$_tot" =~ ^[0-9]+$ ]] && op="${op} ${_cur}/${_tot}"
-    fi
-  fi
-
-  # origin (dir の事実)。stdin の workspace.repo は使わない — cache に stdin 由来値を混ぜないため。
-  # background 実行なのでこの 1 fork は hot path に乗らない (presenter 側で stdin 値を優先する)。
-  remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
-  # **末尾スラッシュを剥がす** — git は URL を verbatim で持つので `https://github.com/o/r/` が来る。
-  # 残すと `repo_id="o/r/"` になり、末尾 `/` は「repo 部は真上の行」の標識と衝突して owner に誤読され、
-  # tree URL も `//tree/main` になる。上流も `oGs()` で `/+$` を落としている。複数個ありうるのでループ。
-  while [[ "$remote" == */ ]]; do remote="${remote%/}"; done
-  # **userinfo (`https://user@host/…`) を先に落とす** — 上流は 2.1.234 でこれを host 判定から外した
-  # (それまで `user@github.com` を host と読んでいた)。落とさないと下の arm が全部外れて `remote=""` に
-  # なり、**ブランチの OSC 8 リンクだけが静かに消える** (`gh:` は stdin 側から出るので気付けない)。
-  # スコープは**最初の `/` より前**に限る (上流の `(?:[^@/?#]*@)?` と同じ) — パスに `@` を含む
-  # repo 名 (`o/r@2`) を userinfo と誤読しないため。剥がすのは最短一致で 1 個だけ。
-  case "$remote" in
-    https://*@*)
-      _hostpart="${remote#https://}"
-      _hostpart="${_hostpart%%/*}"
-      [[ "$_hostpart" == *@* ]] && remote="https://${remote#*@}"
-      ;;
-  esac
-  case "$remote" in
-    git@github.com:*)        remote="https://github.com/${remote#git@github.com:}" ;;
-    ssh://git@github.com/*)  remote="https://github.com/${remote#ssh://git@github.com/}" ;;
-    https://github.com/*)    ;;
-    git@gitlab.com:*)        remote="https://gitlab.com/${remote#git@gitlab.com:}" ;;
-    ssh://git@gitlab.com/*)  remote="https://gitlab.com/${remote#ssh://git@gitlab.com/}" ;;
-    https://gitlab.com/*)    ;;
-    *)                       remote="" ;;
-  esac
-  remote="${remote%.git}"
-  # **ホスト名は綴りで剥がさず「scheme を落として最初の `/` まで」で捨てる** — forge を足すたびに
-  # `${remote#https://<host>/}` を 1 行増やすのは、増やし忘れで `repo_id` にホスト名が混じる
-  # (`gh:github.com/o/r`) 経路を作る。
-  if [[ -n "$remote" ]]; then repo_id="${remote#https://}"; repo_id="${repo_id#*/}"; fi
-
-  # Dirty state = **行数の増減** (`+470 -105`)。Claude Desktop の code 画面と同じ単位・同じ色で、
-  # ファイル状態ごとの件数 (旧 `A3 M6 ?1`) は出さない (v1.74.0、ユーザー選択)。
-  #
-  # - `diff HEAD` は **staged と unstaged を合算**する — Desktop の「ワーキングツリー」表示と同じ範囲。
-  #   分けて出していた頃の `A`(staged) / `M`(unstaged) の区別は無くなる。
-  # - **untracked の行は追加側に畳む** — Desktop は untracked を `added` として扱い専用の記号を持たない。
-  #   `git diff` は untracked を含まないので別途数える。`xargs -0 cat` なのでファイル数に関係なく
-  #   **ファイル数に依存しない fork 数**で数える (ファイルごとに開くと N fork になる)。
-  #   厳密な定数ではない — `xargs` は ARG_MAX を超える件数で grep を複数回起動する。
-  #   `-z` + `-0` で空白入りパスに対応する。
-  # - **binary は行数を持たない** (`numstat` が `-` を出す) のでスキップする。
-  # NOTE: `grep -c .` は no-match でも "0" を出力してから exit 1 する。`|| echo 0` を付けると
-  # pipefail 環境下で stdout が "0\n0" になり ((var > 0)) が syntax error を吐く。grep -c 単体で十分。
-  # 行数カウントは空行も数えたいので `grep -c .` ではなく **`grep -c ''`** を使う。
-  local _ni _nd _np
-  while IFS=$'\t' read -r _ni _nd _np; do
-    [[ "$_ni" =~ ^[0-9]+$ && "$_nd" =~ ^[0-9]+$ ]] || continue   # binary の `-` を捨てる
-    ((ins += _ni)); ((del += _nd))
-  done < <(git -C "$dir" diff HEAD --numstat 2>/dev/null)
-  # untracked の行数。3 つの罠を同時に踏むので、素朴な `xargs -0 cat | grep -c` にはしない
-  # (いずれも stderr も出ずに**黙って数が狂う / 永久に止まる**):
-  #  ① **`cd "$dir"` してから数える** — `git -C dir ls-files` は dir 相対のパスを出すが
-  #     `xargs` はカレントで動くので、cd しないと 1 件も読めず untracked が常に 0 になる。
-  #     `-- ':/'` でリポジトリ全体を対象にする (`diff HEAD` は cwd に関係なくリポ全体を見るので、
-  #     付けないとサブディレクトリ滞在時にスコープがずれる)。`:/` でもパスは cd 先からの相対なので
-  #     toplevel を引く追加 fork は要らない。
-  #  ② **`--` でオプション終端する** — `-n` という名の untracked ファイルは `cat -n` に化けて
-  #     **その分の行が消え** (実測 5 → 3)、`--bogus` なら `illegal option` で
-  #     **untracked 全体が 0 になる** (実測 4 → 0)。字種の拒否リストではなく発生条件を消す方針。
-  #  ③ **regular file だけに絞る** — `ls-files --others` は **symlink を列挙する**ので、
-  #     FIFO やデバイスを指す symlink があると読み込みが**永久にブロック**する (実測: 4 秒で
-  #     完了せず)。build_git が完走しないと cache の mtime が更新されず、5s の `cache_stale` が
-  #     毎レンダー新しい背景 job を spawn し続ける (表示は出続けるので沈黙した破綻)。
-  #     git の意味論でも symlink の「内容」はリンク先パス 1 行なので、辿るのは numstat と食い違う。
-  # 数えるのは `cat` ではなく **`grep -Ihc`** — `-I` が**バイナリを飛ばす**ので
-  # 「バイナリは行数を持たないので数えない」(tracked 側の numstat `-` ガードと同じ約束) が
-  # untracked 側でも成立し、しかも `cat` + `grep` の 2 fork が grep 1 つに減る。
-  # `-h` でパスを出させない (件数だけ来るのでパスに `:` が入っても解析が要らない)。
-  #  ④ **件数に上限を置く** — 数えるコストは untracked の**総バイト数**に比例するので、
-  #     `node_modules` や `venv` を ignore していないリポ (実測 30,000 件) では **5.17 秒**かかる。
-  #     `GIT_CACHE_MAX_AGE=5` を超えるので書き終えた時点で既に stale = 毎レンダー全走査し直し、
-  #     しかも背景 job が重なって積もる (symlink→FIFO で踏んだのと同じ形の破綻)。
-  #     上限を超えたら**untracked を数えない** (0 に倒す)。途中まで数えた合計は「間違った数」に
-  #     なるので、部分集計はしない。**`+N` 要素そのものは残る** — tracked 側は git が数えた正確な
-  #     値なので落とす理由が無く、落とすとかえって情報が減る（`/code-review` の指摘を受けて明文化）。
-  #     つまり上限超過時の `+N` は「tracked の増減」であって「全変更」ではない。500 件超は
-  #     ignore 設定の漏れなので、その状態を直すほうが先という判断。印を付ける案は却下 —
-  #     Line 3 に新しい記号を増やす価値が、この稀なケースに見合わない。
-  local _utl
-  _utl=$( cd "$dir" 2>/dev/null || exit 0
-          _paths=()
-          while IFS= read -r -d '' _p; do
-            [[ -f "$_p" && ! -L "$_p" ]] || continue
-            _paths+=("$_p")
-            ((${#_paths[@]} > UNTRACKED_FILE_CAP)) && break
-          done < <(git ls-files --others --exclude-standard -z -- ':/' 2>/dev/null)
-          # 0 件 (printf が空引数を渡してしまう) と cap 超過はどちらも数えない。
-          # bash 3.2 の `set -u` は空配列の展開で即死するので `[@]+` を付ける
-          ((${#_paths[@]} == 0 || ${#_paths[@]} > UNTRACKED_FILE_CAP)) && { printf '0\n'; exit 0; }
-          printf '%s\0' "${_paths[@]+"${_paths[@]}"}" \
-          | xargs -0 grep -Ihc -- '' 2>/dev/null \
-          | { _s=0
-              while IFS= read -r _l; do
-                [[ "$_l" =~ ^[0-9]+$ ]] && ((_s += _l))
-              done
-              printf '%s\n' "$_s"; } )
-  [[ "$_utl" =~ ^[0-9]+$ ]] && ((ins += _utl))
-  conflicts=$(git -C "$dir" diff --name-only --diff-filter=U 2>/dev/null | grep -c .)
-
-  if git -C "$dir" rev-parse --abbrev-ref '@{upstream}' &>/dev/null; then
-    ahead=$(git -C "$dir" rev-list --count '@{upstream}..HEAD' 2>/dev/null)
-    behind=$(git -C "$dir" rev-list --count 'HEAD..@{upstream}' 2>/dev/null)
-  fi
-
-  # Last commit age + message (single git log call)
-  local last_epoch log_output
-  log_output=$(git -C "$dir" log -1 --pretty=$'%ct\n%s' 2>/dev/null)
-  last_epoch="${log_output%%$'\n'*}"
-  msg="${log_output#*$'\n'}"
-  if [[ "$last_epoch" =~ ^[0-9]+$ ]]; then
-    # 単位は常に 1 つ (Line 4 の経過と同じ作法)。**どの古さでも必ず埋める** —
-    # 7 日超で age を空にしていた頃は render_git の gate が `-n "$age" && -n "$msg"` /
-    # `elif -n "$age"` の 2 本しかないため **msg も連鎖して落ち、Line 3 がブランチ名だけ**になった
-    # (最終コミットが 1 週間以上前のリポで再現。コミット無しと古いだけの区別も付かない)。
-    # gate を足すのではなく空の age が生まれる条件を消す方針 (v1.62.0)。
-    # **絶対時刻で出す**（v1.78.0、ユーザー選択。従来は `41m` / `2d` の相対表記）—
-    # 「19 分前」ではなく「何時のコミットか」を知りたい、という要望。リセット時刻を絶対に
-    # 揃えたのと同じ方向で、**画面上の時刻表記が 1 種類に寄る**（残る相対表記はセッション経過だけ）。
-    # `date` の fork はここ（背景の `build_git`）なので hot path に乗らない。
-    # **180 日以内は年を省く** — `08-17T13:13` で足り、年まで出すと Line 3 が伸びる。
-    # それより古ければ時刻を捨てて `2025-08-17` にする（古いコミットに分単位の意味は無い）。
-    local diff=$((_NOW - last_epoch))
-    # 書式は **ISO 8601 風**（`08-17T13:13`）— 区切りは `-`、日付と時刻の間は `T`。
-    # 年は省く（180 日超だけ `2025-08-17` で年を出し、時刻を捨てる）
-    if ((diff < 15552000)); then age=$(date -j -r "$last_epoch" +"%m-%dT%H:%M" 2>/dev/null)
-    else                         age=$(date -j -r "$last_epoch" +"%Y-%m-%d" 2>/dev/null); fi
-    [[ -z "$age" ]] && age="?"   # 変換できなくても空にしない（空だと msg が連鎖して落ちる）
-  else
-    msg=""
-  fi
-  [[ ${#msg} -gt 20 ]] && msg="${msg:0:20}.."
-  # 事実の中に区切り文字や改行が混ざると桁がずれる (branch 名は改行を持てないが msg は持てる)
-  msg="${msg//$'\n'/ }"; msg="${msg//$'\037'/ }"
-
-  local US=$'\037'
-  # **先頭に形式タグ (`GIT_FMT`)** — 読み側はこれが一致しないレコードを捨てて取り直す。
-  # フィールドを足す / 並べ替える / 意味や単位を変えるときは `GIT_FMT` の一覧も直すこと
-  # (一覧がそのままタグなので、直せば旧キャッシュは自動的に無効になる)。
-  printf '%s\n' "${GIT_FMT}${US}${branch}${US}${detached}${US}${repo_id}${US}${remote}${US}${ins}${US}${del}${US}${conflicts}${US}${ahead}${US}${behind}${US}${age}${US}${msg}${US}${op}"
-}
-
-# render_git FACTS — facts (build_git の出力 / cold-start の合成) + stdin 由来値から line_git を組む。
-# 表示判断はここだけにある。stdin 由来値 ($ws_repo_id / $pr_review_state) は cache に入れず毎回ここで足す。
-# 第 2 引数 = **Line 2 が実際に描いたパス** (worktree では repo root で切った側)。`gh:` の畳み込みが
-# 参照する。グローバル参照にすると「Line 2 区画の後で呼ぶ」という暗黙の順序依存になり、
-# 並べ替えたときに **fallback が黙って別の値を使って畳みが効かなくなる** (テストも stderr も赤くならない)。
-render_git() {
-  # 宣言と分解は `GIT_FIELDS` の 1 本から作る（`local $var` の word splitting は bash 3.2 で動く）
-  local $GIT_FIELDS
-  local screen_dir="${2:-$current_dir}"
-  # **here-string を使わない** — bash 3.2 の `<<<` は一時ファイルを作るので、`read <<<` は
-  # 実測 1.679ms（パラメータ展開の分割なら 0.083ms）。hot path なので毎描画に乗る。
-  # **末尾に US を 1 個足す**と「区切りが残っているか」の分岐が要らなくなる — 尽きた後は
-  # 空文字が続き、フィールド数より短いレコード（cold-start の 2 個）でも残りが空になる。
-  local _rest="$1"$'\037' _f
-  for _f in $GIT_FIELDS; do
-    printf -v "$_f" '%s' "${_rest%%$'\037'*}"
-    _rest="${_rest#*$'\037'}"
-  done
-  [[ -z "$branch" ]] && return
-
-  # .invalid: Git が空リポ (git init 直後 / clone 失敗残骸) の HEAD に使う placeholder
-  if [[ "$branch" == ".invalid" ]]; then
-    line_git+=("${DIM}(empty)${RST}")
-    return
-  fi
-
-  # 進行中の操作は**先頭**に置く — この行で最も行動に直結する事実で、後ろの `HEAD@<sha>` や
-  # ブランチ名に「なぜこの状態なのか」を与える。**色は既存の赤**（detached / conflicts と同じ
-  # 「特別な git 状態」の類なので、行に色系統を増やさない）。
-  [[ -n "$op" ]] && line_git+=("${RED}${op}${RST}")
-
-  if [[ "$detached" == 1 ]]; then
-    # detached では repo 識別も PR も出さない (どの branch の話でもないため)
-    line_git+=("${RED}HEAD@${branch}${RST}")
-  else
-    # repo 識別は stdin の workspace.repo (Claude Code 2.1.145+、fork ゼロ) を優先し、無ければ facts の origin。
-    # gh: プレフィックスのみ dim、owner/repo は通常輝度 — ローカル dir 名と origin repo 名の食い違いは
-    # ここでしか判別できない一次情報なので。
-    # **パス末尾が `/owner/repo` に一致したら省く** (v1.74.0) — ghq 系のレイアウト
-    # (`~/ghq/github.com/<owner>/<repo>`) では Line 2 のパスがそのまま owner/repo で終わるので、
-    # `gh:` が同じ文字列の二度出しになる。上の一次情報という理由は覆さず、**その理由が効くとき
-    # だけ出す**形に純化する (「違う時だけ出るなら差分そのものがシグナル」の適用)。
-    # 大文字小文字が違えば一致しないので「出続ける」側に倒れる = 誤って消える事故は起きない。
-    # **worktree でも畳む** — Line 2 は `<repo>/.claude/worktrees/<name>` を repo root で切って
-    # 描くので、比較するのは**画面に出ているパス**（第 2 引数の `screen_dir`）。`current_dir`
-    # （末尾 = worktree 名）と比べていた頃は、画面に 2 回出ている repo 名を畳めなかった。
-    # **一致した成分だけ削る 3 段**: `/owner/repo` 一致 → 出さない / `/repo` だけ一致 →
-    # `gh:owner/`（owner はローカルに現れないので残す）/ 不一致 → 全部出す。特例を足すのではなく
-    # 上の省略規則の一般化で、`~/dev/<repo>` という**最も普通の clone レイアウト**にも効く。
-    # **末尾の `/` は意図的** — 裸の `gh:owner` は「owner という名の repo」に誤読される。`/` が
-    # 「続き（repo 部）は真上の行の末尾」の標識になる。
-    # 比較は必ず `/` で anchor する — 付けないと `my-<repo>` のような上位文字列に誤爆する。
-    # **forge の略号は facts の origin から先に決める** — stdin の `workspace.repo` は旧 Claude Code に
-    # 無いが、`remote` は build_git が正規化して必ず持つ。
-    # **どちらからも読めなければ要素ごと出さない** — 「不明なら GitHub」と倒すと、`id` の供給元が
-    # 増えた時に**未知 forge へ `gh:` を貼る**誤誘導になる (許可リストの方針と正反対)。
-    # 今は `id` があれば forge も必ずあるので、この gate は保険ではなく方針の表明。
-    local forge="$ws_repo_forge"
-    case "$remote" in
-      https://gitlab.com/*) forge="gl" ;;
-      https://github.com/*) forge="gh" ;;
-    esac
-    local id="${ws_repo_id:-$repo_id}"
-    if [[ -n "$forge" && -n "$id" && "$screen_dir" != *"/$id" ]]; then
-      # repo 名だけ一致 → owner だけ残す (末尾の `/` が「続きは真上の行」の標識)
-      [[ "$id" == */* && "$screen_dir" == *"/${id##*/}" ]] && id="${id%/*}/"
-      line_git+=("${DIM}${forge}:${RST}${id}")
-    fi
-
-    # tree URL — PR/MR への遷移は Claude Code 組み込みフッターの PR/MR badge に任せる。
-    # **GitLab は `/-/tree/`** (`-` が ref とパスの区切り。`/tree/` だとブランチ名の repo 直下パスと
-    # 解釈されて 404 になる)。URL の形は forge ごとに違うので、`forge` を知っている場所で分岐する。
-    local branch_show="$branch"
-    local tree_seg="/tree/"
-    [[ "$forge" == "gl" ]] && tree_seg="/-/tree/"
-    [[ -n "$remote" ]] && osc8 "${remote}${tree_seg}${branch}" "$branch" branch_show
-    line_git+=("${GIT}${branch_show}${RST}")
-
-    # PR/MR review state (Claude Code 2.1.145+ / GitLab は 2.1.234+) — フッターが出さない state のみを
-    # 補う。GitLab の `review_state` は `draft`/`approved`/`pending` の 3 値だけ (2.1.235 実測) なので
-    # `pr_state_color` の既存 arm で全部受かる。**番号は出さない** — フッターが `MR !N` を持つし、
-    # 同じ行の conflicts が既に `!N` (赤) を使っていて意味が衝突する。
-    if has_val "$pr_review_state"; then
-      local pr_color
-      pr_state_color "$pr_review_state" pr_color
-      line_git+=("${pr_color}${pr_review_state}${RST}")
-    fi
-  fi
-
-  # Dirty state = **行数の増減** (`+470 -105`)。Claude Desktop の code 画面と同じ単位・同じ色。
-  # `+` 緑 / `-` 赤 は既存の `↑`(ahead) 緑 / `↓`(behind) 赤 と同じ 2 色なので、行に新しい色は増えない。
-  # **0 の側は出さない** — 追加だけ / 削除だけの作業で `+42 -0` の `-0` はノイズ。
-  # conflicts は Desktop の状態表に無いので記号を自前で決めた (マージ中は最優先の情報なので
-  # 独立して残す)。**`+`/`-` と同じ ASCII の 1 桁**にするのが選定条件 —
-  # `×` (U+00D7) は East Asian Ambiguous 幅で、ambiguous-width=2 の端末では 2 桁になり
-  # `+`/`-` との桁揃えが崩れる。`U` は git の `--diff-filter=U` 由来の内部語彙なので使わない。
-  # `?` は旧 untracked 表示を廃止したので空いており、`!` と衝突しない。
-  [[ "$conflicts" =~ ^[0-9]+$ ]] && ((conflicts > 0)) && line_git+=("${RED}!${conflicts}${RST}")
-  [[ "$ins" =~ ^[0-9]+$ ]] && ((ins > 0)) && line_git+=("${DIFF_ADD}+${ins}${RST}")
-  [[ "$del" =~ ^[0-9]+$ ]] && ((del > 0)) && line_git+=("${DIFF_DEL}-${del}${RST}")
-  [[ "$ahead"  =~ ^[0-9]+$ ]] && ((ahead > 0))  && line_git+=("${DIFF_ADD}↑${ahead}${RST}")
-  [[ "$behind" =~ ^[0-9]+$ ]] && ((behind > 0)) && line_git+=("${DIFF_DEL}↓${behind}${RST}")
-
-  # Last commit: age + 20 字に切った message
-  if [[ -n "$age" && -n "$msg" ]]; then
-    line_git+=("${DIM}${age} ${msg}${RST}")
-  elif [[ -n "$age" ]]; then
-    line_git+=("${DIM}${age}${RST}")
-  fi
-}
-
-
-# ============================================================================
-# Line 1: Vim mode + Provider + Model + effort/think/fast + Agent + 宛名 + [branch/fork] + Version
-# ============================================================================
-line1=()
-
-if ((_jq_ok == 0)); then
-  line1+=("${RED}jq error${RST}")
-  # 空行は literal で出す — bash 3.2 の set -u は空配列の [*] 展開で即死し、
-  # "jq error" を出すはずが statusline 全体が空白になる (macOS の /bin/bash は 3.2 固定)
-  printf '%s\n\n\n' "${line1[*]}"
-  exit 0
-fi
-
-# --- キャッシュの mtime をまとめて取る（実測と仕組みは `prefetch_mtimes` の頭に 1 箇所だけ）---
-# ここで守るのは**順序**だけ: ① `git_cache_file` でパスを確定してから渡す ② **jq 失敗の bail より
-# 後**（前に置くと捨てる結果のために `md5` と `stat` を fork し、キャッシュ dir まで作る）
-# ③ 3 つの stale 判定より前。**取った値は描画開始時点のスナップショット**なので、この描画中に
-# 自分が書き換えるファイル（`resolve_resets` の `$RESET_CACHE` 等）を渡してはいけない。
-git_cache_file "$current_dir"
-prefetch_mtimes "$SUB_CACHE" "$USAGE_CACHE" "$_gc"
-
-# Vim mode badge (Claude Code 2.1.x vim.mode) — leftmost so it catches the eye while typing.
-# Claude Code's footer shows a dim "-- INSERT --" hint; this badge is intentionally louder.
-# NORMAL is hidden (it's the default — showing it adds noise).
-case "$vim_mode" in
-  INSERT)        line1+=("${VIM_INSERT} INSERT ${RST}") ;;
-  VISUAL)        line1+=("${VIM_VISUAL} VISUAL ${RST}") ;;
-  "VISUAL LINE") line1+=("${VIM_VISUAL} V-LINE ${RST}") ;;
-esac
-
-# Model (colored by tier): prefer display_name, fall back to id
-model_show="${model:-$model_id}"
-# display_name の "(1M context)" は名前から剥がす — コンテキスト量は Line 4 の % の分母として
-# `48%/1M` で出すほうが (a) % を修飾する情報が % の隣に来る (b) display_name が空の Bedrock でも
-# 同じ表示になる (c) Line 1 が 14 文字短くなり subagent 行の表記と揃う。
-# "context" を含む末尾の括弧だけを対象にし、他の括弧付き display_name は触らない。
-case "$model_show" in
-  *" ("*"context)") model_show="${model_show% (*}" ;;
-esac
-
-# Cloud provider detection (check model_id for Bedrock prefix, not display_name)
-provider=""
-shopt -s nocasematch
-if [[ "$model_id" =~ ^(global|jp|us-gov|us|eu|au|apac)\. ]] || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]] || [[ "${CLAUDE_CODE_USE_MANTLE:-}" == "1" ]]; then
-  provider="bedrock"
-elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]]; then
-  provider="vertex"
-elif [[ "${CLAUDE_CODE_USE_FOUNDRY:-}" == "1" ]]; then
-  provider="foundry"
-fi
-shopt -u nocasematch
-
-# Provider indicator (first in line)
-case "$provider" in
-  bedrock) line1+=("${BDCK}Bedrock${RST}") ;;
-  vertex)  line1+=("${VTEX}Vertex${RST}") ;;
-  foundry) line1+=("${FNDY}Foundry${RST}") ;;
-  *)
-    fetch_subscription
-    if has_val "$_sub_type"; then
-      # 公式表記 + レート枠 (`Max 5x` / `Enterprise 5x` / `Pro`)。組み立ては lib.sh の plan_label。
-      plan_label _plan "$_sub_type" "$_rate_tier"
-      line1+=("${ANTH}Anthropic(${_plan})${RST}")
-    else
-      line1+=("${ANTH}Anthropic${RST}")
-    fi
-    ;;
-esac
-
-# Model (colored by tier) — 共有 model_color が nocasematch スコープを内部管理する
-model_color _model_col "$model_show" "$model_id"
-line1+=("$_model_col")
-
-# 色は effort_color（lib.sh）に集約 — subagent 行と同じランプを使う
-if has_val "$effort_level"; then
-  effort_color _eff_col "$effort_level"
-  line1+=("$_eff_col")
-fi
-[[ "$thinking_enabled" == "true" ]] && line1+=("${THINK}think${RST}")
-# fast mode (Claude Code 2.1.216 docs で確認、fast_mode boolean) — /fast 有効時のみ。false/欠落は非表示
-[[ "$fast_mode" == "true" ]] && line1+=("${FAST}fast${RST}")
-
-# output style (`output_style.name`) — **常に出す**（v1.76.0、ユーザー選択。`default` 以外だけ
-# 出していたが「default のときも default と出してほしい」）。output style は応答の挙動を根本から
-# 変えるのに Claude Code に常設表示が無く、`/output-style` を開かないと今どれなのか分からない。
-# **`default` だけ dim** — 既定値は「特に設定していない」を示すプレースホルダ側なので、
-# `no git` / `(empty)` / `-%` と同じ扱いにする。非既定は白で立つので「違う」は一目で分かる。
-# 旧 Claude Code / フィールド欠落では空になり何も出ない（`// ""` の既定値）。
-if has_val "$output_style"; then
-  if [[ "$output_style" == "default" ]]; then
-    line1+=("${DIM}${output_style}${RST}")
-  else
-    line1+=("${OSTYLE}${output_style}${RST}")
-  fi
-fi
-
-# Agent name
-if has_val "$agent_name"; then
-  line1+=("${AGENT}${agent_name}${RST}")
-fi
-
-# Session lineage marker — session_name 末尾のマーカーから「このセッションの出自」を読む。
-# 2.1.220 実測: `/branch` は ` (Branch)`、`/fork` は ` ⑂` (U+2442) を付ける。**`(Fork)` は付かない**。
-# 旧 `(Fork)` は 2.1.77 より前の `/branch` のエイリアスなので **branch 扱い** — fork と出すと意味が逆になる。
-# 色は branch/fork で同じ黄。色はカテゴリ (別セッション由来) を表し、語がどちらかを表す。
-# ピンク (AGENT) は使わない — fork は agent view の行になるので `agent.name` と同色が 2 語並びうる。
-# ⑂ を先に見る: `/branch` した会話を `/fork` すると `foo (Branch) ⑂` と両方付くが、
-# 「親が並走している」ほうが行動に直結する新しい事実なので fork を優先する。
-# session_name 自体は表示しない (2.1.76+ が右上にネイティブ表示する) ので、サニタイズはしない。
-# 連番 ` (Branch 2)` も付く (2.1.220 実測) ので数字付きの arm を持つ。`*"(Branch"*` の前方一致に
-# しないのは、名前に "(Branch protection)" 等を含むだけのセッションが degraded path (transcript が
-# 読めない環境) で誤爆するため — マーカーの実測形 `(Branch)` / `(Branch N)` だけを受ける。
-session_kind=""
-case "$session_name" in
-  *"$FORK_GLYPH"*)                                  session_kind="fork" ;;
-  *"(Branch)"*|*"(Branch "[0-9]*")"*|*"(Fork)"*)    session_kind="branch" ;;
-esac
-# 名前のマーカーだけでは足りない — `/branch` は **元セッションの名前にも** ` (Branch)` を書き込む
-# (2.1.221 実測。元・子・元を resume した実体の 3 つが同名 `… (Branch)` になり、元に戻っても消えなかった)。
-# transcript 冒頭の `forkedFrom` 記録だけが「本当に派生した側」の証拠なので、これで裏取りする。
-# 先頭 1 行ではなく **20 行** 見る — 冒頭に custom-title/mode/file-history-snapshot のヘッダ記録が
-# 積まれて forkedFrom が 7 行目に来る transcript が実在する (実測: 23 件中 22 件が 1 行目、1 件が 7 行目)。
-# needle は `"forkedFrom":{` — JSON 文字列値の中では `"` が必ず `\"` にエスケープされるので、
-# この生の並びは**構造上のキーとしてしか現れない**（本文に貼られた jsonl 断片では一致しない）。
-# 読めない時 (旧 Claude Code に `transcript_path` が無い等) は従来どおり名前だけで出す = graceful degradation。
-# 旧 `(Fork)` (2.1.77 以前の子) も gate を通るが、実在する 4 件全てが forkedFrom を 1 行目に持つ (実測済み)。
-# `⑂` にはゲートを掛けない — customTitle には書かれず実行時の名前にだけ付くので元へ伝播しない。
-# かつ **fork の子は forkedFrom を持たない** (2.1.222 実測: `/fork` 子 transcript の全 47 行に 0 件、
-# customTitle も空) ので、掛ければ「出るべき fork が出ない」が確実に起きる。非対称は実測どおり。
-parent_sid=""
-if [[ "$session_kind" == "branch" && -r "$transcript_path" ]]; then
-  _fork_seen="" _scan=0 _tline="" _fk=""
-  # `|| [[ -n ... ]]` — 最終行に改行が無い transcript で read が rc=1 でも内容は入っている
-  while IFS= read -r _tline || [[ -n "$_tline" ]]; do
-    if [[ "$_tline" == *'"forkedFrom":{'* ]]; then
-      _fork_seen=1
-      # 裏取りに使う同じ記録が親 id も持つ (`{"sessionId":"…","messageUuid":"…"}`) ので、
-      # ついでに抜いて「元へ戻る」用に出す — 追加の I/O も fork も無い。
-      # `}` までで切ってスコープを閉じる — forkedFrom の値はネストを持たないので、
-      # 後続の別キーの `"sessionId"` を誤って拾わない。
-      _fk="${_tline#*'"forkedFrom":{'}" _fk="${_fk%%\}*}"
-      if [[ "$_fk" == *'"sessionId":"'* ]]; then
-        _fk="${_fk#*'"sessionId":"'}" _fk="${_fk%%'"'*}"
-        # **切り詰めず full uuid で出す** — `--resume` は 8 桁 prefix を受けない (2.1.222 実測:
-        # `"3052272d" is not a UUID and does not match any session title` で弾かれる。full uuid だと
-        # `No conversation found with session ID:` = UUID として受理された上での不一致になり、
-        # エラーの種類が違う)。prefix 解決は存在しないので、短くするとコピーしても戻れない。
-        # 許可リストで uuid の形だけ受ける (拒否リストは持たない方針) — 1 番目の arm で hex と
-        # ハイフン以外を弾き、2 番目で 8-4-4-4-12 の配置を見る。壊れた記録や別形式の id では
-        # 語だけの従来表示に落ちる。
-        case "$_fk" in
-          *[!0-9a-f-]*) ;;
-          ????????-????-????-????-????????????) parent_sid="$_fk" ;;
-        esac
-      fi
-      break
-    fi
-    (( ++_scan >= 20 )) && break
-  done < "$transcript_path"
-  [[ -n "$_fork_seen" ]] || session_kind="" parent_sid=""
-fi
-# --- Peer name: cross-session messaging の宛名 ---
-# `SendMessage`/`ListAgents` のアドレスは `~/.claude/sessions/<pid>.json` の `name` (cwd 由来 derived)。
-# **undocumented な内部ファイル** (docs にも CHANGELOG にも無い) なので読めなければ何も出さない。
-# 出す理由・却下した表記・付与率の実測は docs/internals.md の「宛名」節にある (ここには
-# 編集時に壊しうる不変条件だけ置く)。**キャッシュを持たせないこと** — 理由はコストではなく
-# **宛名が走行中に書き換わる**こと (`/rename` `/branch` が `name` を書き換え、背景セッションは
-# 8 桁 id → AI タイトルへ変わる)。キャッシュすると死んだ宛先を出し続ける = SendMessage の誤配。
-# (v1.81.0 まではコストも理由だったが、`prefetch_mtimes` の引数に足せば stat は増えないので
-# その論拠は消えた。fork ゼロ自体は維持する。)
-peer_name=""
-# gate は**性能のため**で、挙動の防御は下の id 照合が単独で担う (空 id はどのファイルにも一致しない)。
-# 未取得時に glob 展開ごと省ける (bash は非選択の分岐で glob を展開しない)。
+# ── 宛名: `<config dir>/sessions/<pid>.json` の `name`（cross-session messaging のアドレス）──
+# stdin の `session_name` は**右上の表示名**（customTitle ?? aiTitle）で宛先ではないので使わない。
+# `"formerNames"` から先は捨てる（過去の名前を拾うと誤配になる）。
+peer=""
 if has_val "$session_id"; then
-  # **`CLAUDE_CONFIG_DIR` を尊重する** — ハードコードすると別 config dir のセッションで宛名が
-  # 丸ごと消える (経緯は docs/internals.md の「宛名」節。メタテストが直書きを禁じている)。
   for _sf in "${CONFIG_DIR}"/sessions/*.json; do
-    # **`-r` で gate する。`2>/dev/null` では黙らせられない** — リダイレクトは左から適用されるので
-    # `< "$_sf"` の失敗が先に起き、ディレクトリが無い環境 (2.1.224 より前) では未展開の glob が渡って
-    # **毎レンダー stderr にエラーが出る**。credentials の `$(<file)` と同じ Gotcha。
     [[ -r "$_sf" ]] || continue
-    _sl=""
-    # `read` の rc は見ない — このファイル群は末尾改行が無く rc=1 でも内容は入る (forkedFrom と同じ罠)
-    IFS= read -r _sl < "$_sf"
+    IFS= read -r _sl < "$_sf" || true
     [[ "$_sl" == *"\"sessionId\":\"${session_id}\""* ]] || continue
-    # **`formerNames` から先を捨てる** — 2.1.235 実測で、`/rename` 済みセッションのファイルは
-    # `"formerNames":[{"name":…,"until":…},…]` を持つ。つまり**`name` キーを持つネストしたオブジェクト
-    # が実在する**ようになった (この機能の唯一の誤情報経路として警告していた形)。今は実物の並びが
-    # `name` → `formerNames` なので下の最短一致が正しい方を選ぶが、それは**並び順だけが支えの安全**
-    # なので、シリアライズ順が入れ替わると**過去の名前を宛名として出す = 誤配**になる。
-    # 逆順になったときは `name` ごと落ちて宛名が消えるだけ (無表示 < 誤読) で済む。
     _sl="${_sl%%'"formerNames"'*}"
-    # **`nameSource` で絞らない** — `name` は生成規則にかかわらず常にアドレスなので、絞ると
-    # 「送れる宛先が画面に無い」状態が生まれる (v1.69.0 の回帰。経緯は docs/internals.md の「宛名」節)。
-    # `"name":"` は `"nameSource":"` に一致しない (`"name` の次が `S`)。JSON 文字列値の中では
-    # `"` が必ずエスケープされるので、この生の並びは構造上のキーとしてしか現れない (forkedFrom と同じ理屈)。
     [[ "$_sl" == *'"name":"'* ]] || continue
-    peer_name="${_sl#*'"name":"'}"
-    # **終端の `"` は退避の後に探す** — 素朴に切ると値の中の `\"` で切れて誤った宛名を出す = 誤配。
-    # **`\\` を `\"` より先に退避する**のが順序の不変条件 (`\\"` の誤読を防ぐ。`osc8` の `%` 先行と同じ)。
-    # **制御文字の escape (`\n` `\uXXXX`) は decode しない** — `\n` を実文字に戻すと単一 printf の
-    # 4 行契約が壊れ、ESC の escape は AI 生成タイトルからの ANSI 注入になる。第 3 の escape が実測で
-    # 出たら `//` を足さず parser へ移す (経緯と根拠は docs/internals.md の「宛名」節)。
-    peer_name="${peer_name//\\\\/$'\002'}"
-    peer_name="${peer_name//\\\"/$'\001'}"
-    peer_name="${peer_name%%'"'*}"
-    peer_name="${peer_name//$'\001'/\"}"
-    peer_name="${peer_name//$'\002'/\\}"
+    peer="${_sl#*'"name":"'}"; peer="${peer%%'"'*}"
     break
   done
 fi
 
-# 宛名 — **ラベルも囲みも色も付けず値だけ置く**。要素間のスペースが単語境界になり、名前に含まれる
-# `-` は境界文字でないのでダブルクリックで丸ごと選択できる = そのまま `SendMessage` に貼れる。
-# 記号を足すと選択に混ざるので**付けないことが要件**。却下した表記は docs/internals.md の「宛名」節。
-has_val "$peer_name" && line1+=("$peer_name")
-# Session indicator — branch 先では元セッションの id を添える (`branch:<uuid>`)。
-# `/branch` の元は別端末で resume されるので、戻るには id が要る (コピーして `--resume`)。
-# fork には添えない — 元は同じ端末に残り detach で戻れるうえ、fork の子は forkedFrom を持たない。
-# ラベル側 (黄) に `:` まで含め値は通常輝度 — `gh:` と同じ「値が一次情報」の作法。
-if [[ -n "$session_kind" ]]; then
-  if [[ -n "$parent_sid" ]]; then
-    line1+=("${YLW}${session_kind}:${RST}${parent_sid}")
-  else
-    line1+=("${YLW}${session_kind}${RST}")
+# ── provider 検出（**fork ゼロ**。env と `model.id` だけ）────────────────────
+# **判定は `model_id`** — `model_show` には `display_name` の "Opus 5" が入りうる。Bedrock の
+# inference profile は `us.` / `eu.` / `apac.` などのリージョン prefix を持つ。
+# **なぜ出すか**: 同じ "Opus 5" でも**どのアカウントに課金されるかが違う**。案件用の config dir
+# （Bedrock）と個人用が画面で区別できないと、コストの読み違えが起きる。
+provider=""
+if [[ "$model_id" =~ ^(global|jp|us-gov|us|eu|au|apac)\. ]] \
+   || [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == "1" ]] || [[ "${CLAUDE_CODE_USE_MANTLE:-}" == "1" ]]; then
+  provider="bedrock"
+elif [[ "${CLAUDE_CODE_USE_VERTEX:-}" == "1" ]];  then provider="vertex"
+elif [[ "${CLAUDE_CODE_USE_FOUNDRY:-}" == "1" ]]; then provider="foundry"
+fi
+
+# ── 契約プランとモデル別週間枠（背景取得 + キャッシュ 1 個）──────────────────
+# **hot path は fork ゼロ** — キャッシュを `read` で読むだけ。取得は背景 subshell 1 本で、
+# **Keychain の blob 1 回から契約プランと OAuth token の両方**を取り、同じ subshell で
+# `/usage` を叩く。v1 は subscription（3600s）と usage（300s）で**キャッシュ 2 個・背景 2 本**
+# だったが、blob が共通なので 1 本に畳める（TTL は短い方に合わせる = 背景なので損がない）。
+#
+# **鮮度はレコードの `ts` で見る**（`stat` を呼ばない = hot path の fork を増やさない）。
+# v1 はこの方式を却下していたが、理由は「延命 touch が read-modify-write になり lost update を
+# 作る」だった。**v2 は touch を使わず、失敗時も既存値 + 新しい ts で全体を書き直す**ので
+# その経路が無い（atomic mv なので並走しても記録が裂けることはない）。
+#
+# **Bedrock / Vertex / Foundry では取得しない** — OAuth アカウントは課金先と無関係なので、
+# 別アカウントのプラン名と枠を出す = 誤読になる（「無表示 < 誤読」）。
+# **レコードは自己記述の key-value 行。** `キー US 値…` を 1 行 1 件で並べる。位置に依存しないので
+# ① **未知のキーは読み飛ばす**（新しい版が書いたファイルを古い版が読んでも死なない）
+# ② **無いキーは既定値**（古い版が書いたファイルを新しい版が読んでも死なない）
+# ③ **項目追加でレコードが無効化されない**ので、上流に追従して要素を足しても**取り直しの一斉発生
+#    （= 429 の再演）が起きない**。位置固定の `read -r a b c d e` は中間に足すと桁が全部ずれる。
+#
+# **鮮度は出所ごとに持つ**（`at.plan` / `at.limits`）。プランは Keychain、枠は `/usage` の curl で
+# **失敗の仕方が別**なので、`ts` 1 個だと「429 で枠だけ古い」を表現できない。出所ごとに持つと
+# 片方が落ちても他方の TTL を巻き込まない。**判定は値の有無ではなく時刻**で見る — 「枠 0 件で
+# 成功」と「取れていない」を区別できる（今までは `_lim_ok` フラグで場当たりに分けていた）。
+#
+# **`tz` が食い違ったら枠だけ捨てる。** リセットは表示文字列まで背景で焼くので tz を変えたら
+# 焼き直しが要るが、**プランは tz と無関係**なので巻き込まない（今までは全部捨てていた）。
+#
+# **繰り返しキー `limit` で N 個のモデルにスケールする。** 新しい種類のデータ（usage credits 等）を
+# 足すときも**キーを 1 つ増やすだけ**で、ファイルもレイアウトも増やさない。
+_C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0
+read_acct_cache() {
+  _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0
+  [[ -r "$ACCT_CACHE" ]] || return 0
+  local _k="" _a="" _b="" _c="" _sc=""
+  # **`|| [[ -n "$_k" ]]` が必須** — 末尾に改行が無い行では `read` が rc=1 を返すので、
+  # 付けないと**最後の 1 行が丸ごと無視される**（書き側は必ず改行で終えるが、
+  # 途中で切れたファイルを読む経路が残る）。
+  while IFS=$'\037' read -r _k _a _b _c || [[ -n "$_k" ]]; do
+    case "$_k" in
+      schema)    _sc="$_a" ;;
+      plan)      _C_plan="$_a" ;;
+      tier)      _C_tier="$_a" ;;
+      tz)        _C_tz="$_a" ;;
+      at.plan)   _C_at_plan="$_a" ;;
+      at.limits) _C_at_lim="$_a" ;;
+      limit)     [[ -n "$_a" ]] && _C_lim="${_C_lim}${_C_lim:+$'\n'}${_a}${_USEP}${_b}${_USEP}${_c}" ;;
+    esac
+  done < "$ACCT_CACHE"
+  if [[ "$_sc" != "$ACCT_SCHEMA" ]]; then
+    _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0; return 0
   fi
-fi
+  [[ "$_C_at_plan" =~ ^[0-9]+$ ]] || _C_at_plan=0
+  [[ "$_C_at_lim"  =~ ^[0-9]+$ ]] || _C_at_lim=0
+  # tz が違うのは枠の表示文字列だけ（プランは巻き込まない）
+  [[ "$_C_tz" == "$_tz" ]] || { _C_lim=""; _C_at_lim=0; }
+  return 0
+}
 
-# Version — **Line 1 の最後**。版は行動に効かない参照情報なので、溢れた時に最初に削られてよい。
-# **最新版から遅れている間だけアラーム色（赤）で立てる**（v1.79.0 時点の設計）。最新版は
-# Claude Code 自身が置く changelog キャッシュの冒頭から読み、`ver_older` で数値比較する。
-# 却下済み: ①「前回見た版と違う間だけ立てる」（変化の検知では*遅れているか*が読めない）
-# ② 明度だけ上げる白 231（アラームとして弱かった）。どちらも復活させないこと。
-if has_val "$cc_version"; then
-  resolve_version_color "$cc_version"
-  line1+=("${_ver_col}v${cc_version}${RST}")
-fi
+write_acct_cache() {
+  # **1 本の文字列にしてから 1 回で書く**（`>>` を並べると途中の失敗で裂けたレコードが残る）。
+  # **US は変数（`_USEP`）で渡す** — `printf` の書式に埋めるとクォートが閉じてリテラルの
+  # `$037` を書き出す（実際に踏んだ。詳細は CLAUDE.md の Gotchas）。
+  local _o="" _rest="$_C_lim" _l
+  _o="schema${_USEP}${ACCT_SCHEMA}"$'\n'
+  _o="${_o}tz${_USEP}${_tz}"$'\n'
+  _o="${_o}plan${_USEP}${_C_plan}"$'\n'
+  _o="${_o}tier${_USEP}${_C_tier}"$'\n'
+  _o="${_o}at.plan${_USEP}${_C_at_plan}"$'\n'
+  _o="${_o}at.limits${_USEP}${_C_at_lim}"$'\n'
+  while [[ -n "$_rest" ]]; do
+    _l="${_rest%%$'\n'*}"
+    if [[ "$_rest" == *$'\n'* ]]; then _rest="${_rest#*$'\n'}"; else _rest=""; fi
+    [[ -n "$_l" ]] && _o="${_o}limit${_USEP}${_l}"$'\n'
+  done
+  # **中間ファイル名に PID を入れる** — 固定名だと並走ペインが同じ `.tmp` に書いて混ざる
+  local _t="${ACCT_CACHE}.tmp-$$"
+  printf '%s' "$_o" > "$_t" && mv "$_t" "$ACCT_CACHE"
+}
 
-# ============================================================================
-# Line 2: Dir + Worktree
-# ============================================================================
-line2=()
-
-# Directory path (full display — no truncation)
-# Always use current_dir: the worktree.path override (above) and Claude Code 2.1.176+ keep it
-# pointing at the live dir. Do NOT fall back to project_dir — it pins to the launch dir (see CHANGELOG 1.32.0).
-_display_dir="$current_dir"
-_short_dir="${_display_dir/#$HOME/~}"
-
-# Worktree path split: `<repo>/.claude/worktrees/<name>` はパス末尾がランダムな worktree 名になり
-# リポ dir が中程に埋まって「どこの repo か」が読めないため、リポ root と 🌲<name> に分割表示する
-# （リンクは root / worktree 各ディレクトリへ）。worktree 内サブディレクトリや既定外配置では
-# marker 不一致で分割せずフルパス表示に fallback する。
-_wt_marker="$WT_MARKER"   # lib.sh の共有定数（両 statusline で drift 防止）
-_is_wt=""
-if has_val "$wt_name" || has_val "$ws_git_worktree"; then _is_wt=1; fi
-_wt_leaf=""
-# `?*` = marker より前に 1 文字以上 — リポが / 直下の極端ケースで root が空になり空リンク要素が出るのを防ぐ
-if [[ -n "$_is_wt" && "$_short_dir" == ?*"$_wt_marker"* ]]; then
-  _wt_leaf="${_short_dir##*"$_wt_marker"}"
-  [[ -z "$_wt_leaf" || "$_wt_leaf" == */* ]] && _wt_leaf=""
-fi
-
-# Line 2 が描くパス（worktree では root 側で切る）を 1 組で決める。**Line 3 の `gh:` 畳み込みも
-# ここを見る** ので、切り方を変えたときに 3 箇所へ散らないようにまとめてある
-_line2_dir="$_display_dir" _line2_short="$_short_dir"
-if [[ -n "$_wt_leaf" ]]; then
-  _line2_dir="${_display_dir%"$_wt_marker"*}" _line2_short="${_short_dir%"$_wt_marker"*}"
-fi
-_screen_dir="${_line2_dir%/}"       # 比較用（末尾の / を落とす）
-editor_url "$_line2_dir" _editor_url
-osc8 "$_editor_url" "$_line2_short" _osc_tmp
-line2+=("$_osc_tmp")
-
-# Worktree indicator: Claude Code worktree (wt_name) or git linked worktree (ws_git_worktree, Claude Code 2.1.97+)
-# Placed adjacent to the path since it qualifies what the path *is*.
-if [[ -n "$_is_wt" ]]; then
-  if [[ -n "$_wt_leaf" ]]; then
-    editor_url "$_display_dir" _editor_url
-    osc8 "$_editor_url" "$_wt_leaf" _osc_tmp
-    line2+=("🌲${DIM}${_osc_tmp}${RST}")
-  else
-    line2+=("🌲")
-  fi
-  # from:HEAD (detached HEAD から作成) も「detached から切った」事実を示すので表示する
-  # (v1.74.0 で Line 3 base: を撤去したので、切り元を出すのはここだけ)
-  if has_val "$wt_orig_branch"; then
-    line2+=("${DIM}from:${wt_orig_branch}${RST}")
-  fi
-fi
-
-# Aggregate, not per-basename: per-basename can be truncated at terminal edge,
-# hiding which dirs are added. Claude Code 2.1.141 fixed row-drop on overflow but still truncates.
-if ((added_dirs_count > 0)); then
-  line2+=("${DIM}(+${added_dirs_count} dirs)${RST}")
-fi
-
-# ============================================================================
-# Line 3: Git info (separated from Line 2 to avoid overflow)
-# ============================================================================
-line_git=()
-
-# Git info (background refresh)
-# **タグを検証してから使う** — 一致しなければ「無い」扱いにして cold-start に落ち、同時に背景 build を
-# 起こす (TTL を待たない)。読みは `read` で fork ゼロ (`$(<file)` は bash 3.2 でコマンド置換 = fork)
-_git_facts="" _gc_raw=""
-if [[ -r "$_gc" ]]; then
-  IFS= read -r _gc_raw < "$_gc"
-  [[ "$_gc_raw" == "${GIT_FMT}"$'\037'* ]] && _git_facts="${_gc_raw#*$'\037'}"
-fi
-# **タグ不一致で即取り直すのは「中身があるのにタグが違う」ときだけ** — 非 git ディレクトリでは
-# `build_git` が何も出さず **0 バイトのファイル**が残るので、`-s` を付けないとタグ不一致と同じ扱いに
-# なって `cache_stale` の 5s 抑止を通らず**毎レンダー背景 build を spawn する**（storm。表示は
-# 正常なので沈黙する。`/code-review` が実測で捕まえた）
-if [[ -s "$_gc" && -z "$_git_facts" ]] || cache_stale "$_gc" "$GIT_CACHE_MAX_AGE"; then
-  # 末尾の `>/dev/null 2>&1` は**内側の `> tmp` と別物で、外せない** — subshell が親の stdout を
-  # 保持し続けると捕捉側の EOF が遅れる (docs/internals.md「バックグラウンド更新」/ fetch_subscription の注記)
-  ( [[ -d "$GIT_CACHE_DIR" ]] || mkdir -p -m 700 "$CACHE_BASE" "$GIT_CACHE_DIR"
-    build_git "$current_dir" > "${_gc}.tmp-$$" && mv "${_gc}.tmp-$$" "$_gc" ) >/dev/null 2>&1 & disown
-fi
-if [[ -z "$_git_facts" ]]; then
-  # キャッシュ未populate — non-git かどうかは pure bash で判定 (fork ゼロ)
-  if [[ ! -d "${_display_dir}/.git" && ! -f "${_display_dir}/.git" ]]; then
-    line_git+=("${DIM}no git${RST}")
-  else
-    # Cold start: .git/HEAD から branch だけを読み、build_git と同じ facts レイアウトに合成する
-    # (残りのフィールドは空)。表示は同じ render_git を通るので、3 経路で gate を揃える問題が起きない。
-    _head_file="${_display_dir}/.git"
-    if [[ -f "$_head_file" ]]; then
-      # Worktree: .git はファイル → gitdir ポインタを追う
-      _gitdir="$(<"$_head_file")"; _gitdir="${_gitdir#gitdir: }"
-      [[ "$_gitdir" != /* ]] && _head_file="${_display_dir}/${_gitdir}/HEAD" || _head_file="${_gitdir}/HEAD"
-    else
-      _head_file="${_head_file}/HEAD"
-    fi
-    if [[ -f "$_head_file" ]]; then
-      _head=$(<"$_head_file")
-      if [[ "$_head" == ref:* ]]; then
-        _git_facts="${_head#ref: refs/heads/}"$'\037'"0"
-      else
-        _git_facts="${_head:0:7}"$'\037'"1"     # detached (raw sha)
+plan_type="" rate_tier="" scoped=""
+fetch_account() {
+  [[ -z "$provider" ]] || return 0                       # 非 Anthropic は素通り
+  read_acct_cache
+  plan_type="$_C_plan" rate_tier="$_C_tier" scoped="$_C_lim"
+  # **判定は出所ごとの時刻だけ**（値の有無を混ぜない）。取れていなければ `at.*` は 0 なので必ず古い。
+  local _need=""
+  (( _NOW - _C_at_plan > ACCT_TTL )) && _need=1
+  (( _NOW - _C_at_lim  > ACCT_TTL )) && _need=1
+  # **`CLAUDE_STATUSLINE_NO_NET` は fetch だけを止め、キャッシュの読みは残す**（v1 の usage 側と
+  # 同じ非対称。「外に問い合わせない」seam であって「表示しない」seam ではない）。
+  if [[ -n "$_need" && -z "${CLAUDE_STATUSLINE_NO_NET:-}" ]]; then
+    # 書くのは背景 subshell なので、起動前にここでディレクトリを用意する
+    # （**BSD の `mkdir -p -m` は最後のディレクトリにしか mode を当てない**ので 1 段だけにする）
+    [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE" 2>/dev/null
+    (
+      local _blob="" _rec="" _tok="" _plan="" _tier="" _out="" _lim="" _lim_ok=""
+      # **先に claim を打つ**（値は現状のまま、`at.*` だけ今の時刻にする）。これが無いと、
+      # `refreshInterval` で定期再実行している**並走セッションが同じ瞬間に「期限切れ」と判定し、
+      # N 本の curl を同時に出す**（thundering herd）。fetch は `curl -m 4` で最大 4 秒かかるので
+      # 窓が広い。claim を先に書けば窓が `mv` までの数 ms に縮む。**取れなくても `at.*` が
+      # 進んでいるので、次の描画で毎回 fetch する storm にもならない。**
+      _C_at_plan="$_NOW"; _C_at_lim="$_NOW"
+      write_acct_cache
+      local _svc="Claude Code-credentials" _hd="$SECURESTORAGE_HASH_DIR"
+      # **Keychain のサービス名は config dir ごとに変わる**（`Claude Code-credentials` +
+      # その config dir の **sha256 先頭 8 桁**）。決め打ちで引くと**別アカウントの blob**を読む。
+      # **算出できないときは Keychain ごと飛ばす**（決め打ちに落ちるより無表示が安全）。
+      local _skip=""
+      if [[ -n "$_hd" ]]; then
+        local _h; _h=$(printf '%s' "$_hd" | shasum -a 256 2>/dev/null) || _h=""
+        _h="${_h%% *}"
+        if [[ "$_h" =~ ^[0-9a-f]{8} ]]; then _svc="${_svc}-${_h:0:8}"; else _skip=1; fi
       fi
-    fi
+      if [[ -z "$_skip" ]] && command -v security >/dev/null 2>&1; then
+        # **読みは `-a <USER>` 込み** — 上流は account 属性込みで識別するので、service だけで
+        # 引くと同名 item が 2 つある keychain で別アカウントの blob を読む
+        local _acct="${USER:-${LOGNAME:-}}"
+        if [[ -n "$_acct" ]]; then
+          _blob=$(security find-generic-password -s "$_svc" -a "$_acct" -w 2>/dev/null)
+        else
+          _blob=$(security find-generic-password -s "$_svc" -w 2>/dev/null)
+        fi
+      fi
+      # ファイル fallback（`-r` で gate する。**`$(<f 2>/dev/null)` は 3.2 で常に空**になる）。
+      # **`CONFIG_DIR` ではなく `SECURESTORAGE_DIR`** — 上流はこのファイルだけそちらに置く。
+      if [[ -z "$_blob" && -r "${SECURESTORAGE_DIR}/.credentials.json" ]]; then
+        _blob=$(<"${SECURESTORAGE_DIR}/.credentials.json")
+      fi
+      if [[ -n "$_blob" ]]; then
+        # **契約種別・枠・token を 1 回の jq で**。here-string は 3.2 で一時ファイルを作るので
+        # パイプで渡す（token をディスクに落とさないのは argv に出さないのと同じ理由）
+        _rec=$(printf '%s' "$_blob" | jq -r '"\(.claudeAiOauth.subscriptionType // "")\u001f\(.claudeAiOauth.rateLimitTier // "")\u001f\(.claudeAiOauth.accessToken // "")"' 2>/dev/null)
+        _plan="${_rec%%$'\037'*}"; _rec="${_rec#*$'\037'}"
+        _tier="${_rec%%$'\037'*}"; _tok="${_rec#*$'\037'}"
+      fi
+      if [[ -n "$_tok" ]]; then
+        # **Bearer は `-H @-`（stdin）で渡す** — argv には `@-` しか出ないので `ps` 漏れが無く、
+        # 各行が必ずヘッダとして解釈されるのでトークンに何が入っても curl のオプションに化けない。
+        # **`--config -` は使わない**（各行が設定ディレクティブ = `output = <path>` の注入経路）。
+        _out=$(printf 'Authorization: Bearer %s\nanthropic-beta: oauth-2025-04-20\n' "$_tok" \
+               | curl -s -m 4 -H @- https://api.anthropic.com/api/oauth/usage 2>/dev/null)
+        # **モデル別の週間枠だけ拾う**（`group == "weekly"` かつ scope にモデル名があるもの）。
+        # **リセット時刻は表示文字列まで背景で作る**（描画側で `date` fork を増やさない、の適用）。
+        # **分単位に丸める** — 実データの `resets_at` は `15:59:59.6` のような値で、切り捨てると
+        # 隣の `week:` が `16:00` と出すのと 1 分ずれて別の時刻に見える。
+        # **`try … catch ""` で包む** — `resets_at` の型不正 1 件で jq が abort すると**枠が全滅**する
+        # （`.limits` が配列でも中身で落ちる経路は型ガードだけでは塞げない）。
+        # **型ガードを通す** — 型不正の枠が 1 つあると jq が abort して**枠が全滅する**。
+        # `is_active` / `severity` で絞らない（意味論が未文書）。
+        # **名前の制御文字を空白化する** — 生の US や改行はレコードを割り、3 行契約も割る。
+        # **使える応答かは「`.limits` が配列か」で見る** — `curl -s` は `-f` を付けていないので
+        # **401/429/5xx のエラー JSON も本文として来る**（実際に 429 を踏んだ）。エラー本文では
+        # `.limits` が absent なので、`// []` を付けたままだと「枠 0 件の成功」と区別できず、
+        # **ディスクにある良い値を空で上書きして 300s 消す**。`NA` を返させて分岐する。
+        # 配列だが週間枠が 0 件のときは空文字列 = 「本当に枠が無い」として正しく空を書く。
+        _lim=$(printf '%s' "$_out" | jq -r '
+          if (.limits | type) != "array" then "NA" else
+          (.limits) | map(select(
+              (type == "object") and (.group? == "weekly")
+              and ((.scope?.model?.display_name? // "") != "")
+              and ((.percent? | type) == "number")))
+          | map("\(.scope.model.display_name | gsub("[[:cntrl:]]"; " "))\u001f\(.percent | round)"
+                 + "\u001f" + (try (.resets_at
+                     | if type == "string" then
+                         (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdate
+                          | ((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M"))
+                       else "" end) catch ""))
+          | .[] end' 2>/dev/null)
+        # `&&`/`||` の連鎖にしない（`{ }` の rc に依存する形は読み間違えやすい）
+        if [[ "$_lim" == "NA" ]]; then _lim=""; else _lim_ok=1; fi
+      fi
+      # **プランと枠は別々に判定する** — 出所が違う（プラン = Keychain の blob / 枠 = `/usage` の
+      # curl）ので、片方が失敗しただけでもう片方を捨ててはいけない。実際に踏んだ: 429 のときに
+      # blob だけ成功して**枠が空で上書きされた**。
+      #
+      # **書く直前に読み直して、取れた出所だけ上書きする。** fork 時点の値を書き戻すと、その間に
+      # **別の subshell が成功して書いた新しい値を古い値で潰す**（実測: 2 本同時のうち先に返った
+      # 側が成功し、遅れて返った側が 429 だと、成功した枠が巻き戻った）。claim は「fetch 中の
+      # 他セッションを止める」役しか果たしておらず、**書き込みの順序は守らない**。
+      # 取れなかった出所は**読み直した値と `at.*` がそのまま残る**（claim 済みなので storm にならない）。
+      read_acct_cache
+      if [[ -n "$_plan" ]]; then _C_plan="$_plan"; _C_tier="$_tier"; _C_at_plan="$_NOW"; fi
+      if [[ -n "$_lim_ok" ]]; then _C_lim="$_lim"; _C_at_lim="$_NOW"; fi
+      write_acct_cache
+    # **`>/dev/null 2>&1` が背景化の必須条件** — 付けないと subshell が親の stdout（Claude Code が
+    # 読む pipe）を握ったままになり、読み手は最後の fd 保持者が終わるまで EOF を見ない。
+    # ここが最も効く（`curl -m 4` は最大 4 秒粘るので、無いと描画が 4 秒止まる）。
+    ) >/dev/null 2>&1 & disown
+  fi
+  return 0
+}
+fetch_account
+
+# ── リポの位置と git dir を **fork ゼロ**で解決する ─────────────────────────
+# **`.git` を上へ辿る。** 以前は `current_dir/.git` の存在だけを gate にしていて、**リポの
+# サブディレクトリに `cd` するとブランチが丸ごと消えていた**（`docs/` で実測。v1 は
+# `git -C` に任せていたので起きなかった退化）。辿りは `${_d%/*}` の文字列操作だけなので fork 0。
+# 同時に **git dir** も取れる — 進行中の操作（rebase/merge/…）の判定に必要で、v1 は
+# `git rev-parse --absolute-git-dir` に 1 fork 払っていたが、ここでは払わない。
+_repo="" _gd="" _d="$current_dir"
+while [[ -n "$_d" && "$_d" != "/" ]]; do
+  if [[ -e "$_d/.git" ]]; then _repo="$_d"; break; fi
+  _d="${_d%/*}"
+done
+[[ -z "$_repo" && -e "/.git" ]] && _repo="/"     # `/` 直下のリポ（稀だが素通りさせない）
+# **`_repo` が空のときは触らない** — 空だと `"$_repo/.git"` が `/.git` に化ける。上の行で
+# `/` 直下のリポは既に拾っているので実害は無いが、判定が「上の行の順序」に依存するのをやめる。
+if [[ -z "$_repo" ]]; then
+  :
+elif [[ -d "$_repo/.git" ]]; then
+  _gd="$_repo/.git"
+elif [[ -f "$_repo/.git" ]]; then
+  # worktree と submodule は `.git` が **`gitdir: <path>` 1 行のファイル**。相対パスもありうる。
+  IFS= read -r _gl < "$_repo/.git" || true        # 末尾改行が無いと rc=1 なので `|| true`
+  if [[ "$_gl" == "gitdir: "* ]]; then
+    _gd="${_gl#gitdir: }"
+    [[ "$_gd" == /* ]] || _gd="$_repo/$_gd"
   fi
 fi
-# facts があれば (キャッシュでも cold-start 合成でも) 同じ presenter を通す
-[[ -n "$_git_facts" ]] && render_git "$_git_facts" "$_screen_dir"
 
-
-# ============================================================================
-# Line 4: コンテキスト + 経過 + コスト (このセッションのスコープ) = line_sess
-# Line 5: レート制限 + 追加課金 (アカウントのスコープ、Anthropic のみ) = line_lim
-# ============================================================================
-# **スコープで行を分ける** (v1.74.0)。1 行に混ぜていた頃は 7 要素・弱め表示 7 割で、
-# 「どこまでが制限の話でどこからがこのセッションの話か」が読めなかった (ユーザー指摘 2 回)。
-# 区切り記号を足したり並べ替えで凌ぐのではなく、意味の境界で行を割る。
-# **セッション行を上（4 行目）** に置く — 毎ターン変わるのはこちらで、制限は数時間〜1 週間単位。
-# 変数名は表示行番号を持たせない (`line3`/`line4` は「配列の通番」と「表示行」がずれて読み違える)。
-line_lim=() line_sess=()
-
-# リセット時刻は 2 つまとめて解決する — epoch が変わらない限り `date` を叩かない (resolve_resets)。
-# Anthropic 以外では rate_limits が来ないので呼ばない (キャッシュも作らない)。
-_five_txt="" _seven_txt=""
-[[ -z "$provider" ]] && resolve_resets "$five_reset_epoch" "$seven_reset_epoch"
-
-# 5-hour rate limit (Anthropic only, Claude Code 2.1.80+) — leftmost for quick glance
-# リセットは**絶対時刻** (`19:31`)。曜日を付けないのが週間制限との区別になる。
-if [[ -z "$provider" ]] && has_val "$five_pct"; then
-  braille_bar "$five_pct" _bbar
-  line_lim+=("${ANTH}${_bbar} ${five_pct}%${RST}")
-  [[ -n "$_five_txt" ]] && line_lim+=("${ANTH}${_five_txt}${RST}")
+# ── git: 同期で **1 回**だけ（キャッシュなし）───────────────────────────────
+# `status --porcelain=v2 -b` 1 発で branch.head / branch.ab（ahead/behind）/ **`u` 行（conflicts）**
+# が取れる。**conflicts は追加コストがゼロ** — `-uno` は untracked を止めるだけで、
+# **unmerged の `u UU …` 行は消えない**（実測で確認）。
+# 行数は porcelain が持たないが**もう出さない**（`/cost` の `Total code changes` から取り戻せる）。
+# `-uno` で untracked を数えない = リポのサイズにほぼ依存しない（5878 ファイルでも 16.8ms 実測）。
+branch="" ahead="" behind="" conflicts=0
+if [[ -n "$_repo" ]]; then
+  while IFS= read -r _l; do
+    case "$_l" in
+      '# branch.head '*) branch="${_l#\# branch.head }" ;;
+      '# branch.ab '*)   _ab="${_l#\# branch.ab }"; ahead="${_ab%% *}"; behind="${_ab#* }" ;;
+      'u '*)             conflicts=$((conflicts + 1)) ;;
+    esac
+  done < <(git -C "$_repo" --no-optional-locks status --porcelain=v2 -b -uno 2>/dev/null)
 fi
+[[ "$branch" == "(detached)" ]] && branch="HEAD"
+# `# branch.ab` は upstream が無いと出ないので、**必ず数値に正規化する**
+# （空のまま算術に入れると `(( > 0))` で syntax error = stderr が毎描画漏れる）
+ahead="${ahead#+}"; behind="${behind#-}"
+[[ "$ahead"  =~ ^[0-9]+$ ]] || ahead=0
+[[ "$behind" =~ ^[0-9]+$ ]] || behind=0
 
-# Weekly rate limit (Anthropic only) — 5h の直後。Pro/Max では stdin の `seven_day` が来る
-# (Enterprise 契約では null になることがあり、その場合は出ない = graceful degradation)。
-# リセットは曜日付きの絶対時刻 (`土 16:00`)。
-if [[ -z "$provider" ]] && has_val "$seven_pct" && ((seven_pct > 0)); then
-  line_lim+=("${DIM}week:${seven_pct}%${RST}")
-  [[ -n "$_seven_txt" ]] && line_lim+=("${DIM}${_seven_txt}${RST}")
-fi
-
-# モデル別の週間制限 (`Fable:39%`、Anthropic のみ)。stdin には来ないので `/usage` の `limits[]` から。
-# **`fetch_usage_spend` はここで 1 回だけ呼ぶ** — credits:$ も同じキャッシュを使うので、
-# 後段では `_usage_cents` を読むだけにする (2 回呼ぶと背景 fetch が二重に走る)。
-# 全体の週間制限 (stdin の `seven_day`) と**併存させる** — 別の制限なので置き換えない。
-if [[ -z "$provider" ]]; then
-  fetch_usage_spend
-  render_scoped_limits
-fi
-
-# Context bar
-if has_val "$used_pct"; then
-  pct_int=${used_pct%.*}
-  color_by_threshold "$pct_int" 90 80 ctx_color
-  braille_bar "$pct_int" _bbar
-  # 分母は**値が来ていれば常に**添える (`48%/1M`・`48%/200k`)。% だけでは絶対量が読めず、
-  # 「既定の 200k だけ無印」にすると読み手が既定値を記憶している前提になる (v1.57.0 で常時表示へ)。
-  # **分母は % と同じ色**にして一体で読ませる — dim で弱めると「% を修飾する値」ではなく
-  # 「別の補助情報」に見えるため (2026-07-27 のヒアリング)。
-  # 表記は fmt_ctx_size に委ねる (1M 決め打ちの整数除算だと 500k が出ず 1.5M が /1M と誤表示になる)。
-  _ctx_den=""
-  if ((ctx_window_size > 0)); then
-    fmt_ctx_size "$ctx_window_size" _ctx_size
-    _ctx_den="/${_ctx_size}"
+# ── 進行中の git 操作（**fork ゼロ**。ディスクのレイアウトを直接見る）──────────
+# **なぜ出すか**: `feat/x` とだけ出ていると「マージ中」と「ただそのブランチにいる」が区別できない。
+# diff パネルは **conflicts を出さない**（データ源は working tree vs HEAD の hunk と統計だけ。
+# 2.1.260 のバイナリで確認）ので、ここは重複ではない。**一過性**（操作が終われば消える）なので
+# 「常時見えるものは載せない」の物差しも通る。
+#
+# **arm はディスクレイアウト 1 つに 1 本**にする（v1 から踏襲）— 操作名は arm の中で導出する。
+# `rebase-apply` を 2 arm に割ると進捗ファイルの組（`next`/`last`）が複製され、名前が変わったとき
+# 片方だけ直す事故になる。進捗ファイルは **interactive rebase = `msgnum`/`end`、`git am` 系の
+# rebase-apply = `next`/`last`** で名前が違うので両方見る。
+op="" _cf="" _tf=""
+if [[ -n "$_gd" ]]; then
+  if   [[ -d "$_gd/rebase-merge" ]]; then op="rebase"; _cf="$_gd/rebase-merge/msgnum"; _tf="$_gd/rebase-merge/end"
+  elif [[ -d "$_gd/rebase-apply" ]]; then
+    # `rebase-apply` は `git am` でも作られる。`applying` があれば am
+    # （`git rebase --abort` を打とうとして「am には無い」と気づく手戻りを防ぐ）
+    if [[ -f "$_gd/rebase-apply/applying" ]]; then op="am"; else op="rebase"; fi
+    _cf="$_gd/rebase-apply/next"; _tf="$_gd/rebase-apply/last"
+  elif [[ -f "$_gd/MERGE_HEAD" ]];       then op="merge"
+  elif [[ -f "$_gd/CHERRY_PICK_HEAD" ]]; then op="cherry-pick"
+  elif [[ -f "$_gd/REVERT_HEAD" ]];      then op="revert"
+  elif [[ -f "$_gd/BISECT_LOG" ]];       then op="bisect"
   fi
-  ctx_text="${ctx_color}${_bbar} ${pct_int}%${_ctx_den}${RST}"
-  [[ "$exceeds_200k" == "true" && "$ctx_window_size" -le 200000 ]] && ctx_text+=" ${RED}⚠ 200K超${RST}"
-  line_sess+=("$ctx_text")
-else
-  line_sess+=("${DIM}      -%${RST}")
-fi
-
-# Session elapsed (cost.total_duration_ms) — 長時間 agentic セッション / 並走運用で「このセッションを
-# 何時間開いているか」を即答するため。Claude Code に常駐表示が無く、stdin に既にあるので fork ゼロ。
-# **実体はアイドル込みの壁時計**（席を外していた分も足す）。**「何時間回してる?」と読ませない** —
-# 実働時間は `cost.total_api_duration_ms` 側。実測の根拠は `docs/internals.md`「Line 4」に 1 本化。
-# 60 秒未満は出さない (開始直後の "0m" はノイズ)。フィールド欠落 (旧 Claude Code) も 0 で非表示に倒れる。
-if ((dur_sec >= 60)); then
-  fmt_elapsed "$dur_sec" _dur
-  line_sess+=("${DIM}${_dur}${RST}")
-fi
-
-# Usage-credits spend (Anthropic only) — 実課金額。stdin に無いので /usage を背景取得。
-# **ラベルは `credits:`** — 上流は 2.1.144 で "extra usage" を "usage credits" に改名し
-# (`/extra-usage` → `/usage-credits`)、以後の CLI コピーは全部そちら。画面の語彙を上流に合わせる
-# (「既存の語彙に協調し独自の呼び方を持たない」の適用)。旧 `extra:` に戻さない。
-# **アカウント側の行 (line_lim) に置く** — 枠を超えた分の課金なので制限と同じスコープ。
-# セッションコストは「このセッションの API 換算額」で別のスコープなのでセッション行に残す。
-if [[ -z "$provider" ]]; then
-  # fetch は制限グループ側で済んでいる (`_usage_cents` を読むだけ)
-  if [[ "$_usage_cents" =~ ^[0-9]+$ ]] && ((_usage_cents > 0)); then
-    printf -v _credits 'credits:$%d.%02d' $((_usage_cents / 100)) $((_usage_cents % 100))
-    # **bold で立てる** — この行で唯一「実際に請求される額」なので、同色相のセッションコスト
-    # (COST, ブロンズ) との明度差に加えて太さでも差を付ける。bold は色ではないので
-    # Line 4/5 の色系統を増やさない (vim mode バッジ以外で bold を使うのはここだけ)。
-    line_lim+=("${BOLD}${SPEND}${_credits}${RST}")
+  # rebase 以外は `_cf`/`_tf` が空なので `-r` が偽 = 素通り。読めない / 数値でなければ操作名だけ出す
+  if [[ -r "$_cf" && -r "$_tf" ]]; then
+    IFS= read -r _cur < "$_cf" || true            # `$(<file)` は fork するので read で取る
+    IFS= read -r _tot < "$_tf" || true
+    [[ "$_cur" =~ ^[0-9]+$ && "$_tot" =~ ^[0-9]+$ ]] && op="${op} ${_cur}/${_tot}"
   fi
 fi
 
-# Session cost (全プロバイダー共通。Claude Code 計算済みの API 換算 USD; subscription では実請求なしの参考値)
-# cost_cents > 0 が「フィールド欠落 (旧 Claude Code)」と「$0.00」の両方を非表示に倒す
+# ── 整形 ──────────────────────────────────────────────────────────────────
+# パスは $HOME を ~ に。worktree 配下ならリポ root までで切る（v1 と同じ作法）。
+_path="$current_dir"
+if [[ -n "$wt_name" && "$_path" == *"$WT_MARKER"* ]]; then _path="${_path%%"$WT_MARKER"*}"; fi
+[[ "$_path" == "$HOME"* ]] && _path="~${_path#"$HOME"}"
+
+# ── 版: 最新から遅れている間だけ赤くする ──────────────────────────────────
+# 最新版は **Claude Code 自身が置いたキャッシュ**（`<config dir>/cache/changelog.md` 冒頭の
+# `## X.Y.Z`）から読む。**ネットワークもキャッシュ書き込みも fork もゼロ**。
+# **状態を持たない** — 「今の版 vs 最新版」だけで決まるので、更新すれば次の描画で自然に dim へ戻る。
+# 読めない / 形式が変わった / 追いついている ときは**すべて dim**（無表示 < 誤読）。
+# 読む行数に上限を置く（`## ` を持たない形式に変わったとき 600KB を毎描画読み切らないため）。
+ver_col="$DIMVER"
+if has_val "$cc_version"; then
+  _latest="" _scan=0 _cl="${CONFIG_DIR}/cache/changelog.md"
+  if [[ -r "$_cl" ]]; then
+    while IFS= read -r _line; do
+      if [[ "$_line" == '## '* ]]; then _latest="${_line#'## '}"; break; fi
+      ((++_scan >= 20)) && break
+    done < "$_cl"
+  fi
+  # 比較は数値（文字列だと 2.1.9 > 2.1.10 になる）。lib.sh の ver_older を借りる。
+  [[ -n "$_latest" ]] && ver_older "$cc_version" "$_latest" && ver_col="$VEROLD"
+fi
+
+# ── 行を組む ──────────────────────────────────────────────────────────────
+line1=() line2=() line3=()
+
+# **jq が読めなかったら真っ先に言う**（他の要素は初期値のままなのでほぼ空になる）
+[[ -n "$_jq_ok" ]] || line1+=("${RED}jq error${RST}")
+# **宛名は行の先頭**（2026-09-04 にユーザー指示で provider と入れ替えた）。**理由は「並走ペインの
+# 見分け」** — 3〜5 ペインを並べたとき、行頭が揃っている位置にあるものだけが視線を動かさずに読める。
+# **プランは全ペインで同じ値なので、先頭を占める価値が最も低い**（当初は「課金先は宛名より先に効く」
+# として provider を先頭にしていたが、**課金先が違うペインを同時に開くのは稀で、宛名は毎ペイン違う**。
+# 差分がある要素を先に置く、が正しい向き）。宛名の詳細（`sessions/<pid>.json` の `name`・
+# 記号も囲みも付けない・キャッシュを持たない・逆順なら丸ごと落とす）は下の `find_peer()` に書いた。
+has_val "$peer" && line1+=("$peer")
+# **provider / プランは宛名の次** — 「どのアカウントに課金されるか」は同じ "Opus 5" でも違うので
+# モデルより前に置く。**Anthropic 直のときは契約プランを括弧に入れて 1 要素にする**
+# （`( )` は要素内の区切りにだけ使う、の適用）。プランが取れなければ何も出さない。
+case "$provider" in
+  bedrock) line1+=("${BDCK}Bedrock${RST}") ;;
+  vertex)  line1+=("${VTEX}Vertex${RST}") ;;
+  foundry) line1+=("${FNDY}Foundry${RST}") ;;
+  *) if has_val "$plan_type"; then
+       plan_label _pl "$plan_type" "$rate_tier"
+       line1+=("${ANTH}Anthropic(${_pl})${RST}")
+     fi ;;
+esac
+# **`(1M context)` は落とす** — 本体は `display_name` に付けてくるが、① 多色スイープが 19 文字に
+# 伸びて色の意味が薄れる ② 1M であることは 3 行目の分母 `/1M` が既に示している。
+# 落とすのは末尾の suffix だけで、モデル名そのものは触らない。
+if has_val "$model"; then
+  _mshow="${model% (1M context)}"
+  model_color _mc "$_mshow" "$model_id"; line1+=("$_mc")
+fi
+if has_val "$effort_level"; then effort_color _ec "$effort_level"; line1+=("$_ec"); fi
+# **fast モードは on のときだけ出す** — 差分がシグナル（既定は off）。
+# **なぜ出すか**: Opus 5 の fast は **$10/$50 per MTok**（標準は $5/$25）= **単価 2 倍**。
+# 隣の `$` の数字の意味that変わるのに、**組み込みはどこにも常時表示しない**（`/status` と `/fast`
+# だけ）。物差しの②「決断のトリガー」を通る唯一の残り要素だった。
+# **`fast_mode` は教典①（`/statusline` のプロンプト）に載っていない** — 公開 docs の
+# フィールド表（"Whether fast mode is enabled for the session"）と例示 payload だけが裏取り。
+# `cost` / `exceeds_200k_tokens` と同じクラスで、**プロンプトのスキーマは網羅ではない**。
+[[ "$fast_mode" == "true" ]] && line1+=("${FAST}fast${RST}")
+# 版は**行の最後**（行動に効かない参照情報なので、溢れたとき最初に削られてよい）
+has_val "$cc_version" && line1+=("${ver_col}v${cc_version}${RST}")
+
+[[ "$_path" != "." ]] && line2+=("$_path")
+has_val "$wt_name" && line2+=("${DIM}🌲${wt_name}${RST}")
+has_val "$branch" && line2+=("${GIT}${branch}${RST}")
+# **op と conflicts はブランチの直後**（ブランチの状態を限定する事実なので隣に置く）。
+# **色は RED** — CLAUDE.md の「アラームの赤 31 は状態専用（detached / conflicts / behind / …）」
+# に conflicts と進行中操作の両方が含まれる。**平常時は両方とも出ない**ので桁を食わない。
+has_val "$op" && line2+=("${RED}${op}${RST}")
+((conflicts > 0)) && line2+=("${RED}!${conflicts}${RST}")
+# **変更行数は出さない**（diff パネルが `5 files changed +2 -26` を出す）。
+# ahead/behind だけ残す — パネルに無く、上の 1 回の git にタダで乗っている。
+_chg=""
+((ahead  > 0)) && _chg="${DIFF_ADD}↑${ahead}${RST}"
+((behind > 0)) && _chg="${_chg:+$_chg }${DIFF_DEL}↓${behind}${RST}"
+[[ -n "$_chg" ]] && line2+=("$_chg")
+
+if [[ "$used_pct" =~ ^[0-9]+$ ]]; then
+  braille_bar "$used_pct" _bar
+  color_by_threshold "$used_pct" 90 80 _cc
+  _den=""; ((ctx_size > 0)) && { fmt_ctx_size "$ctx_size" _ds; _den="/$_ds"; }
+  # **バーと数値の間は空白 1 つ**（2026-09-08 にユーザー指示で 3 → 1）。`braille_bar` は空きを
+  # **空白**で埋めるので、そこに 3 つ足すと**埋まり具合しだいで隙間が 3〜8 桁**になる（81% で
+  # 4 桁、31% で 6 桁。実機で「空きすぎ」）。1 つにすると 1〜6 桁に締まり、**枠の 3 要素と
+  # 作法も揃う**。バーは常に 5 セルなので**数値の桁位置は動かない**（この性質だけは維持する）。
+  line3+=("${_cc}${_bar} ${used_pct}%${_den}${RST}")
+fi
+# ── セッションの課金額（stdin の `cost.total_cost_usd`。**fork もネットワークもゼロ**）──
+# 全プロバイダー共通で **Claude Code 自身が計算した API 換算 USD**。
+# **教典①（組み込み `/statusline` のプロンプト）にはこのフィールドが載っていない** — 2.1.260 でも
+# JSON スキーマのブロックに `cost` が 1 度も出てこない。実在の裏取りは教典②③ 側:
+# 公開 docs の例示 payload に `"cost": {"total_cost_usd": 0.01234, ...}` があり、CHANGELOG 2.1.246 に
+# 「status line の cost と duration が agents view 往復で 0 に戻るのを修正」がある。**つまり
+# プロンプトのスキーマも網羅ではない**（CHANGELOG が網羅でないのと同じクラスの罠）。
+# **subscription では実請求されない参考値。** 実際に請求される分（usage credits）は同じ `/usage`
+# の応答（`spend.used`）に乗っているが**出していない** — このアカウントは `spend.enabled: false`
+# で構造的に使えず、出しても永久に空だから（2026-09-04 実測）。**取得コストはゼロ**なので、
+# 有効になったら足せる。v1 は隣に `credits:$`（明るい gold, bold）を並べて「明るい方が実請求」の
+# 序列を**色で**表していた。**v2 は片方しか出さないので色では区別が付かない** = この注記が唯一の
+# 区別。だから金額を 2 つ並べる日が来たら色の序列ごと持ってくる。
+# `> 0` の gate が「フィールドが無い（古い Claude Code）」と「$0.00」の**両方**を非表示に倒す。
 if ((cost_cents > 0)); then
   printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
-  # **金額らしく金色で出す** (v1.74.0)。usage-credits の実課金 (`credits:`、SPEND, 明るい gold) と同色相で
-  # 明度だけ下げた COST (ブロンズ) を使い、「どちらも金額 / 明るい方が実際に請求される額」の
-  # 序列を色で表す。無色だった頃は「弱め要素の中で唯一の通常輝度」でしか立っていなかった。
-  line_sess+=("${COST}${_cost}${RST}")
+  line3+=("${COST}${_cost}${RST}")
 fi
-
-# Prompt cache (Claude Code 2.1.251+, `prompt_cache`) — **状態と率の 2 つだけ出す**。
-# 上流 docs 自身が「短い status line は 1〜2 個で、`warm` と `hit_ratio` が状態を最も直接に
-# 要約する」と書いており、**操作が変わるのはこの 2 つだけ**（cold なら次のリクエストが焼き直す /
-# 率が落ちていれば何かが prefix を壊している）。全 12 項目を出す案は却下 — 残りは累計か静的値で、
-# 金額は `$` で既に見えており、詳細は `/usage` の `Prompt cache (main)` 行が持っている（常時見る
-# 必要があるものだけを置く、という agent view を却下したのと同じ理屈）。**`expires_at` を出さない
-# のは誤読とコストの両方**: 上流は `max(lastRequest.at, touchedAt) + ttl` で毎リクエスト前へずらす
-# ので、① cold のときは過去の時刻が「これから切れる」ように読める ② メモは epoch が動き続けて
-# 当たらず、毎描画 `mv` を 1 個増やすだけだった（実測: 6 描画で date 6 / mv 7）。
-# **時刻を出さないので `date` fork はゼロ**（v1.82.0 の床を崩さない）。
-# **ラベルだけ dim・値は通常輝度**（`gh:` と同じ dim 役 ①）。旧 Claude Code と最初の API 応答前は
-# `prompt_cache` ごと absent → `pc_warm=""` で要素が落ちる。
-# **`warm` の判定に jq の `//` を使わない** — `//` は `false` も falsy に扱うので、まさに出したい
-# `warm:false` が absent に畳まれる（テストが pin）。
-if has_val "$pc_warm"; then
-  _pcs="${DIM}prompt_cache:${RST}${pc_warm}"
-  # `hit_ratio` は全 input に対するキャッシュ読みの割合。null（まだ 0 件）ならラベルごと落とす
-  has_val "$pc_hit" && _pcs+=" ${DIM}hit_ratio:${RST}${pc_hit}%"
-  line_sess+=("$_pcs")
-fi
-
-# ============================================================================
-# Output — single write() for atomic pipe delivery
-# ============================================================================
-# `:-` が必須 — bash 3.2 の set -u は空配列の [*] 展開で即死する。line_git は「.git はあるが HEAD が
-# 読めない」(親リポが消えた stale worktree 等) で空になり、line_lim/line_sess も全要素が条件付きなので空になりうる。
-# 付け忘れると exit 1 で statusline が丸ごと空白になる (bash 4+ では再現しないので手元では気付けない)。
+# ── プロンプトキャッシュ: **cold の瞬間だけ出す** ────────────────────────────
+# **判定基準（2026-09-04 に決めた。これが要素選択の物差し）:**
+#   ① 組み込みが**常時見せている**もの（右上・中央・下・diff パネル）の複製は純粋な無駄
+#   ② 組み込みの**スラッシュコマンド**（= 聞かないと出ない）の複製は、**「聞こうと思わなかった
+#      問い」に答えるなら**無駄ではない。statusline の仕事は `/cost` の要約ではなく、
+#      **`/cost` を打つ気にさせる最小限**を置くこと（何も怪しくないとき人は `/cost` を打たない）
 #
-# **空の行は出さない** — 制限行 (line_lim) は Bedrock/Vertex/Foundry では全要素が Anthropic 限定なので
-# 空になる。無条件に改行を出すと**空行が 1 本挟まって**見た目が崩れるので、非空の行だけを連結する。
-# 通常 (Anthropic + git リポ) はちょうど 5 行、Bedrock では 4 行になる。
-_l1="${line1[*]:-}" _l2="${line2[*]:-}" _lg="${line_git[*]:-}"
-_lim="${line_lim[*]:-}" _sess="${line_sess[*]:-}"
-_out="${_l1}"$'\n'"${_l2}"
-[[ -n "$_lg" ]]   && _out+=$'\n'"${_lg}"
-[[ -n "$_sess" ]] && _out+=$'\n'"${_sess}"   # Line 4: このセッション
-[[ -n "$_lim" ]]  && _out+=$'\n'"${_lim}"    # Line 5: アカウントの制限 + 追加課金
-printf '%s\n' "$_out"
+# この基準で `prompt_cache` から残るのは **cold とその原因だけ**:
+#   - **cold は一過性** — 窓が閉じたら `/cost` でも見られない。実例: ユーザーの `/cost` は
+#     `warm` と出たが、cold は**その 1 分 14 秒前**に起きて既に終わっていた。**一過性の状態を
+#     それが真である瞬間に出せるのは statusline だけ** = ここが唯一の置き場
+#   - **`miss_recache_tokens`（`recache:4.2M`）は却下** — 累積なので**後から `/cost` で必ず
+#     取り戻せる**うえ、「打つべきか」の判断は隣の `$` が既にしている（入れてから落とした）
+#   - **`hit_ratio`（`cache:97%`）も却下** — 実データで反証: 375 req / 9 misses / 420 万トークン
+#     再キャッシュ（上乗せ約 $24）で**率は 97% のまま動かない**。累計なので分母が育つほど鈍り、
+#     **コストが出ている瞬間に画面が変わらない**
+#   - **`recache_tokens_if_cold` も却下** — 実質 prefix のサイズで、左端の `52%/1M` の言い直し
+#   再検討条件: 率なら「キャッシュが構造的に効いていない」実例（新プロバイダ /
+#   `caching_observed:false`）が出たとき。そのときは率より `caching_observed` が直接。
+#
+# **`warm` の判定に jq の `//` を使わない** — `//` は `false` も absent に畳むので、まさに出したい
+# cold が消える（2.1.260 のプロンプトが上流の作法として明記した）。**`prompt_cache` ごと absent は
+# 旧 CC 専用の経路ではない** — 最初の API 応答までは毎セッション通る。
+#
+# **原因（`last_miss_cause.causes[0]`）は 2.1.260 の新フィールド**。閉じた集合なので**上流の綴りを
+# そのまま出す**（独自の略号を作らない）。`[[:cntrl:]]` を空白化する — 生の制御文字は 3 行契約を割る。
+#
+# **色は寒色（`COLD` = xterm 81）で、RED も AMBER も使わない。** 赤を使わないのは、cold が
+# 「壊れている」ではなく「お金がかかる」状態で、しかも**アイドル明けに正常に起きる**から
+# （実データの 9 misses は全部 `idle past the 5m TTL`）— 赤にすると赤が狼少年になり、本当の
+# アラーム（detached / behind / context 90%+ / 遅れた版）が薄れる。**AMBER も外した**理由は
+# 上の `COLD` の定義に書いた（意味と色が逆・隣の `$` と溶ける・Venus パレットと番号衝突）。
+if [[ "$pc_state" == "cold" ]]; then
+  line3+=("${COLD}cold${pc_cause:+ $pc_cause}${RST}")
+fi
+if [[ "$five_pct" =~ ^[0-9]+$ ]]; then
+  braille_bar "$five_pct" _fb
+  line3+=("${ANTH}5h:${_fb} ${five_pct}%${five_at:+ $five_at}${RST}")
+fi
+if [[ "$seven_pct" =~ ^[0-9]+$ ]] && ((seven_pct > 0)); then
+  braille_bar "$seven_pct" _sb
+  # **`5h` と同じ ANTH を一段落として使う**（2026-09-07 に確定）。`week` は `5h` と**同じ測り方で
+  # 窓が長い方**なので、色相を変えると「別種のもの」に見えてこの対応が消える。dim の役②
+  # （要素まるごと二次情報）は維持したまま、**色だけスクリプト側で確定させる**のが狙い —
+  # `${DIM}` 単独だと**3 行目で唯一「色を指定していない要素」**になり、端末の既定前景色に
+  # 依存して見た目がテーマで動く。新しい色相は 1 つも増やさない（3 行目は緑 82・金 136・
+  # 氷青 81・タン 180・モデルのパレットで色の予算がほぼ埋まっている）。
+  # **既知のリスク**: dim を 256 色と合成しない端末では `5h` と同じ色に見える。そのときの
+  # 代替は色相を変えない一段暗い単色だが、**素直な「一段暗い 180」は 137 で Fable の
+  # パレットに取られている**ので `144` / `101` へ振るしかなく色相がずれる（採らなかった）。
+  line3+=("${DIM}${ANTH}week:${_sb} ${seven_pct}%${seven_at:+ $seven_at}${RST}")
+fi
+# ── モデル別の週間枠（`Fable:44%`）— stdin に無いので `/usage` から ──────────
+# **モデル名は Line 1 と同じ `model_color`**（Fable なら Venus パレットの多色スイープ）。
+# **ゲージと `N%` は無色の通常輝度** — 1 要素に色系統を 2 つ入れない（色は識別、値は輝度）。
+# **`/usage` の `limits[]` は版を持たない `"Fable"` しか返さない**ので、`model_color` の
+# generic な arm に落ちる。lib.sh は generic を**新しい方（5.1 = Venus）**に向けてあるので
+# Line 1 と色が揃う。
+#
+# **リセット時刻は `week:` と違うときだけ出す**（差分がシグナル。`effort` / `fast` と同じ作法）。
+# 当初は「隣の `week:` が既に時刻を持つので重複」として落としていたが、**再検討条件に挙げていた
+# 「`week:` とずれる実例」が実データで出た**（2026-09-04）: この口座は `/usage` の `seven_day` が
+# `null` = **アカウント週間窓が無い**ので `week:` 自体が描かれず、`Fable:51%` が**行内で唯一
+# 時刻を持たない枠**になっていた（残り 51% がいつ戻るのか読めない）。加えてモデル別枠の
+# `resets_at`（土 16:00）は 5h（金 19:59）と別日で、**近い方の時刻から推測もできない**。
+# 一致するときに省くのは、同じ時刻を 1 行に 2 回出さないため（`week:` がある口座はこちら）。
+# **比較は書式済みの文字列同士**（`%a %H:%M` で揃えてある）。tz を追従させる版では、この文字列は
+# 背景で作るので **tz と書式をキャッシュの鍵に足す**（v1 の `USAGE_FMT` に `tz,tf,loc` がある理由）。
+_rest="$scoped"
+while [[ -n "$_rest" ]]; do
+  _line="${_rest%%$'\n'*}"
+  if [[ "$_rest" == *$'\n'* ]]; then _rest="${_rest#*$'\n'}"; else _rest=""; fi
+  [[ -n "$_line" ]] || continue
+  _mname="${_line%%$'\037'*}"
+  _rec2="${_line#*$'\037'}"
+  _mpct="${_rec2%%$'\037'*}"
+  # 3 つ目が無いレコード（旧い形式）でも桁がずれないように、有無で分ける
+  if [[ "$_rec2" == *$'\037'* ]]; then _mrst="${_rec2#*$'\037'}"; else _mrst=""; fi
+  [[ -n "$_mname" && "$_mpct" =~ ^[0-9]+$ ]] || continue
+  # **比較は表示形に直してから** — 生の `"6 16:00"` どうしでも一致するが、片方だけ 12 時間や
+  # `Z` が付く経路が将来出たときに静かにずれる。`fmt_time` を通してから比べる。
+  fmt_time _mrst "$_mrst"
+  [[ "$_mrst" != "$seven_at" ]] || _mrst=""
+  model_color _mcol "$_mname" "$_mname"
+  # **時刻は dim にしない** — dim の 3 役（ラベル弱め / 要素まるごと二次情報 / プレースホルダ）の
+  # どれでもなく**値**で、隣の `5h:16% 19:59` も時刻を通常輝度で出している。
+  braille_bar "$_mpct" _mb
+  # **バー以降はグラデにしない**（2026-09-08 にユーザー判断で撤回）。section ごとにスイープする
+  # 版を実機で見て「グラデが見づらい」— **数値と時刻が 1 文字ずつ色を変えると読む速度が落ちる**。
+  # グラデは**名前だけ**が担い、`:` から先は**名前が終わった色**（`_ecol`）の単色にする。
+  # 却下版の残骸は下の履歴コメントに残す。
+  #
+  # 【却下】ブロックをセクションに割って、セクションごとにモデル色をスイープする
+  # （2026-09-07 にユーザー指示「block ないで section 分けて その中でグラデ」）。
+  # セクションは **名前+`:` / バーの埋まり桁 / `N%` / リセット時刻** の 4 つ。
+  #
+  # **`model_color` を section ごとに呼び直すだけでよい** — `model_key` は `SHOW|ID` を連結して
+  # tier を**部分一致**で探すので、SHOW にバーや数字を渡しても ID 側の名前でキーが決まる。
+  # パレットに触らずに済むので、**gradient / rainbow / flat / 色なしの 4 経路が全部そのまま
+  # 効く**（flat なモデルは全 section 同色 = 従来と同じ絵、色なしは無色のまま）。
+  # `printf -v` なのでフォークは増えない。
+  #
+  # **1 ブロックを 1 回でスイープしない理由**: 25 桁を 4 ストップで舐めると隣の文字が同色に
+  # なってグラデに見えない。section ごとに舐め直すと**各部が必ず全ストップを通る**。
+  # **空白（バーの空き）はスイープに入れない** — 見えない桁にストップを食われて、
+  # 埋まっている側が先頭色だけになる。
+  #
+  # **各 section が先頭色（Fable なら `95` = brick）から始まることは受け入れる。** 名前の
+  # `F` が既に brick で、それは気に入られている形なので、**全 section が同じ所から始まれば
+  # 反復のリズムになる**（1 箇所だけ brick に戻ると「逆走」に見えたのが前案の問題だった）。
+  # **名前が終わった色を取り出す。** `_mcol` は既に色付きの名前なので**追加の呼び出しも
+  # フォークも要らない** — 末尾の RST を落として「最後の `ESC[`」以降を読めば、gradient でも
+  # rainbow でも flat でも**最終文字に載った色**が取れる（Fable 5.1 なら `187` = cream）。
+  # **色が付かないモデル（`model_color` の `*)` arm）では空にする** — ESC が無い文字列から
+  # 切り出すと、名前そのものを色コードとして書き出してしまう。
+  _ecol=""
+  if [[ "$_mcol" == *$'\033['* ]]; then
+    _et="${_mcol%$'\033[0m'}"; _et="${_et##*$'\033['}"; _et="${_et%%m*}"
+    [[ "$_et" =~ ^[0-9\;]+$ ]] && _ecol=$'\033['"${_et}m"
+  fi
+  line3+=("${_mcol}${_ecol}:${_mb} ${_mpct}%${_mrst:+ $_mrst}${RST}")
+done
 
+# ── 出力: 空行は挟まず、単一 printf で書く（v1 と同じ作法）────────────────
+# **要素間は 2 スペース**（v1 の作法）。`"${arr[*]}"` は IFS の 1 文字しか使えないので明示 join。
+join2() {  # join2 OUT 要素...
+  local _o="" _e; local _v="$1"; shift
+  for _e in "$@"; do _o="${_o:+$_o  }$_e"; done
+  printf -v "$_v" '%s' "$_o"
+}
+join2 _l1 ${line1[@]+"${line1[@]}"}
+join2 _l2 ${line2[@]+"${line2[@]}"}
+join2 _l3 ${line3[@]+"${line3[@]}"}
+out=""
+[[ -n "$_l1" ]] && out="$_l1"
+[[ -n "$_l2" ]] && out="${out:+$out$'\n'}$_l2"
+[[ -n "$_l3" ]] && out="${out:+$out$'\n'}$_l3"
+printf '%s\n' "$out"
 exit 0
