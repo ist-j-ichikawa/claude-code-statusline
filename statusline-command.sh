@@ -1,13 +1,16 @@
 #!/bin/bash
-# v2/statusline.sh — 並列セッションで困る 3 つ（「これはどのセッションか」「どのアカウントに
-# 課金されるか」「枠の残り」）に絞った 3 行。**デザインは v1 から拝借**（色と要素の作法は
-# `../lib.sh` を source して共有）。
+# statusline-command.sh — 並列セッションで困る 3 つ（「これはどのセッションか」「どのアカウントに
+# 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
+# `source` しないのでどのディレクトリから起動しても動く）。
 #
 # **Built against Claude Code 2.1.260**（`experiments/upstream/2.1.260/` に教典 3 つを snapshot 済み）。
 # 2.1.259 → 260 の実質差分は `prompt_cache` に `last_miss_cause` / `miss_causes` が増えただけで、
 # **このスクリプトが読むフィールドは 1 つも変わっていない**（消滅・改名なしを diff で確認）。
-# **これはアルファ = 今の痛みを止めるためのもので、ゼロベースの v2 設計はこの後**。
-# だから要素を増やすより「載せない理由」を先に固める（`experiments/handoff.md` の未決）。
+# **要素を増やすより「載せない理由」を先に固める** — 組み込みの UI が常時見せているものと、
+# 後から `/cost` や `/usage` で取り戻せる累積値は載せない。通すのは**一過性**（窓が閉じたら
+# コマンドでも見られない）か**決断のトリガー**（その数字が無いとコマンドを打つべきかも
+# 判断できない）のどちらかだけ。**左から順に優先度が高い** — 本体は全行を右端で切るので、
+# 並び順がそのまま「狭い窓で何が残るか」になる。
 #
 #   1 行目: provider(契約プラン) · 宛名 · モデル(tier 色) · effort · 版
 #            ← どのセッションか / どのアカウントに課金されるか
@@ -43,9 +46,12 @@ set -uo pipefail
 # ── 色と fork-free ヘルパー（旧 lib.sh を取り込んだもの）────────────────────
 # **1 ファイルで完結させる**（2026-09-08）。v1 を消して release tag で版を分ける方針にしたので、
 # `source` で 2 本に割る理由が無くなった。**取り込みは丸ごと** — 旧 `lib.sh` の 63%（12 関数 /
-# 31 定数）は v2 が実際に使っており、選択抽出すると 1 行関数（`gradient` / `rainbow`）の範囲を
-# 誤る。v1 専用だったもの（`osc8` / `editor_url` / `fmt_elapsed` / vim 色 / `FORK_GLYPH` 等）は
-# この下では落としてある。
+# 31 定数）は実際に使っており、選択抽出すると 1 行関数（`gradient` / `rainbow`）の範囲を誤る。
+# **未使用のまま残しているものがある**（`osc8` / `editor_url` / `fmt_elapsed` / vim 色 /
+# `FORK_GLYPH` / `AGENT` / `DRAFT` 等）。park 中の subagent 行とフッターで使うもので、色の根拠と
+# `%` エンコード順の教訓が乗っているので**消さない**。**剪定を試みて撤回した**理由も残す:
+# `(( ))` の算術は変数を `$` なしで参照するので、`$` ベースで未使用を数えると `ACCT_TTL` を
+# 「未参照」と誤判定する（37 行の削減にリスクを払う価値がない）。
 readonly RST=$'\033[0m' GRN=$'\033[32m' YLW=$'\033[33m' RED=$'\033[31m'
 readonly CTX_OK=$'\033[38;5;82m'
 readonly DIM=$'\033[2m'
@@ -250,7 +256,7 @@ model_color() {
 # 単位は常に 1 つ。**m/h 帯は Line 3 の commit age と同表記だが 24h 以降は分かれる** —
 # 経過は `27h` のまま (セッションを開いている総時間が知りたい)、commit age は `1d` に丸める。
 # **この値はアイドル込みの壁時計** = 「Claude が働いていた時間」ではない。根拠は
-# `docs/internals.md`「Line 4」(実働は `cost.total_api_duration_ms` 側)。
+# 実働は `cost.total_api_duration_ms` 側（この関数は現在 park 中で呼んでいない）。
 # **H:MM にはしない** — リセット時刻（`19:31` / `土 16:00`）と桁の形が似て区別できなくなる。
 # 経緯は CHANGELOG 1.60.0（当時は 5h が残り時間 `4:01` で、H:MM が 2 個並ぶ問題だった）。
 fmt_elapsed() {
@@ -338,7 +344,10 @@ ver_older() {
 # braille_bar PCT VARNAME — sets VARNAME to 5-char braille bar (no subshell)
 # 8 braille levels per char × 5 chars = 40 steps of precision
 braille_bar() {
+  # **`10#` で 10 進を強制する** — `08` / `09` は 8 進として解釈され「value too great for base」が
+  # **毎描画 stderr に漏れる**。呼び出し側の gate は `^[0-9]+$` なのでゼロ埋めを通す。
   local pct=$1 width=5
+  [[ "$pct" =~ ^[0-9]+$ ]] && pct=$((10#$pct))
   [[ "$pct" =~ ^[0-9]+$ ]] || { printf -v "$2" '%s' '     '; return; }
   local b0=' ' b1='⣀' b2='⣄' b3='⣤' b4='⣦' b5='⣶' b6='⣷' b7='⣿'
   local _bb="" level=$((pct * width * 7 / 100)) i seg varname
@@ -358,6 +367,7 @@ braille_bar() {
 # OK = lime green (CTX_OK), distinct from Bedrock teal and standard ANSI green
 color_by_threshold() {
   local val=$1 hi=$2 mid=$3
+  [[ "$val" =~ ^[0-9]+$ ]] && val=$((10#$val))   # ゼロ埋めを 8 進に読ませない
   [[ "$val" =~ ^[0-9]+$ ]] || { printf -v "$4" '%s' "$DIM"; return; }
   if ((val >= hi)); then printf -v "$4" '%s' "$RED"
   elif ((val >= mid)); then printf -v "$4" '%s' "$YLW"
@@ -391,7 +401,7 @@ else
   readonly SECURESTORAGE_HASH_DIR="${CLAUDE_CONFIG_DIR:+$CONFIG_DIR}"
 fi
 
-# **v2 専用の色はここに置く**（`lib.sh` は v1 凍結中なので触らない。source は読むだけ）。
+# **v2 専用の色はここに置く**。
 # `cold` = 氷の青（xterm 81）。**最初 AMBER 214 にして外した** — ① 語が "cold" なのに暖色で
 # **意味と色が逆** ② 隣の `$`（COST 136 ブロンズ）と同系で**並ぶと溶ける**（実機で確認）
 # ③ 214 は Fable 5.1 の Venus パレット（95/137/214/187）と番号が衝突する。
@@ -412,7 +422,7 @@ readonly COLD=$'\033[38;5;81m'
 #    地模様がほぼ空になり 5% と 40% が区別できない）。
 #    教訓: **ゲージは数値の代わりではなく、数値の隣に置く比較の道具**。context が最初からその形。
 # ② **context と同じ閾値色（緑/黄/赤）** — ラベルと数値が識別色でバーだけ緑になり、
-#    **要素が 2 つに割れて見える**。CLAUDE.md の「1 要素に色系統を 2 つ入れない」がこれ。
+#    **要素が 2 つに割れて見える**。「1 要素に色系統を 2 つ入れない」がこれ。
 #    context のバーが緑で成立するのは、**あの要素が識別色を持たない**（ラベルも無く閾値色が
 #    唯一の色）から。識別色を持つ要素に足すと境界が読めなくなる。
 # ③ **名前と同じ gradient をバーにスイープ** — 埋まり桁が 1 つだと `gradient` の添字が 0 に
@@ -429,9 +439,26 @@ readonly COLD=$'\033[38;5;81m'
 # **ファイル名に config dir を混ぜる** — `CACHE_BASE` は UID 単位なので、混ぜないと
 # `CLAUDE_CONFIG_DIR` を分けた 2 アカウントが**別アカウントのプラン名と枠を表示する**。
 readonly CACHE_BASE="${CLAUDE_STATUSLINE_V2_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statusline-v2-$UID}"
-readonly CFG_KEY="${CONFIG_DIR//\//_}"
+# **鍵には config dir と securestorage dir の両方を混ぜる。** キャッシュに入るのは
+# **`CLAUDE_SECURESTORAGE_CONFIG_DIR` で引いた Keychain の値**（プラン・枠）なので、
+# `CONFIG_DIR` だけで鍵にすると**同じ config dir で securestorage を分けた 2 つが同じファイルを
+# 読み書きし、互いのプラン名と枠を表示する**（SECURESTORAGE を分けた目的が消える）。
+_cfgk="${CONFIG_DIR//\//_}"
+# **securestorage を明示的に分けているときだけ鍵に足す。** 比較相手は `CONFIG_DIR` ではなく
+# **「`CLAUDE_SECURESTORAGE_CONFIG_DIR` を設定しなかったときの値」** — `SECURESTORAGE_HASH_DIR` は
+# `CLAUDE_CONFIG_DIR` が未設定なら**空**になるので、`CONFIG_DIR` と比べると既定でも食い違い、
+# **全ユーザーのキャッシュ名が変わって一斉に取り直す**（実際に踏んだ）。
+if [[ "$SECURESTORAGE_HASH_DIR" != "${CLAUDE_CONFIG_DIR:+$CONFIG_DIR}" ]]; then
+  _cfgk="${_cfgk}__${SECURESTORAGE_HASH_DIR//\//_}"
+fi
+readonly CFG_KEY="$_cfgk"
 readonly ACCT_CACHE="${CACHE_BASE}/account${CFG_KEY}"
 readonly ACCT_TTL=300
+# **確認できなくなった値を出し続けない上限**（`at.*` は claim で毎回進むので鮮度の判定に使えない。
+# 「最後に**取れた**時刻」を別に持ち、これを超えたら要素ごと落とす）。ログアウトやアカウント
+# 切り替えの後に**古いプラン名を現在のものとして出し続ける**のは「無表示 < 誤読」の裏返し。
+# 24 時間にしてあるのは、プランは滅多に変わらない一方で「取れない状態」は数分で復帰しうるから。
+readonly ACCT_MAX_AGE=86400
 # **形式タグ = フィールド一覧そのもの**。不一致なら値を捨てて即取り直す（TTL を待たせない）。
 # **版番号をファイル名に持たせない**（製品版と紛らわしく、番号上げを忘れる）。
 # **形式タグは「フィールド一覧」ではなく schema 番号にする。** 一覧をタグにすると**項目を 1 つ
@@ -470,25 +497,25 @@ _jq=$(jq -r --rawfile _settings "$_settings_file" '
   (($_settings | fromjson? | objects) // {}) as $cfg
   | @sh "tz_setting=\($cfg.timeZone // "" | tostring)",
   @sh "tf_setting=\($cfg.timeFormat // "" | tostring)",
-  @sh "model=\(.model?.display_name? // "")",
-  @sh "model_id=\(.model?.id? // "")",
-  @sh "effort_level=\(.effort?.level? // "")",
-  @sh "current_dir=\(.workspace?.current_dir? // .cwd? // ".")",
-  @sh "wt_name=\(.worktree?.name? // "")",
+  @sh "model=\(.model?.display_name? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
+  @sh "model_id=\(.model?.id? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
+  @sh "effort_level=\(.effort?.level? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
+  @sh "current_dir=\(.workspace?.current_dir? // .cwd? // "." | tostring | gsub("[[:cntrl:]]"; " "))",
+  @sh "wt_name=\(.worktree?.name? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
   @sh "used_pct=\(.context_window?.used_percentage? // null | if type != "number" then "" else round end)",
-  @sh "ctx_size=\(.context_window?.context_window_size? // 0 | if type != "number" then 0 else . end)",
+  @sh "ctx_size=\(.context_window?.context_window_size? // 0 | if type != "number" then 0 else floor end)",
   @sh "five_pct=\(.rate_limits?.five_hour?.used_percentage? // null | if type != "number" then "" else round end)",
   @sh "five_ep=\(.rate_limits?.five_hour?.resets_at? // null | if type != "number" then "" else floor end)",
-  @sh "five_at=\(.rate_limits?.five_hour?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (floor|strflocaltime("%H:%M")) end)",
+  @sh "five_at=\(.rate_limits?.five_hour?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%H:%M")) end)",
   @sh "seven_pct=\(.rate_limits?.seven_day?.used_percentage? // null | if type != "number" then "" else round end)",
   @sh "seven_ep=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" else floor end)",
-  @sh "seven_at=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (floor|strflocaltime("%w %H:%M")) end)",
+  @sh "seven_at=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M")) end)",
   @sh "session_id=\(.session_id? // "")",
   @sh "cost_cents=\(.cost?.total_cost_usd? // 0 | if type != "number" then 0 else . * 100 | round end)",
   @sh "fast_mode=\(.fast_mode // false)",
   @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
   @sh "pc_cause=\((.prompt_cache?.last_miss_cause?.causes? // []) | if type != "array" or length == 0 then "" else (.[0] | tostring | gsub("[[:cntrl:]]"; " ")) end)",
-  @sh "cc_version=\(.version? // "")",
+  @sh "cc_version=\(.version? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
   @sh "_NOW=\(now|floor)"
 ' 2>/dev/null) && eval "$_jq" || _jq_ok=""
 # **空の出力も失敗**として扱う — jq は**空の stdin では rc=0 で何も出さない**ので、
@@ -539,8 +566,8 @@ if [[ -n "$_tz" ]]; then
   # 既定（`timeZone` 未設定）では 0 回なので、**hot path の床は jq 1 + git 1 のまま**。
   # 書式は上の 2 つに固定なので `--arg` で渡す必要も無い。
   _rt=$(jq -rn --arg fe "$five_ep" --arg se "$seven_ep" '
-    @sh "five_at=\($fe | if . == "" then "" else tonumber | if . <= now then "now" else strflocaltime("%H:%M") end end)",
-    @sh "seven_at=\($se | if . == "" then "" else tonumber | if . <= now then "now" else strflocaltime("%w %H:%M") end end)"
+    @sh "five_at=\($fe | if . == "" then "" else tonumber | if . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%H:%M")) end end)",
+    @sh "seven_at=\($se | if . == "" then "" else tonumber | if . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M")) end end)"
   ' 2>/dev/null) && eval "$_rt" || true
 fi
 
@@ -634,11 +661,11 @@ fi
 #
 # **繰り返しキー `limit` で N 個のモデルにスケールする。** 新しい種類のデータ（usage credits 等）を
 # 足すときも**キーを 1 つ増やすだけ**で、ファイルもレイアウトも増やさない。
-_C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0
+_C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0 _C_ok_plan=0 _C_ok_lim=0
 read_acct_cache() {
-  _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0
+  _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0 _C_ok_plan=0 _C_ok_lim=0
   [[ -r "$ACCT_CACHE" ]] || return 0
-  local _k="" _a="" _b="" _c="" _sc=""
+  local _k="" _a="" _b="" _c="" _sc="" _has_ok=""
   # **`|| [[ -n "$_k" ]]` が必須** — 末尾に改行が無い行では `read` が rc=1 を返すので、
   # 付けないと**最後の 1 行が丸ごと無視される**（書き側は必ず改行で終えるが、
   # 途中で切れたファイルを読む経路が残る）。
@@ -650,14 +677,24 @@ read_acct_cache() {
       tz)        _C_tz="$_a" ;;
       at.plan)   _C_at_plan="$_a" ;;
       at.limits) _C_at_lim="$_a" ;;
+      ok.plan)   _C_ok_plan="$_a"; _has_ok=1 ;;   # 最後に**取れた**時刻（claim では進めない）
+      ok.limits) _C_ok_lim="$_a"; _has_ok=1 ;;
       limit)     [[ -n "$_a" ]] && _C_lim="${_C_lim}${_C_lim:+$'\n'}${_a}${_USEP}${_b}${_USEP}${_c}" ;;
     esac
   done < "$ACCT_CACHE"
   if [[ "$_sc" != "$ACCT_SCHEMA" ]]; then
-    _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0; return 0
+    _C_plan="" _C_tier="" _C_tz="" _C_lim="" _C_at_plan=0 _C_at_lim=0 _C_ok_plan=0 _C_ok_lim=0
+    return 0
   fi
   [[ "$_C_at_plan" =~ ^[0-9]+$ ]] || _C_at_plan=0
   [[ "$_C_at_lim"  =~ ^[0-9]+$ ]] || _C_at_lim=0
+  [[ "$_C_ok_plan" =~ ^[0-9]+$ ]] || _C_ok_plan=0
+  [[ "$_C_ok_lim"  =~ ^[0-9]+$ ]] || _C_ok_lim=0
+  # **`ok.*` を知らない版が書いたレコードは `at.*` で読み替える**（旧レコードの救済）。
+  # これが無いと**アップグレード直後にプランと枠が消え、claim のせいで次の取得まで最大 300 秒
+  # 戻らない**。「無いキーは既定値」の既定値が 0 だと退化が強すぎる例。**キーが 1 つでも
+  # あれば救済しない** — 取得が失敗し続けている状態で `at.*` に読み替えると上限が永久に来ない。
+  if [[ -z "$_has_ok" ]]; then _C_ok_plan="$_C_at_plan"; _C_ok_lim="$_C_at_lim"; fi
   # tz が違うのは枠の表示文字列だけ（プランは巻き込まない）
   [[ "$_C_tz" == "$_tz" ]] || { _C_lim=""; _C_at_lim=0; }
   return 0
@@ -666,7 +703,7 @@ read_acct_cache() {
 write_acct_cache() {
   # **1 本の文字列にしてから 1 回で書く**（`>>` を並べると途中の失敗で裂けたレコードが残る）。
   # **US は変数（`_USEP`）で渡す** — `printf` の書式に埋めるとクォートが閉じてリテラルの
-  # `$037` を書き出す（実際に踏んだ。詳細は CLAUDE.md の Gotchas）。
+  # `$037` を書き出す（実際に踏んだ）。
   local _o="" _rest="$_C_lim" _l
   _o="schema${_USEP}${ACCT_SCHEMA}"$'\n'
   _o="${_o}tz${_USEP}${_tz}"$'\n'
@@ -674,6 +711,8 @@ write_acct_cache() {
   _o="${_o}tier${_USEP}${_C_tier}"$'\n'
   _o="${_o}at.plan${_USEP}${_C_at_plan}"$'\n'
   _o="${_o}at.limits${_USEP}${_C_at_lim}"$'\n'
+  _o="${_o}ok.plan${_USEP}${_C_ok_plan}"$'\n'
+  _o="${_o}ok.limits${_USEP}${_C_ok_lim}"$'\n'
   while [[ -n "$_rest" ]]; do
     _l="${_rest%%$'\n'*}"
     if [[ "$_rest" == *$'\n'* ]]; then _rest="${_rest#*$'\n'}"; else _rest=""; fi
@@ -689,6 +728,10 @@ fetch_account() {
   [[ -z "$provider" ]] || return 0                       # 非 Anthropic は素通り
   read_acct_cache
   plan_type="$_C_plan" rate_tier="$_C_tier" scoped="$_C_lim"
+  # **確認できなくなって久しい値は出さない。** `at.*` は claim で毎回進むので「取れているか」を
+  # 表さない。`ok.*`（最後に取れた時刻）で見て、上限を超えたら要素ごと落とす。
+  (( _NOW - _C_ok_plan > ACCT_MAX_AGE )) && { plan_type="" rate_tier=""; }
+  (( _NOW - _C_ok_lim  > ACCT_MAX_AGE )) && scoped=""
   # **判定は出所ごとの時刻だけ**（値の有無を混ぜない）。取れていなければ `at.*` は 0 なので必ず古い。
   local _need=""
   (( _NOW - _C_at_plan > ACCT_TTL )) && _need=1
@@ -786,8 +829,8 @@ fetch_account() {
       # 他セッションを止める」役しか果たしておらず、**書き込みの順序は守らない**。
       # 取れなかった出所は**読み直した値と `at.*` がそのまま残る**（claim 済みなので storm にならない）。
       read_acct_cache
-      if [[ -n "$_plan" ]]; then _C_plan="$_plan"; _C_tier="$_tier"; _C_at_plan="$_NOW"; fi
-      if [[ -n "$_lim_ok" ]]; then _C_lim="$_lim"; _C_at_lim="$_NOW"; fi
+      if [[ -n "$_plan" ]]; then _C_plan="$_plan"; _C_tier="$_tier"; _C_at_plan="$_NOW"; _C_ok_plan="$_NOW"; fi
+      if [[ -n "$_lim_ok" ]]; then _C_lim="$_lim"; _C_at_lim="$_NOW"; _C_ok_lim="$_NOW"; fi
       write_acct_cache
     # **`>/dev/null 2>&1` が背景化の必須条件** — 付けないと subshell が親の stdout（Claude Code が
     # 読む pipe）を握ったままになり、読み手は最後の fd 保持者が終わるまで EOF を見ない。
@@ -807,6 +850,11 @@ fetch_account
 _repo="" _gd="" _d="$current_dir"
 while [[ -n "$_d" && "$_d" != "/" ]]; do
   if [[ -e "$_d/.git" ]]; then _repo="$_d"; break; fi
+  # **`/` を含まなくなったら抜ける。** `${_d%/*}` は `/` の無い文字列を**変えずに返す**ので、
+  # これが無いと `.` や `foo` で**無限ループ（100% CPU で永久に回る）**。`current_dir` の既定は
+  # `"."` で、**jq が落ちた・jq が無い場合も `.` のまま**なので、「jq 未インストールで
+  # git 管理外のディレクトリを開いた」だけで踏む（本体は毎描画呼ぶのでプロセスが溜まる）。
+  [[ "$_d" == */* ]] || break
   _d="${_d%/*}"
 done
 [[ -z "$_repo" && -e "/.git" ]] && _repo="/"     # `/` 直下のリポ（稀だが素通りさせない）
@@ -831,17 +879,25 @@ fi
 # **unmerged の `u UU …` 行は消えない**（実測で確認）。
 # 行数は porcelain が持たないが**もう出さない**（`/cost` の `Total code changes` から取り戻せる）。
 # `-uno` で untracked を数えない = リポのサイズにほぼ依存しない（5878 ファイルでも 16.8ms 実測）。
-branch="" ahead="" behind="" conflicts=0
+branch="" ahead="" behind="" conflicts=0 _oid="" _detached=""
 if [[ -n "$_repo" ]]; then
   while IFS= read -r _l; do
     case "$_l" in
+      '# branch.oid '*)  _oid="${_l#\# branch.oid }" ;;
       '# branch.head '*) branch="${_l#\# branch.head }" ;;
       '# branch.ab '*)   _ab="${_l#\# branch.ab }"; ahead="${_ab%% *}"; behind="${_ab#* }" ;;
       'u '*)             conflicts=$((conflicts + 1)) ;;
     esac
   done < <(git -C "$_repo" --no-optional-locks status --porcelain=v2 -b -uno 2>/dev/null)
 fi
-[[ "$branch" == "(detached)" ]] && branch="HEAD"
+# **detached は赤で、sha も出す。** 「アラームの赤 31 は状態専用」に detached が
+# 入っている。ここを普通のブランチと同じ橙で `HEAD` とだけ描くと、**detached checkout が
+# 平常の状態に見え**、どのコミットに居るかも消える。`# branch.oid` から短縮 sha を作る。
+_detached=""
+if [[ "$branch" == "(detached)" ]]; then
+  _detached=1
+  if [[ "$_oid" =~ ^[0-9a-f]{7,} ]]; then branch="HEAD@${_oid:0:7}"; else branch="HEAD"; fi
+fi
 # `# branch.ab` は upstream が無いと出ないので、**必ず数値に正規化する**
 # （空のまま算術に入れると `(( > 0))` で syntax error = stderr が毎描画漏れる）
 ahead="${ahead#+}"; behind="${behind#-}"
@@ -883,7 +939,10 @@ fi
 # パスは $HOME を ~ に。worktree 配下ならリポ root までで切る（v1 と同じ作法）。
 _path="$current_dir"
 if [[ -n "$wt_name" && "$_path" == *"$WT_MARKER"* ]]; then _path="${_path%%"$WT_MARKER"*}"; fi
-[[ "$_path" == "$HOME"* ]] && _path="~${_path#"$HOME"}"
+# **前方一致ではなくパス成分で見る** — `"$HOME"*` だと `/Users/user2/dev` が `~2/dev` になり、
+# **実在しないディレクトリに読める**（無表示より悪い誤読）。`$HOME` そのものと配下だけ畳む。
+if [[ "$_path" == "$HOME" ]]; then _path="~"
+elif [[ "$_path" == "$HOME"/* ]]; then _path="~${_path#"$HOME"}"; fi
 
 # ── 版: 最新から遅れている間だけ赤くする ──────────────────────────────────
 # 最新版は **Claude Code 自身が置いたキャッシュ**（`<config dir>/cache/changelog.md` 冒頭の
@@ -914,7 +973,7 @@ line1=() line2=() line3=()
 # **プランは全ペインで同じ値なので、先頭を占める価値が最も低い**（当初は「課金先は宛名より先に効く」
 # として provider を先頭にしていたが、**課金先が違うペインを同時に開くのは稀で、宛名は毎ペイン違う**。
 # 差分がある要素を先に置く、が正しい向き）。宛名の詳細（`sessions/<pid>.json` の `name`・
-# 記号も囲みも付けない・キャッシュを持たない・逆順なら丸ごと落とす）は下の `find_peer()` に書いた。
+# 記号も囲みも付けない・キャッシュを持たない・逆順なら丸ごと落とす）は上の宛名の抽出部に書いた。
 has_val "$peer" && line1+=("$peer")
 # **provider / プランは宛名の次** — 「どのアカウントに課金されるか」は同じ "Opus 5" でも違うので
 # モデルより前に置く。**Anthropic 直のときは契約プランを括弧に入れて 1 要素にする**
@@ -949,9 +1008,11 @@ has_val "$cc_version" && line1+=("${ver_col}v${cc_version}${RST}")
 
 [[ "$_path" != "." ]] && line2+=("$_path")
 has_val "$wt_name" && line2+=("${DIM}🌲${wt_name}${RST}")
-has_val "$branch" && line2+=("${GIT}${branch}${RST}")
+if has_val "$branch"; then
+  if [[ -n "$_detached" ]]; then line2+=("${RED}${branch}${RST}"); else line2+=("${GIT}${branch}${RST}"); fi
+fi
 # **op と conflicts はブランチの直後**（ブランチの状態を限定する事実なので隣に置く）。
-# **色は RED** — CLAUDE.md の「アラームの赤 31 は状態専用（detached / conflicts / behind / …）」
+# **色は RED** — 「アラームの赤 31 は状態専用（detached / conflicts / behind / …）」
 # に conflicts と進行中操作の両方が含まれる。**平常時は両方とも出ない**ので桁を食わない。
 has_val "$op" && line2+=("${RED}${op}${RST}")
 ((conflicts > 0)) && line2+=("${RED}!${conflicts}${RST}")
@@ -1029,7 +1090,9 @@ if [[ "$five_pct" =~ ^[0-9]+$ ]]; then
   braille_bar "$five_pct" _fb
   line3+=("${ANTH}5h:${_fb} ${five_pct}%${five_at:+ $five_at}${RST}")
 fi
+_week_shown=""
 if [[ "$seven_pct" =~ ^[0-9]+$ ]] && ((seven_pct > 0)); then
+  _week_shown=1
   braille_bar "$seven_pct" _sb
   # **`5h` と同じ ANTH を一段落として使う**（2026-09-07 に確定）。`week` は `5h` と**同じ測り方で
   # 窓が長い方**なので、色相を変えると「別種のもの」に見えてこの対応が消える。dim の役②
@@ -1072,7 +1135,11 @@ while [[ -n "$_rest" ]]; do
   # **比較は表示形に直してから** — 生の `"6 16:00"` どうしでも一致するが、片方だけ 12 時間や
   # `Z` が付く経路が将来出たときに静かにずれる。`fmt_time` を通してから比べる。
   fmt_time _mrst "$_mrst"
-  [[ "$_mrst" != "$seven_at" ]] || _mrst=""
+  # **`week:` が実際に描かれたときだけ重複を落とす。** `week:` は 0% で隠れるので、
+  # `seven_at` の有無だけで判定すると**週間枠がリセットされた直後（0%）に Fable の時刻まで
+  # 消える** — この要素を足した理由（「行内で唯一時刻を持たない枠を作らない」）がそこで裏返る。
+  # 週間窓を持つ口座では毎週必ず 0% を通るので、放置すると毎週再発する。
+  [[ -n "$_week_shown" && "$_mrst" == "$seven_at" ]] && _mrst=""
   model_color _mcol "$_mname" "$_mname"
   # **時刻は dim にしない** — dim の 3 役（ラベル弱め / 要素まるごと二次情報 / プレースホルダ）の
   # どれでもなく**値**で、隣の `5h:16% 19:59` も時刻を通常輝度で出している。

@@ -174,6 +174,31 @@ for bad in 'garbage' "schema${US}99" "limit${US}${US}${US}" "at.plan${US}NaN"; d
     "$(all "$(contract "$O")" "$(empty "$ERR")")" "$O / $(cat "$ERR")"
 done
 
+# **⑦ 確認できなくなって久しい値は出さない。** `at.*` は claim で毎回進むので「取れているか」を
+# 表さない。ログアウトやアカウント切替の後に古いプラン名を出し続けるのは「無表示 < 誤読」の裏返し。
+setup
+{ printf 'schema%s1\n' "$US"; printf 'tz%s\n' "$US"; printf 'plan%senterprise\n' "$US"
+  printf 'tier%sdefault_claude_max_5x\n' "$US"
+  printf 'at.plan%s%s\n' "$US" "$NOW"                    # claim は今（毎回進む）
+  printf 'at.limits%s%s\n' "$US" "$NOW"
+  printf 'ok.plan%s%s\n' "$US" "$((NOW - 200000))"       # 最後に取れたのは 2 日以上前
+  printf 'ok.limits%s%s\n' "$US" "$((NOW - 200000))"
+  printf 'limit%sFable%s51%s6 16:00\n' "$US" "$US" "$US"; } > "$(cfile "$CD" "$CFG")"
+O=$(render "$(pay)")
+check "確認できなくなって久しいプランは出さない" "$(no 'Enterprise' "$O")" "$O"
+check "確認できなくなって久しい枠は出さない" "$(no 'Fable' "$O")" "$O"
+
+# **`ok.*` を知らない版が書いたレコードは `at.*` で救済する。** これが無いとアップグレード直後に
+# プランと枠が消え、claim のせいで次の取得まで最大 300 秒戻らない。
+setup
+{ printf 'schema%s1\n' "$US"; printf 'tz%s\n' "$US"; printf 'plan%senterprise\n' "$US"
+  printf 'tier%sdefault_claude_max_5x\n' "$US"; printf 'at.plan%s%s\n' "$US" "$NOW"
+  printf 'at.limits%s%s\n' "$US" "$NOW"
+  printf 'limit%sFable%s51%s6 16:00\n' "$US" "$US" "$US"; } > "$(cfile "$CD" "$CFG")"
+O=$(render "$(pay)")
+check "ok.* が無い旧レコードは at.* で救済する（upgrade 直後に消えない）" \
+  "$(all "$(has 'Enterprise' "$O")" "$(has 'Fable' "$O")")" "$O"
+
 echo "── キャッシュ: 出所ごとの鮮度と tz ──"
 # **tz が食い違ったら枠だけ捨てる**（プランは tz と無関係なので巻き込まない）
 setup '{"timeZone":"UTC"}'; seed "Asia/Tokyo"
@@ -190,6 +215,25 @@ setup
 O=$(render "$(pay)")
 check "古い側も即返す（stale-while-revalidate）" \
   "$(all "$(has 'Enterprise 5x' "$O")" "$(has 'Fable' "$O")")" "$O"
+
+# **③ キャッシュの鍵は config dir と securestorage dir の両方から作る。** キャッシュに入るのは
+# `CLAUDE_SECURESTORAGE_CONFIG_DIR` で引いた Keychain の値なので、config dir だけで鍵にすると
+# **同じ config dir で securestorage を分けた 2 つが互いのプラン名と枠を表示する**。
+_cn() {  # _cn CONFIGDIR SECUREDIR → 生成されたキャッシュのファイル名
+  local d; d=$(mkd)
+  printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$1" CLAUDE_SECURESTORAGE_CONFIG_DIR="$2" \
+    CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" /bin/bash "$S" >/dev/null 2>&1
+  sleep 1; ls "$d" 2>/dev/null | head -1
+}
+_a=$(_cn /tmp/cfgX /tmp/ssA); _b=$(_cn /tmp/cfgX /tmp/ssB)
+check "securestorage を分けたらキャッシュも分かれる" \
+  "$([ -n "$_a" ] && [ "$_a" != "$_b" ] && echo 1)" "A=$_a B=$_b"
+# **既定ではファイル名を変えない**（変えると全ユーザーが一斉に取り直す = 429 事故と同じ負荷）
+_d1=$(mkd)
+printf '%s' "$(pay)" | env CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" /bin/bash "$S" >/dev/null 2>&1
+sleep 1
+check "securestorage 未設定ならキャッシュ名に接尾辞を付けない" \
+  "$(no '__' "$(ls "$_d1" 2>/dev/null | head -1)")" "$(ls "$_d1" 2>/dev/null | head -1)"
 
 echo "── 時刻: timeZone と timeFormat ──"
 t_time() {  # t_time NAME SETTINGS EXPECT
@@ -229,6 +273,58 @@ setup
 L=$(render "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":100}}' "$D")" 3)
 check "100% はバーが 5 セル埋まる" "$(has '⣿⣿⣿⣿⣿' "$L")" "$L"
 
+echo "── 回帰: 2026-09-08 のレビューで見つかった 9 件 ──"
+# **① `current_dir` に `/` が無いと無限ループしていた。** `${_d%/*}` は `/` の無い文字列を
+# 変えずに返す。既定は `.` で、**jq が無い・落ちた場合も `.`** なので「jq 未インストールで
+# git 管理外を開く」だけで 100% CPU に張り付く。**`grep -c` では捕まらない**（返ってこない）。
+setup
+_wd=$(mkd)
+( cd "$_wd" && printf '%s' '{"version":"2.1.260","model":{"display_name":"Opus 5"}}' \
+  | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
+    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" >"$CD/loop.out" 2>&1 ) &
+_lp=$!; _n=0
+while kill -0 $_lp 2>/dev/null && [ $_n -lt 5 ]; do sleep 1; _n=$((_n + 1)); done
+if kill -0 $_lp 2>/dev/null; then kill -9 $_lp 2>/dev/null; _looped=1; else _looped=""; fi
+check "current_dir に / が無く git 管理外でも終了する（無限ループ回帰）" \
+  "$([ -z "$_looped" ] && echo 1)" "5 秒経っても終わらない"
+
+# **④ `$HOME` はパス成分で一致させる**（前方一致だと `/Users/user2` が `~2` になる）
+setup
+L=$(HOME=/nonexistent-home render "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/nonexistent-home2/dev"},"context_window":{"used_percentage":31}}')" 2)
+check "\$HOME を前方一致で畳まない（~2/dev にしない）" "$(no '~2' "$L")" "$L"
+setup
+L=$(HOME=/nonexistent-home render "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/nonexistent-home/dev"},"context_window":{"used_percentage":31}}')" 2)
+check "\$HOME 配下は畳む" "$(has '~/dev' "$L")" "$L"
+
+# **⑤ `context_window_size` が整数でないと `(( ))` が毎描画 stderr に漏れる**
+setup
+O=$(render "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":31,"context_window_size":1000000.5}}' "$D")")
+check "ctx_size が小数でも stderr が空" "$(empty "$ERR")" "$(cat "$ERR")"
+check "ctx_size が小数でも分母を出す" "$(has '/1M' "$O")" "$O"
+
+# **⑥ 表示に載る文字列の制御文字**（改行が 3 行契約を割り、ESC が ANSI 注入になる）
+for fld in current_dir model version; do
+  setup
+  case "$fld" in
+    current_dir) J='{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/a\nb"},"context_window":{"used_percentage":31}}' ;;
+    model)       J='{"version":"2.1.260","model":{"display_name":"Op\nus"},"workspace":{"current_dir":"'"$D"'"},"context_window":{"used_percentage":31}}' ;;
+    version)     J='{"version":"2.1\n260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"'"$D"'"},"context_window":{"used_percentage":31}}' ;;
+  esac
+  O=$(render "$J")
+  check "$fld に改行が入っても契約を守る" "$(contract "$O")" "$O"
+done
+
+# **⑨ detached HEAD は赤 + 短縮 sha**（普通のブランチと同じ橙だと平常に見える）
+setup
+_dt=$(mkd)
+( cd "$_dt" && git init -q . && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m x \
+  && git checkout -q --detach ) >/dev/null 2>&1
+RAW=$(printf '%s' "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":31}}' "$_dt")" \
+  | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" CLAUDE_STATUSLINE_NO_NET=1 \
+    /bin/bash "$S" 2>/dev/null | sed -n 2p)
+check "detached HEAD は短縮 sha を出す" "$(has 'HEAD@' "$RAW")" "$(printf '%s' "$RAW" | tr -d '\033')"
+check "detached HEAD は赤（状態の色）" "$(has "$(printf '\033[31m')" "$RAW")" "色コード無し"
+
 echo "── セキュリティ ──"
 # **OAuth トークンを argv に出さない**（`ps aux` 漏れ）。偽 curl の argv を記録して確かめる。
 setup
@@ -255,8 +351,16 @@ check "トークンは stdin で渡る（-H @-）" \
 check "curl の argv に --config が無い（設定ディレクティブ注入の経路）" \
   "$(if [ ! -f "$SPY/argv" ] || ! grep -q -- '--config' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
-check "キャッシュディレクトリは 700" \
-  "$([ "$(stat -f '%Sp' "$CD")" = "drwx------" ] && echo 1)" "$(stat -f '%Sp' "$CD")"
+# **`mkdir -p -m 700` が実際に走る経路で見る。** `mktemp -d` は最初から 0700 なので、
+# それを stat するだけでは**この行を `mkdir -p` に書き換えても緑のまま**（mutation で実証）。
+# **まだ存在しないディレクトリ**を CACHE_BASE に指定して、スクリプトに作らせてから見る。
+_cb="$(mkd)/sub"
+printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$_cb" \
+  /bin/bash "$S" >/dev/null 2>&1
+sleep 1
+check "スクリプトが作るキャッシュディレクトリは 700" \
+  "$([ -d "$_cb" ] && [ "$(stat -f '%Sp' "$_cb")" = "drwx------" ] && echo 1)" \
+  "$([ -d "$_cb" ] && stat -f '%Sp' "$_cb" || echo '作られなかった')"
 # **Keychain のサービス名は config dir ごとに変わる**（決め打ちで引くと別アカウントの blob を読む）
 check "Keychain のサービス名に config dir の sha256 先頭 8 桁を付ける" \
   "$(grep -q 'shasum -a 256' "$S" && grep -q 'Claude Code-credentials' "$S" && echo 1)" ""
@@ -283,9 +387,18 @@ check "source していない（1 ファイルで完結）" \
 check "exit 0 で終わる" "$([ "$(tail -1 "$S")" = 'exit 0' ] && echo 1)" "$(tail -1 "$S")"
 # **hot path の外部プロセスは jq 1 + git 1 が床**（`date` / `stat` / `md5` は 0）
 setup
-F=$(printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash -x "$S" 2>&1 >/dev/null | grep -cE '^\+ (date|stat|md5|shasum) ')
+# **`^\+ ` では `$( )` の中を見ていない。** コマンド置換は subshell なので `bash -x` は
+# `++ date` と深さぶんの `+` を出す。`^\+ ` だけだと**最も本命の経路（v1 は `$(date +%s)` を
+# 使っていた）を見逃す**（`x=$(date +%s)` が 0 と数えられることを実測）。`^\++ ` で全深さを見る。
+_trace=$(printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
+    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash -x "$S" 2>&1 >/dev/null)
+F=$(printf '%s' "$_trace" | grep -cE '^\++ (date|stat|md5|shasum) ')
 check "hot path で date / stat / md5 / shasum を呼ばない" "$([ "${F:-0}" = 0 ] && echo 1)" "$F 個"
+# **床は jq 1 + git 1。** README・CHANGELOG・commit message が名指ししている不変条件なので数える。
+NJ=$(printf '%s' "$_trace" | grep -cE '^\++ jq ')
+NG2=$(printf '%s' "$_trace" | grep -cE '^\++ git ')
+check "hot path の jq は 1 個" "$([ "${NJ:-0}" = 1 ] && echo 1)" "$NJ 個"
+check "hot path の git は 1 個" "$([ "${NG2:-0}" = 1 ] && echo 1)" "$NG2 個"
 
 echo
 printf '合計 %s ok / %s NG\n' "$ok" "$ng"
