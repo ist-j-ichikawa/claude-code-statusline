@@ -67,9 +67,11 @@ D="$PWD"
 pay() {  # pay [EXTRA_JSON]
   printf '{"version":"2.1.260","model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":31,"context_window_size":1000000}%s}' "$D" "${1-}"
 }
-# **時刻の期待値は固定の日時から起こす。** 適当な epoch を置くと期待値が書けず、
-# テスト側の数字を実測に合わせるだけの無意味な assert になる。
-E5=$(TZ=UTC jq -rn '"2026-09-08T10:30:00Z"|fromdate')   # JST 19:30 / UTC 10:30 / NY 06:30
+# **時刻の期待値は「未来の固定した分」から起こす。** 過去の epoch を置くとスクリプトが
+# 正しく `now` を出すので**その時刻を過ぎた瞬間に落ちる時限爆弾**になる（実際に踏んだ:
+# 固定日時を過ぎた翌日に 4 本落ちた）。**未来にずらしつつ「時刻の中身」は固定する** —
+# 明日の 10:30 UTC を使えば、ゾーンと書式の変換は日付に依らず同じ結果になる。
+E5=$(TZ=UTC jq -rn 'now | (. + 86400) | strftime("%Y-%m-%d") + "T10:30:00Z" | fromdate')
 FIVE=",\"rate_limits\":{\"five_hour\":{\"used_percentage\":24,\"resets_at\":$E5}}"
 
 echo "── 契約: 3 行と stderr ──"
@@ -244,7 +246,9 @@ t_time() {  # t_time NAME SETTINGS EXPECT
 }
 t_time "timeZone: UTC"              '{"timeZone":"UTC"}'                    '10:30'
 t_time "timeZone: America/New_York" '{"timeZone":"America/New_York"}'        '06:30'
-t_time "timeFormat: 12-hour"        '{"timeFormat":"12-hour"}'              '7:30 PM'
+# **`12-hour` はゾーンも一緒に固定する** — 期待値をシステムの TZ に依存させると
+# **開発機のゾーン以外で落ちる**（JST 前提の `7:30 PM` が UTC で `10:30 AM` になった）。
+t_time "timeFormat: 12-hour"        '{"timeFormat":"12-hour","timeZone":"UTC"}'  '10:30 AM'
 t_time "timeFormat: 24-hour-utc"    '{"timeFormat":"24-hour-utc","timeZone":"America/New_York"}' '10:30Z'
 # **不正なゾーン名は必ず落とす** — libc は黙って UTC にするが上流はシステムのゾーンに戻す。
 # 落とさないと「UTC の時刻をローカルだと思って読む」誤読になる。判定は TZif マジック 4 バイト。
