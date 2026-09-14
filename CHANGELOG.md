@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.0] - 2026-09-14
+
+### Fixed
+
+- **プロンプトキャッシュを報告しないプロバイダで `cold` が出続けるのを直しました。** Bedrock / Vertex / 一部のゲートウェイのように**キャッシュトークンを報告しない**環境では `prompt_cache.warm` が常に `false` になるため、3 行目に `cold` が**永久に表示されたまま**になっていました。`prompt_cache.caching_observed` が `false`（= このセッションでキャッシュトークンが 1 度も報告されていない）のときは `cold` ごと出しません
+  - 判定は **`caching_observed == false` のときだけ落とす**向きです。このフィールドを持たない古い Claude Code では従来どおり `cold` を出します（上流の例示どおり `== true` で通すと、古い Claude Code で `cold` が黙って消えます）
+
+### Changed
+
+- Built against を Claude Code **2.1.270** に追従しました（2.1.260 → 270 を教典 3 つで diff。2.1.262 / 264 は上流の欠番）。**ステータスラインが受け取る JSON のフィールドは 1 つも増減していません** — 実質差分は上の `caching_observed` の作法 1 点だけで、`last_miss_cause` / `miss_causes` は 2.1.260 で入ったものが公開 docs に追記されただけです
+
 ## [2.0.0] - 2026-09-08
 
 ### Changed

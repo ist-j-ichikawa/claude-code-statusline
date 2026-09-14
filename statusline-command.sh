@@ -3,9 +3,9 @@
 # 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
 # `source` しないのでどのディレクトリから起動しても動く）。
 #
-# **Built against Claude Code 2.1.260**（`experiments/upstream/2.1.260/` に教典 3 つを snapshot 済み）。
-# 2.1.259 → 260 の実質差分は `prompt_cache` に `last_miss_cause` / `miss_causes` が増えただけで、
-# **このスクリプトが読むフィールドは 1 つも変わっていない**（消滅・改名なしを diff で確認）。
+# **Built against Claude Code 2.1.270**（`experiments/upstream/2.1.270/` に教典 3 つを snapshot 済み）。
+# 2.1.260 → 270 の実質差分は **`prompt_cache.caching_observed` で cold を gate する作法が公式に
+# なった 1 点だけ**（教典① の例が変わった。フィールドの増減・改名は無い）。取り込み済み。
 # **要素を増やすより「載せない理由」を先に固める** — 組み込みの UI が常時見せているものと、
 # 後から `/cost` や `/usage` で取り戻せる累積値は載せない。通すのは**一過性**（窓が閉じたら
 # コマンドでも見られない）か**決断のトリガー**（その数字が無いとコマンドを打つべきかも
@@ -513,7 +513,7 @@ _jq=$(jq -r --rawfile _settings "$_settings_file" '
   @sh "session_id=\(.session_id? // "")",
   @sh "cost_cents=\(.cost?.total_cost_usd? // 0 | if type != "number" then 0 else . * 100 | round end)",
   @sh "fast_mode=\(.fast_mode // false)",
-  @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
+  @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.caching_observed == false then "" elif .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
   @sh "pc_cause=\((.prompt_cache?.last_miss_cause?.causes? // []) | if type != "array" or length == 0 then "" else (.[0] | tostring | gsub("[[:cntrl:]]"; " ")) end)",
   @sh "cc_version=\(.version? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
   @sh "_NOW=\(now|floor)"
@@ -1068,8 +1068,24 @@ fi
 #     再キャッシュ（上乗せ約 $24）で**率は 97% のまま動かない**。累計なので分母が育つほど鈍り、
 #     **コストが出ている瞬間に画面が変わらない**
 #   - **`recache_tokens_if_cold` も却下** — 実質 prefix のサイズで、左端の `52%/1M` の言い直し
-#   再検討条件: 率なら「キャッシュが構造的に効いていない」実例（新プロバイダ /
-#   `caching_observed:false`）が出たとき。そのときは率より `caching_observed` が直接。
+#   この再検討条件（率なら「キャッシュが構造的に効いていない」実例が出たとき）は
+#   **2.1.270 で到来した。率は採らず `caching_observed` を直接 gate にした**（次段） —
+#   率を出しても「構造的に効いていない」と「たまたま cold」は区別できないが、
+#   `caching_observed:false` は区別そのものだから。
+#
+# **`caching_observed:false` のときは cold ごと出さない**（2.1.270 で上流がこの gate を
+# `/statusline` のプロンプトに明記した。教典① の例が
+# `if .prompt_cache.caching_observed == true and .prompt_cache.warm == false` に変わった）。
+# 理由: **キャッシュトークンを報告しないプロバイダ / ゲートウェイでは `warm` が常に `false`** に
+# なるので、gate を入れないと**永久に `cold` が出続ける** = 「無表示 < 誤読」の誤読側。
+# **判定は上流の `== true` ではなく `== false`**（= 明示的に false のときだけ落とす）。
+# `caching_observed` は **2.1.270 のバイナリでは `prompt_cache` があれば無条件に載る**（教典④ で
+# 確認。`prompt_cache` ごと absent になるのは `requests === 0` のときだけ）。**いつから同居して
+# いるかは未確認** — 教典① は 2.1.258/259 の時点で `prompt_cache` 自体を書いていないので、
+# 2.1.251 の導入時からか 2.1.260 で足されたかは裏が取れない。だから absent は
+# **「載らない版がありうる」側に倒す** = 従来どおり cold を出す（`== true` にすると、その版で
+# cold が黙って消える）。ここは動作に影響しない: absent は `== false` に一致しないので
+# `elif` に落ち、`warm` の判定に進む。
 #
 # **`warm` の判定に jq の `//` を使わない** — `//` は `false` も absent に畳むので、まさに出したい
 # cold が消える（2.1.260 のプロンプトが上流の作法として明記した）。**`prompt_cache` ごと absent は

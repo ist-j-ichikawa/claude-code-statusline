@@ -329,6 +329,32 @@ RAW=$(printf '%s' "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 
 check "detached HEAD は短縮 sha を出す" "$(has 'HEAD@' "$RAW")" "$(printf '%s' "$RAW" | tr -d '\033')"
 check "detached HEAD は赤（状態の色）" "$(has "$(printf '\033[31m')" "$RAW")" "色コード無し"
 
+echo "── prompt_cache: caching_observed の gate（2.1.270）──"
+# **キャッシュトークンを報告しないプロバイダ / ゲートウェイでは `warm` が常に `false`** なので、
+# gate が無いと**永久に `cold` が出続ける**（誤読）。2.1.270 の `/statusline` プロンプトが
+# `caching_observed == true and warm == false` を公式の作法にした。こちらは **`== false` で
+# 落とす**向きで実装してある — absent は「このフィールドを持たない旧 CC」だけの経路なので、
+# `== true` にすると旧 CC で cold が黙って消える。**3 通りを対で持つ**（片方だけだと、
+# gate を消す変更も gate を全部落とす変更も、どちらかがテストを消さずに入る）。
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":false}')")
+check "caching_observed:false なら cold を出さない" \
+  "$(all "$(no 'cold' "$O")" "$(no 'jq error' "$O")" "$(contract "$O")")" "$O"
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["ttl_expired_5m"]}}')")
+check "caching_observed:true なら cold と原因を出す" \
+  "$(all "$(has 'cold ttl_expired_5m' "$O")" "$(no 'jq error' "$O")")" "$O"
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":false}')")
+check "caching_observed が無い旧 CC では cold を出す" \
+  "$(all "$(has 'cold' "$O")" "$(no 'jq error' "$O")")" "$O"
+# **型が変わっても抽出ごと落とさない。** 未文書の payload なので boolean 以外が来る前提で守る
+# （`contract` だけ見る assert は弱い — 抽出が abort すると 1 行になって契約は満たす）。
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":"yes"}')")
+check "caching_observed が文字列でも抽出が生き残る" \
+  "$(all "$(no 'jq error' "$O")" "$(has '31%' "$O")")" "$O"
+
 echo "── セキュリティ ──"
 # **OAuth トークンを argv に出さない**（`ps aux` 漏れ）。偽 curl の argv を記録して確かめる。
 setup

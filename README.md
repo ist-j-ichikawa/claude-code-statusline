@@ -3,7 +3,7 @@
 Claude Code の statusline を 3 行で描く bash スクリプト 1 本。macOS 専用。
 
 ```
-Anthropic(Max 20x)  Opus 5  high  v2.1.260
+Anthropic(Max 20x)  Opus 5  high  v2.1.270
 ~/dev/claude-code-statusline  main
 ⣿⣿⣿   62%/1M  $24.31  cold ttl_expired_5m  5h:⣿⣿⣀   43% 06:13  Fable:⣿⣿⣤   51% Sat 16:00
 ```
@@ -12,7 +12,7 @@ Anthropic(Max 20x)  Opus 5  high  v2.1.260
 |---|---|
 | 1 | 課金先とプラン、モデル、reasoning effort、fast、遅れている間だけ Claude Code の版 |
 | 2 | パス、worktree 名、ブランチ、進行中の git 操作、conflicts、ahead/behind |
-| 3 | コンテキスト消費、セッションの課金額、プロンプトキャッシュが cold の瞬間、5h/週間/モデル別の枠 |
+| 3 | コンテキスト消費、セッションの課金額、プロンプトキャッシュが cold の瞬間（キャッシュトークンを報告しないプロバイダでは出しません）、5h/週間/モデル別の枠 |
 
 **出さないものの方が多いです。** 組み込みの UI が常時見せているもの（PR の状態、セッション名、vim モード、変更行数）は複製しません。スラッシュコマンドで見られるものも、**一過性**（窓が閉じたらコマンドでも見られない）か**決断のトリガー**（その数字が無いとコマンドを打つべきかも判断できない）のどちらかでなければ出しません。
 
