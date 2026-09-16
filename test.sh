@@ -50,6 +50,12 @@ setup() {  # setup [SETTINGS_JSON]
   CFG=$(mkd); CD=$(mkd); ERR="$CD/err"
   printf '%s' "${1-{\}}" > "$CFG/settings.json"
 }
+rawr() {  # rawr PAYLOAD [LINE] — **色を落とさない**（色の assert 用）
+  local out
+  out=$(printf '%s' "$1" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
+        CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" 2>"$ERR")
+  if [ -n "${2-}" ]; then printf '%s' "$out" | sed -n "${2}p"; else printf '%s' "$out"; fi
+}
 render() {  # render PAYLOAD [LINE]
   local out
   out=$(printf '%s' "$1" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
@@ -277,6 +283,44 @@ setup
 L=$(render "$(printf '{"version":"2.1.260","model":{"display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":100}}' "$D")" 3)
 check "100% はバーが 5 セル埋まる" "$(has '⣿⣿⣿⣿⣿' "$L")" "$L"
 
+echo "── 枠が尽きかけているとき（90%+ は要素まるごと赤）──"
+# **バーだけ赤にすると「要素が 2 つに割れて見える」**（2026-09-07 に実機で却下した形）ので、
+# 90%+ では識別色（`5h`=ANTH / `week`=dim ANTH / モデル別枠=モデル色）を**置き換える**。
+# **3 枠すべて 90/89 の厳密境界で対に持つ**（90 で赤・89 で赤くない）。片方だけだと「常に赤」に
+# する変更も「絶対に赤くしない」変更も、どちらかがテストを消さずに入る。**境界を 91/88 のように
+# 緩めると `>=` を `>` にする mutant が緑のまま通る**（91 は `>` でも赤くなるので区別できない）。
+RED_ESC=$(printf '\033[31m'); DIM_ESC=$(printf '\033[2m')
+# **赤の needle は要素にアンカーする**（`${RED_ESC}5h:` の形）— 「3 行目のどこかに赤がある」だけだと
+# **狙いを外した赤でも通る**。アンカーすればその要素が赤いことを直接見る。
+# **パレットの値（180 / 95 …）は焼き込まない** — 識別色は「可読性のため自由に調整して良い」ものなので、
+# 焼き込むとパレットを触った日に**枠のテストが赤くなって原因を誤らせる**。スイープの有無は
+# **`38;5;` の異なる色数**で見る（グラデは 3 ストップ以上 = 必ず複数、赤 1 色は 31 の 1 つだけ）。
+ncol() { printf '%s' "$1" | grep -o $'\033\[38;5;[0-9]*m' | sort -u | grep -c .; }
+lim() {  # lim FIVE SEVEN → payload
+  printf '{"version":"2.1.260","model":{"id":"claude-opus-5","display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":31,"context_window_size":1000000},"rate_limits":{"five_hour":{"used_percentage":%s},"seven_day":{"used_percentage":%s}}}' "$D" "$1" "$2"
+}
+# **枠ごとに 1 件ずつ見る。** 「5h と week のどちらかが赤」で束ねると、**片方の赤を外す変更で
+# 緑のまま**になる（2026-09-16 の mutation で実証: 5h の赤を外しても week が赤いので通った）。
+# 見たい枠だけを 90%+ にして、もう一方は閾値未満に置く。
+setup; O=$(rawr "$(lim 90 10)" 3)
+check "5h だけが 90%+ なら 5h が赤くなる" \
+  "$(all "$(has "${RED_ESC}5h:" "$O")" "$(no 'jq error' "$O")")" "$(printf '%s' "$O" | cat -v)"
+setup; O=$(rawr "$(lim 10 90)" 3)
+check "week だけが 90%+ なら week が赤くなる" \
+  "$(all "$(has "${RED_ESC}week:" "$O")" "$(no 'jq error' "$O")")" "$(printf '%s' "$O" | cat -v)"
+check "90%+ の week は dim を外す（アラームを二次情報にしない）" \
+  "$(no "${DIM_ESC}${ANTH_ESC}week:" "$O")" "$(printf '%s' "$O" | cat -v)"
+setup; O=$(rawr "$(lim 89 89)" 3)
+check "89% では赤くならない（識別色のまま）" \
+  "$(all "$(no "$RED_ESC" "$O")" "$([ "$(ncol "$O")" -ge 2 ] && printf 1)")" "$(printf '%s' "$O" | cat -v)"
+# モデル別枠は**モデル色のスイープを捨てて**赤 1 色にする（1 要素に色系統を 2 つ入れない）
+setup; seed "" 90 "3 16:00"; O=$(rawr "$(lim 10 10)" 3); N_HI=$(ncol "$O")
+check "モデル別枠が 90%+ なら赤になり、モデル色のスイープが消える" \
+  "$(all "$(has "${RED_ESC}Fable:" "$O")" "$([ "$N_HI" -le 2 ] && printf 1)")" "$(printf '%s' "$O" | cat -v)"
+setup; seed "" 89 "3 16:00"; O=$(rawr "$(lim 10 10)" 3); N_LO=$(ncol "$O")
+check "89% のモデル別枠はモデル色のスイープを保つ" \
+  "$(all "$(no "$RED_ESC" "$O")" "$([ "$N_LO" -gt "$N_HI" ] && printf 1)")" "色数 89%%=$N_LO / 90%%=$N_HI  $(printf '%s' "$O" | cat -v)"
+
 echo "── 回帰: 2026-09-08 のレビューで見つかった 9 件 ──"
 # **① `current_dir` に `/` が無いと無限ループしていた。** `${_d%/*}` は `/` の無い文字列を
 # 変えずに返す。既定は `.` で、**jq が無い・落ちた場合も `.`** なので「jq 未インストールで
@@ -414,6 +458,13 @@ check "GNU 専用の flag が無い（stat -c / date -d / md5sum 等）" \
 check "生の制御文字が埋まっていない" "$([ "$(grep -c "$US" "$S")" = 0 ] && echo 1)" "$(grep -n "$US" "$S" | head -2)"
 check "source していない（1 ファイルで完結）" \
   "$([ "$(grep -cE '^[[:space:]]*(source|\.) ' "$S")" = 0 ] && echo 1)" "$(grep -nE '^[[:space:]]*(source|\.) ' "$S")"
+# **3 行目の閾値は 1 つ**（CHANGELOG 2.2.0 と CLAUDE.md がそう言っている）。context の上限に
+# リテラルの数字を戻すと `LIMIT_HI` を動かしたときにここだけ取り残され、**両方のドキュメントが
+# 黙って嘘になる**（出力は今日は同じなので描画のテストでは捕まらない = ソースを見るしかない）。
+check "context の上限は LIMIT_HI を渡している（リテラルを戻していない）" \
+  "$(all "$(grep -c 'color_by_threshold "\$used_pct" "\$LIMIT_HI"' "$S")" \
+         "$([ "$(grep -c 'color_by_threshold "\$used_pct" 9' "$S")" = 0 ] && echo 1)")" \
+  "$(grep -n 'color_by_threshold "\$used_pct"' "$S")"
 check "exit 0 で終わる" "$([ "$(tail -1 "$S")" = 'exit 0' ] && echo 1)" "$(tail -1 "$S")"
 # **hot path の外部プロセスは jq 1 + git 1 が床**（`date` / `stat` / `md5` は 0）
 setup
