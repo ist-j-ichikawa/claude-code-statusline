@@ -68,6 +68,13 @@ seed() {  # seed TZVAL [PCT] [RESET]
     printf 'at.plan%s%s\n' "$US" "$NOW"; printf 'at.limits%s%s\n' "$US" "$NOW"
     printf 'limit%sFable%s%s%s%s\n' "$US" "$US" "${2:-51}" "$US" "${3:-6 16:00}"; } > "$(cfile "$CD" "$CFG")"
 }
+seed2() {  # seed2 FABLE_PCT OPUS_PCT — モデル別枠を 2 件持たせる
+  { printf 'schema%s1\n' "$US"; printf 'tz%s\n' "$US"
+    printf 'plan%senterprise\n' "$US"; printf 'tier%sdefault_claude_max_5x\n' "$US"
+    printf 'at.plan%s%s\n' "$US" "$NOW"; printf 'at.limits%s%s\n' "$US" "$NOW"
+    printf 'limit%sFable%s%s%s6 16:00\n' "$US" "$US" "$1" "$US"
+    printf 'limit%sOpus%s%s%s6 16:00\n' "$US" "$US" "$2" "$US"; } > "$(cfile "$CD" "$CFG")"
+}
 
 D="$PWD"
 pay() {  # pay [EXTRA_JSON]
@@ -320,6 +327,25 @@ check "モデル別枠が 90%+ なら赤になり、モデル色のスイープ�
 setup; seed "" 89 "3 16:00"; O=$(rawr "$(lim 10 10)" 3); N_LO=$(ncol "$O")
 check "89% のモデル別枠はモデル色のスイープを保つ" \
   "$(all "$(no "$RED_ESC" "$O")" "$([ "$N_LO" -gt "$N_HI" ] && printf 1)")" "色数 89%%=$N_LO / 90%%=$N_HI  $(printf '%s' "$O" | cat -v)"
+
+echo "── モデル別週間枠の 0% は隠す ──"
+# **`week:` と同じ扱い**（2026-09-16）。モデル別枠も**週間の**枠なので、規則「0% を隠すのは
+# 週間の枠だけ」がそのまま当たる（`5h` だけは 0% でも出す = 左端の一目確認用）。
+# **「0 を出さない」と「非 0 が同時に生き残る」を対で持つ** — 前者だけだと**全部隠す**変更が、
+# 後者だけだと**全部出す**変更が、どちらもテストを消さずに入る。レコードは複数ありうるので、
+# **1 件でも 0% があったら行ごと落ちる**ような実装になっていないことも同時に見る。
+setup; seed "" 0 "6 16:00"
+O=$(render "$(pay "$FIVE")" 3)
+check "モデル別枠が 0% なら出さない" \
+  "$(all "$(no 'Fable' "$O")" "$(no 'jq error' "$O")" "$(has '5h:' "$O")")" "$O"
+setup; seed "" 38 "6 16:00"
+O=$(render "$(pay "$FIVE")" 3)
+check "モデル別枠が非 0% なら出す" \
+  "$(all "$(has 'Fable' "$O")" "$(has '38%' "$O")")" "$O"
+setup; seed2 0 41
+O=$(render "$(pay "$FIVE")" 3)
+check "0% と非 0% が混在したら非 0% だけ残る" \
+  "$(all "$(no 'Fable' "$O")" "$(has 'Opus:' "$O")" "$(has '41%' "$O")")" "$O"
 
 echo "── 回帰: 2026-09-08 のレビューで見つかった 9 件 ──"
 # **① `current_dir` に `/` が無いと無限ループしていた。** `${_d%/*}` は `/` の無い文字列を
