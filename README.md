@@ -31,13 +31,12 @@ git clone https://github.com/<owner>/claude-code-statusline.git ~/src/claude-cod
     "command": "/bin/bash /Users/you/src/claude-code-statusline/statusline-command.sh",
     "refreshInterval": 30
   },
-  "hideVimModeIndicator": true,
   "timeFormat": "24-hour"
 }
 ```
 
 - `refreshInterval` の単位は**秒**（最小 1）。30 で十分です — 本体が再描画を 300ms でデバウンスしており、1 描画は約 50ms なので余裕があります
-- `hideVimModeIndicator` は組み込みの vim 表示を消すためではなく、**このスクリプトが vim モードを出さない**ので二重表示の心配が要らない、という確認用です。付けなくても動きます
+- vim モードを使うなら `statusLine.hideVimModeIndicator` は**付けないでください**。このスクリプトは vim モードを出さないので、付けると組み込みの `-- INSERT --` まで消えます
 - `timeFormat` は付けなくても動きます（既定の `auto` は locale 任せで、`en_US` 系では**本体が 12 時間・このスクリプトが 24 時間**になります）。`timeZone` と `12-hour` / `24-hour` / `24-hour-utc` には追従します
 
 更新は `git pull` だけです。
