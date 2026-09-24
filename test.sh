@@ -467,6 +467,58 @@ check "Keychain のサービス名に config dir の sha256 先頭 8 桁を付�
 check "credentials ファイルは securestorage 側から読む" \
   "$(grep -q 'SECURESTORAGE_DIR}/.credentials.json' "$S" && echo 1)" ""
 
+# **Keychain のアカウント名は上流と同じ作り方**（2.1.281 のバイナリで確認）: `USER` → 無ければ
+# 実ユーザー名 → **`^[a-zA-Z0-9._-]+$` に合わなければ `claude-code-user`**。上流は書き込みも同じ名前で
+# するので、ずれると item を引けずプランが消える（画面は静かに要素が欠けるだけ = 気付けない）。
+# **偽 `security` の argv で pin する**（ソースの grep だと「判定を書いたが使っていない」で通る）。
+acct_of() {  # acct_of USER値 → security に渡った -a の値
+  local sp; sp=$(mkd); setup
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf %%s %s\n' "$sp" \
+    "'{\"claudeAiOauth\":{\"subscriptionType\":\"max\",\"rateLimitTier\":\"x\",\"accessToken\":\"T\"}}'" > "$sp/security"
+  printf '#!/bin/bash\ncat >/dev/null; printf %%s "{\\"limits\\":[]}"\n' > "$sp/curl"
+  chmod +x "$sp/security" "$sp/curl"
+  # **`LOGNAME` に囮を置く** — 開発機では `LOGNAME` = `id -un` なので、置かないと「`LOGNAME` に倒す」
+  # 旧実装でも同じ値になって緑のまま通る（security-auditor の mutation で実証。2026-09-24）。
+  printf '%s' "$(pay)" | env USER="$1" LOGNAME=zz-not-me CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
+    PATH="$sp:$PATH" /bin/bash "$S" >/dev/null 2>&1
+  local i; for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$sp/argv" ] && break; sleep 0.3; done
+  awk 'p{print; exit} $0=="-a"{p=1}' "$sp/argv" 2>/dev/null
+}
+A=$(acct_of alice)
+check "Keychain の -a は USER を使う" "$([ "$A" = alice ] && echo 1)" "-a=$A"
+# **不正な位置を先頭・途中・末尾に散らす** — 末尾だけ不正な値（`bad name!`）だと、正規表現の `^` を
+# 外す変更が緑のまま通る（security-auditor の mutation で実証）。
+for _bad in '!alice' 'bad name' 'alice!'; do
+  A=$(acct_of "$_bad")
+  check "USER='$_bad' なら -a は claude-code-user（英数字 . _ - 以外を含む。上流と同じ）" \
+    "$([ "$A" = claude-code-user ] && echo 1)" "-a=$A"
+done
+# **`-` で始まる値はそのまま通す**（上流も同じ正規表現で通す。引用しているので `security` は
+# オプションではなくアカウント名として読む = 実機の `security` で rc=44 を確認済み）。
+A=$(acct_of '-s')
+check "USER='-s' はそのまま -a に渡す（上流と同じ。オプションとしては読まれない）" \
+  "$([ "$A" = '-s' ] && echo 1)" "-a=$A"
+A=$(acct_of '')
+check "USER が空なら実ユーザー名を使う（service だけで引かない）" \
+  "$([ -n "$A" ] && [ "$A" = "$(id -un)" ] && echo 1)" "-a=$A / id -un=$(id -un)"
+
+echo "── モデル色 ──"
+# **色 assert は生のリテラルで書く**（`$OPUS55_PAL` のような定数で書くと、どんな値に変えても通って
+# 無断の再調整を検出できない）。**Opus 5 と Opus 5.5 を対で見る** — 5.5 の arm を足すと、並びしだいで
+# 5 の配色が巻き込まれて変わる（`"opus 5."*` が `opus 5.5` も拾うので arm の順序が意味を持つ）。
+mcol() {  # mcol ID DISPLAY → Line 1 のモデル名に載った 38;5;N を空白区切りで
+  setup
+  printf '{"version":"2.1.281","model":{"id":"%s","display_name":"%s"},"workspace":{"current_dir":"/tmp"}}' "$1" "$2" \
+    | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" 2>/dev/null \
+    | head -1 | grep -o $'\033\\[38;5;[0-9]*m' | sed 's/.*;//; s/m//' | sort -un | tr '\n' ' '
+}
+C=$(mcol claude-opus-5-5 'Opus 5.5')
+check "Opus 5.5 は 61 → 139 → 215 のスイープ（夜明けの地平線）" \
+  "$(all "$(has ' 61 ' " $C")" "$(has ' 139 ' " $C")" "$(has ' 215 ' " $C")" "$(no ' 130 ' " $C")")" "色: $C"
+C=$(mcol claude-opus-5 'Opus 5')
+check "Opus 5 は 130 → 173 → 215 のまま（5.5 の arm に巻き込まれない）" \
+  "$(all "$(has ' 130 ' " $C")" "$(has ' 173 ' " $C")" "$(no ' 61 ' " $C")" "$(no ' 139 ' " $C")")" "色: $C"
+
 echo "── 衛生（メタテスト）──"
 # **`bash "$S"` と書くと最重要制約（3.2 互換）を一切検証しないテストになる。**
 # 回数ではなく「`/bin/bash` 以外で被験体を起こしている行が 0 か」で見る。
@@ -491,6 +543,27 @@ check "context の上限は LIMIT_HI を渡している（リテラルを戻し�
   "$(all "$(grep -c 'color_by_threshold "\$used_pct" "\$LIMIT_HI"' "$S")" \
          "$([ "$(grep -c 'color_by_threshold "\$used_pct" 9' "$S")" = 0 ] && echo 1)")" \
   "$(grep -n 'color_by_threshold "\$used_pct"' "$S")"
+# **各行は SGR を閉じて終わる**（2.1.281 から本体の契約になった）。本体は複数行の出力を行ごとに
+# 描くとき、**前の行までに出た SGR と OSC 8 を全部つないで次の行の頭に足す**（2.1.278 には無く
+# 2.1.281 にある分割関数。正規表現は `\x1b\[[\d;]*m|\x1b\]8;…`）。行末で色を開いたままにすると
+# **次の行の頭から色が漏れる** — 以前は行ごとに独立していたので、`${RST}` の閉じ忘れは
+# その行の中だけで済んでいた。**画面を見れば気付けるが、原因を自分のスクリプトに求めにくい**
+# （本体の持ち越しを知らないと「2 行目の色が変」に見える）ので pin する。
+setup; seed ""
+_raw=$(rawr "$(pay "$FIVE"',"cost":{"total_cost_usd":12.5},"prompt_cache":{"warm":false,"caching_observed":true}')")
+_open=""; _n=0
+while IFS= read -r _l || [ -n "$_l" ]; do
+  _n=$((_n + 1))
+  # 行の最後の SGR を取る（無ければ空 = 何も開いていない）
+  _last=$(printf '%s' "$_l" | grep -o $'\033\[[0-9;]*m' | tail -1)
+  case "$_last" in ""|$'\033[0m'|$'\033[m') ;; *) _open="${_open} Line${_n}=$(printf '%s' "$_last" | cat -v)" ;; esac
+done <<EOF_RAW
+$_raw
+EOF_RAW
+check "各行は SGR を閉じて終わる（本体が次の行へ持ち越すので）" \
+  "$(all "$([ -z "$_open" ] && echo 1)" "$([ "$_n" -ge 2 ] && echo 1)")" "開いたまま:$_open（$_n 行）"
+check "OSC 8 を開いたまま終わらない" \
+  "$([ $(( $(printf '%s' "$_raw" | grep -o $'\033\]8;' | grep -c .) % 2 )) = 0 ] && echo 1)" "$(printf '%s' "$_raw" | cat -v)"
 check "exit 0 で終わる" "$([ "$(tail -1 "$S")" = 'exit 0' ] && echo 1)" "$(tail -1 "$S")"
 # **hot path の外部プロセスは jq 1 + git 1 が床**（`date` / `stat` / `md5` は 0）
 setup

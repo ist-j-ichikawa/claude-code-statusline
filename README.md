@@ -3,14 +3,14 @@
 Claude Code の statusline を 3 行で描く bash スクリプト 1 本。macOS 専用。
 
 ```
-Anthropic(Max 20x)  Opus 5  high  v2.1.273
+Anthropic(Max 20x)  Opus 5.5  high  v2.1.281
 ~/dev/claude-code-statusline  main
 ⣿⣿⣿   62%/1M  $24.31  cold ttl_expired_5m  5h:⣿⣿⣀   43% 06:13  Fable:⣿⣿⣤   51% Sat 16:00
 ```
 
 | 行 | 出すもの |
 |---|---|
-| 1 | 課金先とプラン、モデル、reasoning effort、fast、遅れている間だけ Claude Code の版 |
+| 1 | 課金先とプラン、モデル、reasoning effort、fast、Claude Code の版（追いついていれば薄く、遅れていれば赤） |
 | 2 | パス、worktree 名、ブランチ、進行中の git 操作、conflicts、ahead/behind |
 | 3 | コンテキスト消費、セッションの課金額、プロンプトキャッシュが cold の瞬間（キャッシュトークンを報告しないプロバイダでは出しません）、5h/週間/モデル別の枠（**90% を超えた枠は赤**） |
 

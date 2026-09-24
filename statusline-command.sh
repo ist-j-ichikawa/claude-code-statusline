@@ -3,10 +3,11 @@
 # 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
 # `source` しないのでどのディレクトリから起動しても動く）。
 #
-# **Built against Claude Code 2.1.273**（`experiments/upstream/2.1.273/` に教典 3 つを snapshot 済み）。
-# 2.1.270 → 273 は**実質差分ゼロ** — 教典② は差分なし、① は minify 名、③ は表記ゆれ
-# （`Claude.ai` → `claude.ai`）と walkthrough の文言だけ。**契約は動いていない**。
-# その前（2.1.260 → 270）の実質差分は `prompt_cache.caching_observed` の gate 1 点で、取り込み済み。
+# **Built against Claude Code 2.1.281**（`experiments/upstream/2.1.281/` に教典 3 つを snapshot 済み）。
+# 2.1.273 → 281 で**受け取る JSON のキーは 1 つも増減していない**（payload 構築箇所を 278 / 281 で照合）。
+# 動いたのは描画側 1 点: **本体が複数行の出力で、前の行までの SGR / OSC 8 を次の行の頭に持ち越す**
+# ようになった（CHANGELOG に無い）。**だから各行は必ず `RST` で閉じて終わる**（テストで pin）。
+# その前の実質差分は 2.1.270 の `prompt_cache.caching_observed` の gate 1 点で、取り込み済み。
 # **要素を増やすより「載せない理由」を先に固める** — 組み込みの UI が常時見せているものと、
 # 後から `/cost` や `/usage` で取り戻せる累積値は載せない。通すのは**一過性**（窓が閉じたら
 # コマンドでも見られない）か**決断のトリガー**（その数字が無いとコマンドを打つべきかも
@@ -96,6 +97,21 @@ readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ
 # **ストップは知覚明度で 30 以上離す** — 隣接ストップの明度差が 10 未満だと見分けられず、スロットの無駄に
 # なる (v1.53.0 までの 5 ストップ版は 130/166 と 173/209 が各 8.5 差でほぼ同色。実質 3 段だった)。
 readonly OPUS5_PAL=(130 $CORAL_N 215)
+# **Opus 5.5 = 軌道から見た夜明けの地平線**（発表ページ https://www.anthropic.com/news/claude-opus-5-5
+# の **og:image = シェア用画像**、2026-09-22。本文にヒーロー画像は無く、figcaption はベンチマークの
+# 図だけ = 「アートワーク由来」の裏は og:image でしか取れない）。中央パネルを縦に実測すると
+# 空の青 `#6886ab`（xterm 67）→ **くすんだ灰紫 `#8e869f`（103）** → 淡い砂色 `#d8b089`（180）→
+# 橙の地平線 `#c2652f`（130）。**実物の紫は彩度の低い細い帯**で、青と明度がほぼ同じ（L≈134）。
+# **生値のままだと ΔL が 9 で見分けられない**ので、規則（ΔL 28 以上・彩度レンジ > 忠実さ）に従い
+# **青を藍へ暗く・紫を明るく**寄せた: L = 100.8 → 146.4 → 186.3（+46 / +40）。**紫は 139（`#af87af`、
+# 灰みの藤色）** — 実物の帯はピンク寄りのくすんだ色なので、試した 140（`#af87d7`、青みの薄紫）より
+# 色相が近い（2026-09-24 にユーザーが「公式に近い方」を選んだ）。**青と橙は実物から離したまま** —
+# 実物の青 67 は紫との明度差が 17 で規則を割り、実物の橙 130 は紫より暗くて暗→明の並びが崩れる
+# （しかも 130 は Opus 5 の先頭色で、世代の見分けが消える）。
+# **180（`Anthropic` と同色）と 104 / 105（隣の `effort` の periwinkle）は使わない**。
+# **末尾の 215 は Opus 5 と共有** — 系譜が 1 文字で読める（先頭の色で世代を分ける）。
+# 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
+readonly OPUS55_PAL=(61 139 215)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 # 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
 # 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
@@ -244,6 +260,7 @@ model_color() {
   case "$_key" in
     "fable 5")                  rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
     fable*)                     gradient "$1" "$_ms" ${FABLE51_PAL[@]+"${FABLE51_PAL[@]}"} ;;
+    "opus 5.5"|"opus 5.5"*)     gradient "$1" "$_ms" ${OPUS55_PAL[@]+"${OPUS55_PAL[@]}"} ;;
     "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
     "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
     "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
@@ -772,14 +789,19 @@ fetch_account() {
         if [[ "$_h" =~ ^[0-9a-f]{8} ]]; then _svc="${_svc}-${_h:0:8}"; else _skip=1; fi
       fi
       if [[ -z "$_skip" ]] && command -v security >/dev/null 2>&1; then
-        # **読みは `-a <USER>` 込み** — 上流は account 属性込みで識別するので、service だけで
-        # 引くと同名 item が 2 つある keychain で別アカウントの blob を読む
-        local _acct="${USER:-${LOGNAME:-}}"
-        if [[ -n "$_acct" ]]; then
-          _blob=$(security find-generic-password -s "$_svc" -a "$_acct" -w 2>/dev/null)
-        else
-          _blob=$(security find-generic-password -s "$_svc" -w 2>/dev/null)
-        fi
+        # **読みは `-a <アカウント名>` 込み** — 上流は account 属性込みで識別するので、service だけで
+        # 引くと同名 item が 2 つある keychain で別アカウントの blob を読む。
+        # **アカウント名は上流と同じ作り方にする**（2.1.281 のバイナリで確認。2026-09-24）:
+        # `USER` → 無ければ実ユーザー名（上流は `os.userInfo().username` = `id -un` 相当）→
+        # **`^[a-zA-Z0-9._-]+$` に合わなければ `claude-code-user`**。上流は書き込みも同じ名前で
+        # するので、この判定を持たないと**記号入りのユーザー名の環境で item を引けずプランが消える**。
+        # 以前は `LOGNAME` に倒していたが上流は見ていない。**service だけで引く経路も消した**
+        # （上流は必ず account を付けるので、付けずに引くと別の item に当たりうる）。
+        # `id -un` の fork は `USER` が空のときだけで、ここは背景 subshell なので描画を待たせない。
+        local _acct="${USER:-}"
+        [[ -n "$_acct" ]] || _acct=$(id -un 2>/dev/null) || _acct=""
+        [[ "$_acct" =~ ^[a-zA-Z0-9._-]+$ ]] || _acct="claude-code-user"
+        _blob=$(security find-generic-password -s "$_svc" -a "$_acct" -w 2>/dev/null)
       fi
       # ファイル fallback（`-r` で gate する。**`$(<f 2>/dev/null)` は 3.2 で常に空**になる）。
       # **`CONFIG_DIR` ではなく `SECURESTORAGE_DIR`** — 上流はこのファイルだけそちらに置く。
