@@ -3,7 +3,9 @@
 # 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
 # `source` しないのでどのディレクトリから起動しても動く）。
 #
-# **Built against Claude Code 2.1.281**（`experiments/upstream/2.1.281/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.284**（`experiments/upstream/2.1.284/` に教典 3 つを snapshot 済み）。
+# 2.1.281 → 284 で増えたキーは gateway 専用の `rate_limits.spend_limit.{used_usd,limit_usd,period}` だけ
+# （v2 は spend_limit を読まない）。Ultracode は 2.1.284 で effort から独立したが、payload には今も載らない。
 # 2.1.273 → 281 で**受け取る JSON のキーは 1 つも増減していない**（payload 構築箇所を 278 / 281 で照合）。
 # 動いたのは描画側 1 点: **本体が複数行の出力で、前の行までの SGR / OSC 8 を次の行の頭に持ち越す**
 # ようになった（CHANGELOG に無い）。**だから各行は必ず `RST` で閉じて終わる**（テストで pin）。
@@ -11,14 +13,15 @@
 # **要素を増やすより「載せない理由」を先に固める** — 組み込みの UI が常時見せているものと、
 # 後から `/cost` や `/usage` で取り戻せる累積値は載せない。通すのは**一過性**（窓が閉じたら
 # コマンドでも見られない）か**決断のトリガー**（その数字が無いとコマンドを打つべきかも
-# 判断できない）のどちらかだけ。**左から順に優先度が高い** — 本体は全行を右端で切るので、
+# 判断できない）のどちらかだけ（例外は cold の `×N` = `misses`。理由はプロンプトキャッシュの節）。
+# **左から順に優先度が高い** — 本体は全行を右端で切るので、
 # 並び順がそのまま「狭い窓で何が残るか」になる。
 #
 #   1 行目: provider(契約プラン) · 宛名 · モデル(tier 色) · effort · 版
 #            ← どのセッションか / どのアカウントに課金されるか
 #   2 行目: パス · 🌲worktree · ブランチ · 進行中の操作 · conflicts · ahead/behind
 #            ← どこで何を触っているか / いま git の途中か
-#   3 行目: コンテキスト・課金額・cold(セッション) │ 5h・週間・モデル別枠(アカウント)
+#   3 行目: コンテキスト・課金額・プロンプトキャッシュ(セッション) │ 5h・週間・モデル別枠(アカウント)
 #            ← いくら使ったか / あとどれだけ
 #
 # v1 との違い（ゼロから作る方針の第 1 歩）:
@@ -112,6 +115,16 @@ readonly OPUS5_PAL=(130 $CORAL_N 215)
 # **末尾の 215 は Opus 5 と共有** — 系譜が 1 文字で読める（先頭の色で世代を分ける）。
 # 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
 readonly OPUS55_PAL=(61 139 215)
+# **Sonnet 5.5 = 宇宙船の窓から見た地球**（発表ページ https://www.anthropic.com/claude-sonnet-5-5 の
+# **og:image**、2026-09-29。`/news/` の下ではなくトップ直下にある = サイトマップで引く。本文の図版は
+# ベンチマークとデモ動画だけ）。黒い宇宙・青い地球・白い雲で、地球部分の 72% が青。明度分位の実測:
+# 深い海 `#1b6194`（≒25）→ 海と大気 `#6c99b8`（≒68）→ 雲 `#b1bdcb`（≒146/153）。**層の順に暗→明**
+# に並べ、大気と雲の間に 110 を 1 段足して明度をほぼ等間隔にした: L = 81 → 132 → 169 → 209
+# （+51 / +37 / +40）。**実測の最近傍（24 / 67 / 109 / 146）は低彩度で端末ではくすむ**ので採らない
+# （Opus 5 の初版と同じ理由）。**Sonnet 5 の緑とは系統ごと変わる** — Opus 5.5 のように末尾を共有する
+# 形は、アートワークに緑が無いので取らなかった。2026-09-29 にユーザーが 3 案から選んだ。
+# 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
+readonly SONNET55_PAL=(25 68 110 153)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 # 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
 # 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
@@ -248,12 +261,13 @@ model_key() {
 
 # model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
 # tier color (no subshell)。Shared by Line 1 (main) and the subagent rows so both use identical
-# model coloring。判定は model_key の正規形に対する**完全一致**で、残る順序ルールは
-# 「generic tier の arm を最後に置く」の 1 つだけ。新モデルはパレット 1 行 + arm 1 行で足せる。
-# Fable/Sonnet 5/Opus 5 は公式単色が無いので多色描画 (rainbow/gradient)。
+# model coloring。判定は model_key の正規形に対する**完全一致**で、順序ルールは 2 つ:
+# 「generic tier の arm を最後に置く」と「`5.5` の arm を `5.`* の arm より前に置く」（後ろだと
+# `5.`* が `5.5` を拾う。テストが 5 と 5.5 の色を対で pin）。新モデルはパレット 1 行 + arm 1 行で足せる。
+# Fable / Sonnet 5・5.5 / Opus 5・5.5 は公式単色が無いので多色描画 (rainbow/gradient)。
 # **Fable は 2 本ある** — `fable 5` だけが蝶標本の循環で、5.1 と**版が読めない裸の `Fable`**
 # (`/usage` の `limits[]` は `"Fable"` しか返さない) は Venus のスイープに落ちる。既定モデルが
-# 5.1 なので、Line 5 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
+# 5.1 なので、Line 3 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
 model_color() {
   local _ms="$2" _key
   model_key _key "$2" "${3:-}"
@@ -262,6 +276,7 @@ model_color() {
     fable*)                     gradient "$1" "$_ms" ${FABLE51_PAL[@]+"${FABLE51_PAL[@]}"} ;;
     "opus 5.5"|"opus 5.5"*)     gradient "$1" "$_ms" ${OPUS55_PAL[@]+"${OPUS55_PAL[@]}"} ;;
     "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
+    "sonnet 5.5"|"sonnet 5.5"*) gradient "$1" "$_ms" ${SONNET55_PAL[@]+"${SONNET55_PAL[@]}"} ;;
     "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
     "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
     opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
@@ -428,6 +443,14 @@ fi
 # 213 214 220 231 245 248）に無く、**3 行目の他の色（緑 82 / ブロンズ 136 / タン 180）が
 # 全部暖色〜緑なので、寒色は 1 つで際立つ**。provider のブランド色（33/39/72）は避けた。
 readonly COLD=$'\033[38;5;81m'
+# **warm = ピーチ 216**（2026-09-28 にユーザーが選んだ）。**色の温度を状態に合わせる** — warm は暖色、cold は寒色。
+# 最初はスチール 67（cold と同じ青系統で明度だけ落とす）にしたが、実機で「warm なのに冷えて見える」と指摘された
+# （青は温度の意味を持つので、系統を揃えた利点より誤読が勝つ）。cold に AMBER を使わなかった理由の裏返し。
+# 216 は淡く明るいので、隣の `$`（金 136 = 暗く濃い）とも 5h（タン 180 = 黄み）とも明度か色相で分かれる。未使用の番号。
+# 没案: 灰 250（温度を言わない）/ セージ 108（context の緑と溶ける）/ くすみ薔薇 138（`$` と同じ暖色帯）/
+# サーモン 174（警告寄りに読める）/ オレンジ 208（平常の warm が行でいちばん目立つ。Line 2 の橙 202 にも近い）/
+# 無着色（前景色 = 3 行目でいちばん白い）。見本は `experiments/reviews/cache-colors-3.html`。
+readonly CACHE_WARM=$'\033[38;5;216m'
 
 # **枠のゲージは context と同じ `braille_bar`（幅 5・空きは空白・数値つき）を使い、
 # 色は要素まるごと 1 色に統一する**（2026-09-07 にユーザー指示「block 単位で色の統一を」）。
@@ -506,7 +529,7 @@ readonly _USEP=$'\037'
 # `// ""` を必ず付ける（古い Claude Code では要素が出ないだけで壊れない）。
 model="" model_id="" effort_level="" current_dir="." wt_name="" used_pct="" ctx_size=0
 five_pct="" five_at="" seven_pct="" seven_at="" session_id="" cc_version="" cost_cents=0
-pc_state="" pc_cause="" _NOW=0 fast_mode=false _jq_ok=1
+pc_state="" pc_cause="" pc_ttl="" pc_ep="" pc_exp="" pc_misses="" pc_detail="" _NOW=0 fast_mode=false _jq_ok=1
 tz_setting="" tf_setting="" five_ep="" seven_ep=""
 # **時刻表記の設定はユーザー settings から読む**（2.1.257+ の `timeZone`）。**既存の 1 回の jq に
 # `--rawfile` で相乗りさせる**ので fork は増えない。**`--slurpfile` は使わない** — jq が JSON として
@@ -542,12 +565,24 @@ _jq=$(jq -r --rawfile _settings "$_settings_file" '
   @sh "fast_mode=\(.fast_mode // false)",
   @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.caching_observed == false then "" elif .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
   @sh "pc_cause=\((.prompt_cache?.last_miss_cause?.causes? // []) | if type != "array" or length == 0 then "" else (.[0] | tostring | gsub("[[:cntrl:]]"; " ")) end)",
+  @sh "pc_ttl=\(.prompt_cache?.ttl? // "" | tostring | if test("^[0-9]+[smh]$") then . else "" end)",
+  @sh "pc_ep=\(.prompt_cache?.expires_at? // null | if type != "number" then "" else floor end)",
+  @sh "pc_exp=\(.prompt_cache?.expires_at? // null | if type != "number" or . <= now then "" else ((. / 60 | floor) * 60 | strflocaltime("%H:%M")) end)",
+  @sh "pc_misses=\(.prompt_cache?.misses? // null | if type != "number" then "" else floor end)",
+  @sh "pc_detail=\((.prompt_cache?.last_miss_cause? // null) | if type != "object" then "" else
+    ((.causes? // []) | if type == "array" and length > 0 then (.[0] | tostring) else "" end) as $c0
+    | if $c0 == "tools_changed" then
+        [(.tools_added? | if type == "number" and . > 0 then "+\(floor)" else empty end),
+         (.tools_removed? | if type == "number" and . > 0 then "-\(floor)" else empty end)] | join(" ")
+      elif $c0 == "system_prompt_changed" then
+        (.system_char_delta? | if type != "number" or round == 0 then "" elif . > 0 then "+\(round)" else "\(round)" end)
+      else "" end end)",
   @sh "cc_version=\(.version? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
   @sh "_NOW=\(now|floor)"
 ' 2>/dev/null) && eval "$_jq" || _jq_ok=""
 # **空の出力も失敗**として扱う — jq は**空の stdin では rc=0 で何も出さない**ので、
 # rc だけ見ると素通りする（実測: 空入力で `jq error` が出なかった）。抽出プログラムは常に
-# 18 行の `@sh` を出すので、**出力が空 = 失敗**と断定できる。
+# `@sh` の行を出すので、**出力が空 = 失敗**と断定できる。
 [[ -n "$_jq" ]] || _jq_ok=""
 
 # ── 時刻表記: `timeZone` に追従し、曜日は英語 3 文字に固定する ──────────────
@@ -592,9 +627,10 @@ if [[ -n "$_tz" ]]; then
   # **ゾーンが決まったときだけ整形をやり直す**（1 回の `jq -n` = このときだけ fork が 1 増える）。
   # 既定（`timeZone` 未設定）では 0 回なので、**hot path の床は jq 1 + git 1 のまま**。
   # 書式は上の 2 つに固定なので `--arg` で渡す必要も無い。
-  _rt=$(jq -rn --arg fe "$five_ep" --arg se "$seven_ep" '
+  _rt=$(jq -rn --arg fe "$five_ep" --arg se "$seven_ep" --arg pe "$pc_ep" '
     @sh "five_at=\($fe | if . == "" then "" else tonumber | if . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%H:%M")) end end)",
-    @sh "seven_at=\($se | if . == "" then "" else tonumber | if . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M")) end end)"
+    @sh "seven_at=\($se | if . == "" then "" else tonumber | if . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M")) end end)",
+    @sh "pc_exp=\($pe | if . == "" then "" else tonumber | if . <= now then "" else ((. / 60 | floor) * 60 | strflocaltime("%H:%M")) end end)"
   ' 2>/dev/null) && eval "$_rt" || true
 fi
 
@@ -620,6 +656,7 @@ fmt_time() {
 }
 fmt_time five_at "$five_at"
 fmt_time seven_at "$seven_at"
+fmt_time pc_exp "$pc_exp"
 # **jq が読めなかったことを黙らない** — 抽出が丸ごと失敗すると全変数が初期値のままになり、
 # **要素が静かに消えて 1 行だけの出力**になる（fixture を壊して実測）。それは「入力が壊れている」
 # ではなく「何も起きていない」に読める = 誤読。v1 は `jq error` を赤で出していたので踏襲する。
@@ -1085,14 +1122,27 @@ if ((cost_cents > 0)); then
   printf -v _cost '$%d.%02d' $((cost_cents / 100)) $((cost_cents % 100))
   line3+=("${COST}${_cost}${RST}")
 fi
-# ── プロンプトキャッシュ: **cold の瞬間だけ出す** ────────────────────────────
+# ── プロンプトキャッシュ: warm は TTL と期限、cold は TTL・原因・miss 回数 ──────────
+# **2026-09-25 に「キャッシュを意識しながら開発したい」（ユーザー）で warm 側も出すようにした。**
+# 使いながら調整する前提の形で、下の「cold の瞬間だけ出す」判断は**warm も出す形（ttl か期限が読めたときだけ）で上書き**した:
+#   - **warm: `cache 5m 19:42`**（時刻は空白 1 つで並べる。枠のリセット時刻と同じ書き方。矢印は 2026-09-25 にユーザーが却下）。TTL（ユーザー: 「意識するところ」）と、切れる時刻（= 次を投げる
+#     締め切り）。**期限は分に切り捨てる**（四捨五入すると 19:42:50 切れが 19:43 に読めて間に合わない）。
+#     過去の `expires_at` は出さない — cold で過去の時刻が未来に読めた誤読（却下の理由）は、
+#     warm に限って `<= now` を落とせば起きない。**本体は warm のとき `expires_at` に自分で再描画する**
+#     （教典④）ので、切れた瞬間に `cold` へ替わる。色は `CACHE_WARM`（216。定義に理由）— dim は
+#     使わない（Line 3 の dim は上限）
+#   - **cold: `cold 5m tools_changed +2 -1 ×4`**。原因に添える数は `tools_changed`（増減したツール数）と
+#     `system_prompt_changed`（文字数の増減）のときだけ。`×N` は `misses`（セッション累計）で、
+#     下で却下した累積値の例外 — 「自分の作業の仕方が壊しているか」を見るのが今回の目的なので出す。
+#     cold のときだけ付けるので幅を常時は食わない
+# 以下は cold だけを出していた時点の判断（物差し・gate・色の理由は今も有効）。
 # **判定基準（2026-09-04 に決めた。これが要素選択の物差し）:**
 #   ① 組み込みが**常時見せている**もの（右上・中央・下・diff パネル）の複製は純粋な無駄
 #   ② 組み込みの**スラッシュコマンド**（= 聞かないと出ない）の複製は、**「聞こうと思わなかった
 #      問い」に答えるなら**無駄ではない。statusline の仕事は `/cost` の要約ではなく、
 #      **`/cost` を打つ気にさせる最小限**を置くこと（何も怪しくないとき人は `/cost` を打たない）
 #
-# この基準で `prompt_cache` から残るのは **cold とその原因だけ**:
+# この基準で `prompt_cache` から残ったのは **cold とその原因だけ**だった:
 #   - **cold は一過性** — 窓が閉じたら `/cost` でも見られない。実例: ユーザーの `/cost` は
 #     `warm` と出たが、cold は**その 1 分 14 秒前**に起きて既に終わっていた。**一過性の状態を
 #     それが真である瞬間に出せるのは statusline だけ** = ここが唯一の置き場
@@ -1136,7 +1186,10 @@ fi
 # 枠が 9 割を超えるのは稀で「手が止まる」直前を指すので、赤の希少性を食わない。**AMBER も外した**理由は
 # 上の `COLD` の定義に書いた（意味と色が逆・隣の `$` と溶ける・Venus パレットと番号衝突）。
 if [[ "$pc_state" == "cold" ]]; then
-  line3+=("${COLD}cold${pc_cause:+ $pc_cause}${RST}")
+  _pcm=""; [[ "$pc_misses" =~ ^[0-9]+$ ]] && ((10#$pc_misses > 0)) && _pcm=" ×$pc_misses"
+  line3+=("${COLD}cold${pc_ttl:+ $pc_ttl}${pc_cause:+ $pc_cause}${pc_detail:+ $pc_detail}${_pcm}${RST}")
+elif [[ "$pc_state" == "warm" && -n "$pc_ttl$pc_exp" ]]; then
+  line3+=("${CACHE_WARM}cache${pc_ttl:+ $pc_ttl}${pc_exp:+ $pc_exp}${RST}")
 fi
 if [[ "$five_pct" =~ ^[0-9]+$ ]]; then
   braille_bar "$five_pct" _fb
