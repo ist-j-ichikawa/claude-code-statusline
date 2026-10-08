@@ -44,6 +44,16 @@ all() { local a; for a in "$@"; do [ -n "$a" ] || return 0; done; printf 1; }
 empty() { [ ! -s "$1" ] && printf 1; }                  # empty FILE
 strip() { sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\033\\]8;;[^\007]*\007//g'; }
 mkd() { local d; d=$(mktemp -d); TMPS="$TMPS $d"; printf '%s' "$d"; }
+# **背景の取得を固定の sleep で待たない。** 被験体はプランと枠を `( … ) & disown` の背景 subshell で取るので、
+# テストは「背景が書き終わった印」を待つ。固定の `sleep 1〜2` だと、負荷が高いときに背景が間に合わず
+# **毎回違う項目が落ちる**（2026-10-08、test.sh を 6 本並列で回して 12 回中 6 回 NG）。上限は 15 秒で、
+# 普段は 0.1 秒単位ですぐ抜ける。
+waitfor() {  # waitfor TEST-ARGS… — `[ … ]` が真になるまで最大 15 秒待つ（偽のままなら rc=1）
+  local i; for ((i = 0; i < 150; i++)); do [ "$@" ] && return 0; sleep 0.1; done; return 1
+}
+waitls() {  # waitls DIR — DIR に何かが置かれるまで待つ
+  local i; for ((i = 0; i < 150; i++)); do [ -n "$(ls "$1" 2>/dev/null)" ] && return 0; sleep 0.1; done; return 1
+}
 cfile() { printf '%s/account%s' "$1" "${2//\//_}"; }    # cfile CACHEDIR CFGDIR
 
 setup() {  # setup [SETTINGS_JSON]
@@ -238,7 +248,7 @@ _cn() {  # _cn CONFIGDIR SECUREDIR → 生成されたキャッシュのファ�
   local d; d=$(mkd)
   printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$1" CLAUDE_SECURESTORAGE_CONFIG_DIR="$2" \
     CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" /bin/bash "$S" >/dev/null 2>&1
-  sleep 1; ls "$d" 2>/dev/null | head -1
+  waitls "$d"; ls "$d" 2>/dev/null | head -1
 }
 _a=$(_cn /tmp/cfgX /tmp/ssA); _b=$(_cn /tmp/cfgX /tmp/ssB)
 check "securestorage を分けたらキャッシュも分かれる" \
@@ -246,7 +256,7 @@ check "securestorage を分けたらキャッシュも分かれる" \
 # **既定ではファイル名を変えない**（変えると全ユーザーが一斉に取り直す = 429 事故と同じ負荷）
 _d1=$(mkd)
 printf '%s' "$(pay)" | env CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" /bin/bash "$S" >/dev/null 2>&1
-sleep 1
+waitls "$_d1"
 check "securestorage 未設定ならキャッシュ名に接尾辞を付けない" \
   "$(no '__' "$(ls "$_d1" 2>/dev/null | head -1)")" "$(ls "$_d1" 2>/dev/null | head -1)"
 
@@ -516,20 +526,24 @@ cat > "$SPY/curl" <<'EOS'
 printf '%s\n' "$@" > "$SPYLOG"
 cat > "$SPYSTDIN"
 printf '%s' '{"limits":[]}'
+: > "$SPYDONE"
 EOS
 chmod +x "$SPY/curl"
 printf '#!/bin/bash\nprintf %%s %s\n' \
   "'{\"claudeAiOauth\":{\"subscriptionType\":\"max\",\"rateLimitTier\":\"default_claude_max_20x\",\"accessToken\":\"SECRET-TOKEN\"}}'" > "$SPY/security"
 chmod +x "$SPY/security"
 printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-  PATH="$SPY:$PATH" SPYLOG="$SPY/argv" SPYSTDIN="$SPY/stdin" /bin/bash "$S" >/dev/null 2>&1
-sleep 2
+  PATH="$SPY:$PATH" SPYLOG="$SPY/argv" SPYSTDIN="$SPY/stdin" SPYDONE="$SPY/done" /bin/bash "$S" >/dev/null 2>&1
+waitfor -e "$SPY/done"   # 偽 curl が stdin を読み切って返した印（argv だけ見ると stdin の書き途中を読む）
 check "トークンが curl の argv に出ない" \
   "$(if [ ! -f "$SPY/argv" ] || ! grep -q 'SECRET-TOKEN' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
+# **stdin に届いただけでは足りない** — 偽 curl は渡された stdin を全部記録するので、curl が `-H @-` を
+# 付けずに stdin を読み捨てても緑になる（2026-10-08 の mutation で実証）。argv の `@-` も対で見る。
 check "トークンは stdin で渡る（-H @-）" \
-  "$([ -s "$SPY/stdin" ] && grep -q 'SECRET-TOKEN' "$SPY/stdin" && echo 1)" \
-  "stdin: $(head -c 60 "$SPY/stdin" 2>/dev/null)"
+  "$(all "$([ -s "$SPY/stdin" ] && grep -q 'SECRET-TOKEN' "$SPY/stdin" && echo 1)" \
+         "$(grep -qx -- '@-' "$SPY/argv" 2>/dev/null && echo 1)")" \
+  "stdin: $(head -c 60 "$SPY/stdin" 2>/dev/null) / argv: $(tr '\n' ' ' < "$SPY/argv" 2>/dev/null)"
 check "curl の argv に --config が無い（設定ディレクティブ注入の経路）" \
   "$(if [ ! -f "$SPY/argv" ] || ! grep -q -- '--config' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
@@ -539,7 +553,7 @@ check "curl の argv に --config が無い（設定ディレクティブ注入�
 _cb="$(mkd)/sub"
 printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$_cb" \
   /bin/bash "$S" >/dev/null 2>&1
-sleep 1
+waitfor -d "$_cb"
 check "スクリプトが作るキャッシュディレクトリは 700" \
   "$([ -d "$_cb" ] && [ "$(stat -f '%Sp' "$_cb")" = "drwx------" ] && echo 1)" \
   "$([ -d "$_cb" ] && stat -f '%Sp' "$_cb" || echo '作られなかった')"
@@ -563,7 +577,7 @@ acct_of() {  # acct_of USER値 → security に渡った -a の値
   # 旧実装でも同じ値になって緑のまま通る（security-auditor の mutation で実証。2026-09-24）。
   printf '%s' "$(pay)" | env USER="$1" LOGNAME=zz-not-me CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
     PATH="$sp:$PATH" /bin/bash "$S" >/dev/null 2>&1
-  local i; for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$sp/argv" ] && break; sleep 0.3; done
+  waitfor -s "$sp/argv"
   awk 'p{print; exit} $0=="-a"{p=1}' "$sp/argv" 2>/dev/null
 }
 A=$(acct_of alice)
