@@ -63,6 +63,54 @@ git clone https://github.com/<owner>/claude-code-statusline.git ~/src/claude-cod
 - 書き換えた行では、Claude Code がこのスクリプトに渡さない次の要素が消えます: 待機中の `waiting`、`N queued`、活動中かどうかの ↓/↑。エージェントの種類（`Explore` など）は Claude Code 2.1.293 以降なら既定どおり出ます（それより前の版では、名前を付けずに起動したエージェントの名前が空になります）
 - 経過時間は実行中の行だけに出します（終わった行の終了時刻は渡されないので）
 
+## 参考: フッターのリンクのバッジ
+
+**ステータスラインの機能ではありません。** Claude Code 本体の `footerLinksRegexes` は、会話の出力（ツールの結果と Claude の返答）に正規表現を当てて、マッチしたものをプロンプトの下のバッジにする別の機能です。ステータスラインの出力には効きません。相性がよいので、実際に使っている設定を置いておきます。
+
+```
+PR #57  issue #12  artifact D23PRB
+```
+
+`~/.claude/settings.json` に（project の `.claude/settings.json` に書いても読まれません）:
+
+```json
+{
+  "footerLinksRegexes": [
+    {
+      "type": "regex",
+      "pattern": "https://github\\.com/(?<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?<repo>[\\w.-]+)/pull/(?<num>\\d+)",
+      "url": "https://github.com/{owner}/{repo}/pull/{num}",
+      "label": "PR #{num}"
+    },
+    {
+      "type": "regex",
+      "pattern": "https://github\\.com/(?<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?<repo>[\\w.-]+)/issues/(?<num>\\d+)",
+      "url": "https://github.com/{owner}/{repo}/issues/{num}",
+      "label": "issue #{num}"
+    },
+    {
+      "type": "regex",
+      "pattern": "https://claude\\.ai/artifact/(?<head>[A-Za-z0-9]{6})(?<rest>[A-Za-z0-9-]*)",
+      "url": "https://claude.ai/artifact/{head}{rest}",
+      "label": "artifact {head}"
+    },
+    {
+      "type": "regex",
+      "pattern": "https://claude\\.ai/code/artifact/(?<head>[A-Za-z0-9]{6})(?<rest>[A-Za-z0-9-]*)",
+      "url": "https://claude.ai/code/artifact/{head}{rest}",
+      "label": "artifact {head}"
+    }
+  ]
+}
+```
+
+- **入れているのは GitHub の PR・GitHub の issue・claude.ai の Artifact の 3 種類だけ**です。直近 30 日の会話で、この 3 つが出現数と出たプロジェクト数の両方で上位でした
+- **絞る理由はバッジが最大 5 個だからです。** 新しいマッチが古いものを押し出すので、パターンを増やすほど大事なバッジが追い出されます
+- **Slack は入れていません。** 会話に出る Slack のリンクの大半は自分で貼ったもので、バッジの対象（ツールの結果と返答）になりません。逆に検索結果は 1 回で数十件のリンクを返すので、一度当たると 5 枠が全部埋まります
+- PR と issue はパターンを分けています。1 本にまとめると、ラベルで `PR` と `issue` を書き分けられません
+- Artifact の ID は意味を持たないので、先頭 6 文字だけをラベルにしています。`/code/artifact/` の形は、キャプチャした `/` が URL エンコードされて崩れるので別のパターンにしています
+- 今のブランチの PR は、本体が自前のバッジで出します（`prStatusFooterEnabled`）
+
 ## 要るもの
 
 `bash 3.2`（macOS 同梱の `/bin/bash`）、`jq`、`git`。1 描画で外に出るプロセスは **`jq` 1 個 + `git` 1 個**だけです。
