@@ -46,14 +46,29 @@ strip() { sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\033\\]8;;[^\007]*\007//g'; }
 mkd() { local d; d=$(mktemp -d); TMPS="$TMPS $d"; printf '%s' "$d"; }
 # **背景の取得を固定の sleep で待たない。** 被験体はプランと枠を `( … ) & disown` の背景 subshell で取るので、
 # テストは「背景が書き終わった印」を待つ。固定の `sleep 1〜2` だと、負荷が高いときに背景が間に合わず
-# **毎回違う項目が落ちる**（2026-10-08、test.sh を 6 本並列で回して 12 回中 6 回 NG）。上限は 15 秒で、
-# 普段は 0.1 秒単位ですぐ抜ける。
-waitfor() {  # waitfor TEST-ARGS… — `[ … ]` が真になるまで最大 15 秒待つ（偽のままなら rc=1）
-  local i; for ((i = 0; i < 150; i++)); do [ "$@" ] && return 0; sleep 0.1; done; return 1
+# **毎回違う項目が落ちる**（2026-10-08、test.sh を 6 本並列で回して 12 回中 6 回 NG）。上限は 10 秒で、
+# 普段は 0.1 秒単位ですぐ抜ける（壊れて背景が書かなくなると 1 か所 10 秒かかるが、NG は出る）。
+waitfor() {  # waitfor TEST-ARGS… — `[ … ]` が真になるまで最大 10 秒待つ（偽のままなら rc=1）
+  local i; for ((i = 0; i < 100; i++)); do [ "$@" ] && return 0; sleep 0.1; done; return 1
 }
-waitls() {  # waitls DIR — DIR に何かが置かれるまで待つ
-  local i; for ((i = 0; i < 150; i++)); do [ -n "$(ls "$1" 2>/dev/null)" ] && return 0; sleep 0.1; done; return 1
+# **書き途中の `account….tmp-PID` は数えない** — `mv` の前に覗くと一時ファイルの名前を拾い、PID が
+# 毎回違うので「キャッシュ名が分かれる」テストが鍵の計算に関係なく緑になる（/code-review 指摘）。
+waitcache() {  # waitcache DIR — DIR にキャッシュ本体が置かれるまで待つ（fork なしの glob で見る）
+  local i f
+  for ((i = 0; i < 100; i++)); do
+    for f in "$1"/account*; do case "$f" in *.tmp-*) ;; *) [ -e "$f" ] && return 0 ;; esac; done
+    sleep 0.1
+  done
+  return 1
 }
+cachename() { waitcache "$1"; ls "$1" 2>/dev/null | grep -v '\.tmp-' | head -1; }  # cachename DIR
+# **背景の取得を実物に行かせない。** 偽の `security` と `curl` を PATH の先頭に置く — 置かないと
+# 背景が**開発者の実 Keychain を読み、本物の /usage を叩く**（並列で回すと 429 と同じ形の負荷）。
+NOBG=$(mkd)
+printf '#!/bin/bash\nprintf %%s %s\n' \
+  "'{\"claudeAiOauth\":{\"subscriptionType\":\"max\",\"rateLimitTier\":\"x\",\"accessToken\":\"T\"}}'" > "$NOBG/security"
+printf '#!/bin/bash\ncat >/dev/null; printf %%s "{\\"limits\\":[]}"\n' > "$NOBG/curl"
+chmod +x "$NOBG/security" "$NOBG/curl"
 cfile() { printf '%s/account%s' "$1" "${2//\//_}"; }    # cfile CACHEDIR CFGDIR
 
 setup() {  # setup [SETTINGS_JSON]
@@ -247,18 +262,20 @@ check "古い側も即返す（stale-while-revalidate）" \
 _cn() {  # _cn CONFIGDIR SECUREDIR → 生成されたキャッシュのファイル名
   local d; d=$(mkd)
   printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$1" CLAUDE_SECURESTORAGE_CONFIG_DIR="$2" \
-    CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" /bin/bash "$S" >/dev/null 2>&1
-  waitls "$d"; ls "$d" 2>/dev/null | head -1
+    CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" PATH="$NOBG:$PATH" /bin/bash "$S" >/dev/null 2>&1
+  cachename "$d"
 }
 _a=$(_cn /tmp/cfgX /tmp/ssA); _b=$(_cn /tmp/cfgX /tmp/ssB)
 check "securestorage を分けたらキャッシュも分かれる" \
   "$([ -n "$_a" ] && [ "$_a" != "$_b" ] && echo 1)" "A=$_a B=$_b"
 # **既定ではファイル名を変えない**（変えると全ユーザーが一斉に取り直す = 429 事故と同じ負荷）
 _d1=$(mkd)
-printf '%s' "$(pay)" | env CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" /bin/bash "$S" >/dev/null 2>&1
-waitls "$_d1"
+printf '%s' "$(pay)" | env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR \
+  CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" PATH="$NOBG:$PATH" /bin/bash "$S" >/dev/null 2>&1
+_n1=$(cachename "$_d1")
+# **ファイルが無いときに緑にしない**（`no '__' ""` は 1 を返す。背景が書かなくなっても通ってしまう）
 check "securestorage 未設定ならキャッシュ名に接尾辞を付けない" \
-  "$(no '__' "$(ls "$_d1" 2>/dev/null | head -1)")" "$(ls "$_d1" 2>/dev/null | head -1)"
+  "$(all "$_n1" "$(no '__' "$_n1")")" "[$_n1]"
 
 echo "── 時刻: timeZone と timeFormat ──"
 t_time() {  # t_time NAME SETTINGS EXPECT
@@ -540,20 +557,21 @@ check "トークンが curl の argv に出ない" \
   "$(cat "$SPY/argv" 2>/dev/null)"
 # **stdin に届いただけでは足りない** — 偽 curl は渡された stdin を全部記録するので、curl が `-H @-` を
 # 付けずに stdin を読み捨てても緑になる（2026-10-08 の mutation で実証）。argv の `@-` も対で見る。
+# `@-` は **`-H` の直後**でだけ数える（`--data-binary @-` でも stdin は届くが、ヘッダは送られない）。
 check "トークンは stdin で渡る（-H @-）" \
   "$(all "$([ -s "$SPY/stdin" ] && grep -q 'SECRET-TOKEN' "$SPY/stdin" && echo 1)" \
-         "$(grep -qx -- '@-' "$SPY/argv" 2>/dev/null && echo 1)")" \
-  "stdin: $(head -c 60 "$SPY/stdin" 2>/dev/null) / argv: $(tr '\n' ' ' < "$SPY/argv" 2>/dev/null)"
-check "curl の argv に --config が無い（設定ディレクティブ注入の経路）" \
-  "$(if [ ! -f "$SPY/argv" ] || ! grep -q -- '--config' "$SPY/argv"; then echo 1; fi)" \
+         "$(awk 'p && $0 == "@-" {f = 1} {p = ($0 == "-H")} END {exit !f}' "$SPY/argv" 2>/dev/null && echo 1)")" \
+  "stdin: $(head -c 60 "$SPY/stdin" 2>/dev/null) / argv: $(cat "$SPY/argv" 2>/dev/null | tr '\n' ' ')"
+check "curl の argv に --config / -K が無い（設定ディレクティブ注入の経路）" \
+  "$(if [ ! -f "$SPY/argv" ] || ! grep -qE -- '^(--config|-K)' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
 # **`mkdir -p -m 700` が実際に走る経路で見る。** `mktemp -d` は最初から 0700 なので、
 # それを stat するだけでは**この行を `mkdir -p` に書き換えても緑のまま**（mutation で実証）。
 # **まだ存在しないディレクトリ**を CACHE_BASE に指定して、スクリプトに作らせてから見る。
 _cb="$(mkd)/sub"
+# ディレクトリは前景が背景を起こす前に作るので、待たずに見てよい（背景は偽の security / curl に向ける）
 printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$_cb" \
-  /bin/bash "$S" >/dev/null 2>&1
-waitfor -d "$_cb"
+  PATH="$NOBG:$PATH" /bin/bash "$S" >/dev/null 2>&1
 check "スクリプトが作るキャッシュディレクトリは 700" \
   "$([ -d "$_cb" ] && [ "$(stat -f '%Sp' "$_cb")" = "drwx------" ] && echo 1)" \
   "$([ -d "$_cb" ] && stat -f '%Sp' "$_cb" || echo '作られなかった')"
