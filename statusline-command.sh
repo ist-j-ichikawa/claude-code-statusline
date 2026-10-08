@@ -2,8 +2,16 @@
 # statusline-command.sh — 並列セッションで困る 3 つ（「これはどのセッションか」「どのアカウントに
 # 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
 # `source` しないのでどのディレクトリから起動しても動く）。
+# **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
+# 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.284**（`experiments/upstream/2.1.284/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.293**（`experiments/upstream/2.1.293/` に教典 3 つを snapshot 済み）。
+# 2.1.286 → 293 でメインの payload のキーは増減ゼロ（291 / 292 / 293 のバイナリと 286 の抜き出しを照合。
+# 287〜290 のバイナリは残っていない）。subagent の `tasks[]` に `agentType` が増えた（293）ので名前列に使う。
+# 291 以降、`tasks[]` に来るのは `local_agent` だけ（fork worker と main-session は除外）。
+# 2.1.284 → 286 は**キーの増減ゼロ**（メインも subagent も payload 構築を 3 版で照合）。動いたのは
+# `fast_mode` の値の意味だけ: fallback 先のモデルが fast を使えないときは `false` になる（286）。
+# Line 1 の `fast` は「実際に fast で走っているときだけ」出るようになり、読み方は変わらない。
 # 2.1.281 → 284 で増えたキーは gateway 専用の `rate_limits.spend_limit.{used_usd,limit_usd,period}` だけ
 # （v2 は spend_limit を読まない）。Ultracode は 2.1.284 で effort から独立したが、payload には今も載らない。
 # 2.1.273 → 281 で**受け取る JSON のキーは 1 つも増減していない**（payload 構築箇所を 278 / 281 で照合）。
@@ -53,7 +61,8 @@ set -uo pipefail
 # `source` で 2 本に割る理由が無くなった。**取り込みは丸ごと** — 旧 `lib.sh` の 63%（12 関数 /
 # 31 定数）は実際に使っており、選択抽出すると 1 行関数（`gradient` / `rainbow`）の範囲を誤る。
 # **未使用のまま残しているものがある**（`osc8` / `editor_url` / `fmt_elapsed` / vim 色 /
-# `FORK_GLYPH` / `AGENT` / `DRAFT` 等）。park 中の subagent 行とフッターで使うもので、色の根拠と
+# `FORK_GLYPH` / `AGENT` / `DRAFT` 等）。park 中のフッター等の要素で使うもので（`--subagent` の行は
+# このうち何も使わない）、色の根拠と
 # `%` エンコード順の教訓が乗っているので**消さない**。**剪定を試みて撤回した**理由も残す:
 # `(( ))` の算術は変数を `$` なしで参照するので、`$` ベースで未使用を数えると `ACCT_TTL` を
 # 「未参照」と誤判定する（37 行の削減にリスクを払う価値がない）。
@@ -125,6 +134,13 @@ readonly OPUS55_PAL=(61 139 215)
 # 形は、アートワークに緑が無いので取らなかった。2026-09-29 にユーザーが 3 案から選んだ。
 # 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
 readonly SONNET55_PAL=(25 68 110 153)
+# Haiku 5.5 = 発表ページ https://www.anthropic.com/claude-haiku-5-5 の **og:image**（2026-10-08）。白地に
+# 3 枚のパネル: 左の黄 `#f4ca36`（≒220）・中央の赤い線 `#f19394`（≒210）・右の青 `#375d8a`（≒67）。
+# **画像の左→右の順でスイープする**（暗→明にすると末尾の黄が隣の effort `low` 178 と溶ける。末尾の青は
+# `high` 105 と見分けられる）。外した色: 178（effort `low`）/ 173（Opus の coral）/ 203（削除行の赤）/
+# 25・61（Sonnet 5.5 / Opus 5.5 の先頭色 = 世代の見分けが消える）。2026-10-08 にユーザーが 2 案から A を選んだ。
+# Haiku 4.5 以前は flat の lavender のまま（旧モデルを選んだ人の画面を変えない）。公式の単色は未発表。
+readonly HAIKU55_PAL=(220 210 67)
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 # 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
 # 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
@@ -264,7 +280,7 @@ model_key() {
 # model coloring。判定は model_key の正規形に対する**完全一致**で、順序ルールは 2 つ:
 # 「generic tier の arm を最後に置く」と「`5.5` の arm を `5.`* の arm より前に置く」（後ろだと
 # `5.`* が `5.5` を拾う。テストが 5 と 5.5 の色を対で pin）。新モデルはパレット 1 行 + arm 1 行で足せる。
-# Fable / Sonnet 5・5.5 / Opus 5・5.5 は公式単色が無いので多色描画 (rainbow/gradient)。
+# Fable / Sonnet 5・5.5 / Opus 5・5.5 / Haiku 5.5 は公式単色が無いので多色描画 (rainbow/gradient)。
 # **Fable は 2 本ある** — `fable 5` だけが蝶標本の循環で、5.1 と**版が読めない裸の `Fable`**
 # (`/usage` の `limits[]` は `"Fable"` しか返さない) は Venus のスイープに落ちる。既定モデルが
 # 5.1 なので、Line 3 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
@@ -281,6 +297,7 @@ model_color() {
     "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
     opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
     sonnet*)                    printf -v "$1" '%s' "${TEAL}${_ms}${RST}" ;;
+    "haiku 5.5"|"haiku 5.5"*)   gradient "$1" "$_ms" ${HAIKU55_PAL[@]+"${HAIKU55_PAL[@]}"} ;;
     haiku*)                     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}" ;;
     *)                          printf -v "$1" '%s' "$_ms" ;;
   esac
@@ -337,10 +354,11 @@ plan_label() {
 }
 
 # effort_color VARNAME LEVEL — sets VARNAME to LEVEL rendered in its effort color (no subshell)。
-# Line 1 と subagent 行の両方から呼び、語彙と配色を揃える。
+# Line 1 と `--subagent` の行の両方から呼び、語彙と配色を揃える。
 # **未知のレベルは既定の薄紫に落とす** — 上流がレベルを増やしても無色にならず、色だけが既知の
 # ランプから外れる（旧 Claude Code / 新レベルの両方で graceful degradation）。
-# `effort` は数値のトークン予算で来ることもある（subagent 側）ので、その場合も既定色に落ちる。
+# `effort` は数値のトークン予算で来ることもある（subagent の payload。`32k` に畳んで渡す）ので、
+# その場合も既定色に落ちる。
 effort_color() {
   case "$2" in
     low)    printf -v "$1" '%s' "${EFFORT_LOW}$2${RST}" ;;
@@ -365,7 +383,7 @@ ver_older() {
     [[ "$av" =~ ^[0-9]+$ && "$bv" =~ ^[0-9]+$ ]] || return 1
     # **`10#` で明示基数** — `2.1.08` のようなゼロ埋めを 8 進数と解釈されると
     # `value too great for base` が毎レンダー stderr に漏れる（regex は `08` を通すので防げない。
-    # subagent 側が同じ作法を既に持っている。`/code-review` 指摘）
+    # v1 の subagent 行が同じ作法を持っていた。`/code-review` 指摘）
     ((10#$av < 10#$bv)) && return 0
     ((10#$av > 10#$bv)) && return 1
     # 次の成分へ。残りが無い側は 0 として扱う（`2.1` と `2.1.0` は同じ）
@@ -417,6 +435,138 @@ format_tokens() {
   else printf -v "$2" '%d' "$tok"
   fi
 }
+
+# ── subagent 行（`subagentStatusLine` から `--subagent` で呼ぶ）──────────────────
+# **起点は本体の既定の行で、そこからの差分だけを足す**（2026-09-29 ユーザー方針）。既定は
+# `名前列  説明  経過 · ↓ 12.4k tokens · N queued`（2.1.284 のバイナリで確認。名前列だけ 293 で `name ?? agentType` になった）。本体は
+# **前置き（選択カーソル / ツリー線 / 状態の丸）だけ残して、その右を `content` で丸ごと差し替える**
+# ので、足したい要素が 1 つでも既定の中身を描き直すことになる。
+# **差し替えるのは `type == "local_agent"` の行だけ** — teammate / workflow / bash / remote は id を
+# 出さず既定のまま残す（`idle` / `awaiting approval` はそちらの語彙）。差し替えた行で**失うもの**は
+# stdin に来ない 3 つ: `waiting`（待機中）・`N queued`・↓/↑（直近の活動）。↓/↑ は `tokenSamples` から
+# 近似できるが推測値なので出さない（無表示 < 誤読）。
+# **既定から足したのはモデル名・effort・🌲worktree**（Line 1 と同じ `model_color` / `effort_color`。非選択の行は
+# 本体が dim をかける）。effort はセッションから継承すると来ない = **違うときだけ出る**（差分がシグナル）。
+# 並びは 名前 → モデル → effort → 🌲worktree → 説明（🌲 はセッションと違う worktree のときだけ）。モデルを名前の直後に置く — 右端から切られるので、右に置くと狭い窓で最初に消え、説明の後ろだと行ごとに
+# 桁がずれて縦に見比べられない。
+# - **名前列は既定と同じ `name ?? agentType`**（`name` は名前付きで起動したときだけ来る）。`agentType`
+#   （`Explore` 等）は 2.1.293 で payload に入った — それより前の版では無名のエージェントの名前列が落ちる。
+# - **経過は `running` のときだけ** — payload に `endTime` が無いので、終わった行に出すと
+#   `now - startTime` が伸び続ける（誤読）。一時停止の時間も来ないので、その分は含む。
+# - 名前とモデルは差し替えた行どうしで桁を揃える（全行が 1 回の呼び出しで来る）。effort と 🌲 は揃えない。
+# 外部プロセスは抽出の jq 1 個（`now` も jq から取る = `date` fork ゼロ）。
+
+# prettify_model ID VARNAME — `claude-sonnet-5-5[1m]` / Bedrock の `[us.]anthropic.claude-…-v1:0` を
+# `Sonnet 5.5` に畳む。**日付つき id の末尾 8 桁だけを落とす**（「末尾の数字」で消すと版を食う）。
+prettify_model() {
+  local m="$1"
+  [[ "$m" == *anthropic.* ]] && m="${m##*anthropic.}"   # region prefix（`us.`）が無い素の id も剥がす
+  m="${m#claude-}"; m="${m%\[1m\]}"
+  m="${m%%:*}"; m="${m%-v[0-9]*}"   # Bedrock の版接尾辞（実 id は `-v1:0`）。`:N` を先に落とす
+  m="${m%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]}"
+  local tier="${m%%-*}" ver="${m#*-}" _t
+  case "$tier" in
+    opus) _t=Opus;; sonnet) _t=Sonnet;; haiku) _t=Haiku;; fable) _t=Fable;;
+    *) printf -v "$2" '%s' "$m"; return;;
+  esac
+  [[ "$m" != *-* ]] && ver=""        # 版が無い id（`opus`）は tier のみ
+  ver="${ver//-/.}"
+  printf -v "$2" '%s%s' "$_t" "${ver:+ $ver}"
+}
+
+# json_str TEXT VARNAME — JSON 文字列の中身に escape する。**順序 `\` → `"` → ESC は不変条件**
+# （`\` を後にすると自分で足した `\` を二重にする）。制御文字は jq 側で空白にしてあるので
+# 残るのは色の ESC だけ。
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\033'/\\u001b}"
+  printf -v "$2" '%s' "$s"
+}
+
+subagent_rows() {
+  local _US=$'\037' _rows _now _l _i _n=0 _wn=0 _wm=0 _pm _mc _sp _e _t _row _ji _jr _out=""
+  local _id _name _model _desc _st _start _tok _eff _ec _cwd _scwd _wt _f _fs=()
+  local ids=() names=() mplain=() mcol=() eplain=() ecol=() wts=() descs=() tails=()
+  # 各段に `?`、数値は `type == "number"` で守る — 1 task の型変更で抽出ごと abort すると
+  # 全行が既定に戻る（壊れ方としては安全側だが、黙って効かなくなる）。
+  _rows=$(jq -r '
+    ((now | floor | tostring) + "\u001f"
+     + (.cwd? | if type == "string" then gsub("[[:cntrl:]]"; " ") else "" end)),
+    (.tasks? | if type == "array" then .[] else empty end
+     | select(type == "object" and .type? == "local_agent")
+     | [ .id?,
+         (if (.name? | type) == "string" and .name != "" then .name else .agentType? end),
+         .model?,
+         (if (.label? | type) == "string" and .label != "" then .label else .description? end),
+         .status?,
+         (.startTime? | if type == "number" then (. / 1000 | floor | tostring) else "" end),
+         (.tokenCount? | if type == "number" then (floor | tostring) else "" end),
+         (.effort? | if type == "object" then .level? else . end
+                   | if type == "number" then (floor | tostring) else . end),
+         .cwd? ]
+     | map(if type == "string" then gsub("[[:cntrl:]]"; " ") else "" end)
+     | join("\u001f"))' 2>/dev/null) || return 0
+  _now="${_rows%%$'\n'*}"
+  _scwd="${_now#*"$_US"}"; _now="${_now%%"$_US"*}"
+  [[ "$_rows" == *$'\n'* ]] || return 0
+  _rows="${_rows#*$'\n'}"$'\n'
+  [[ "$_now" =~ ^[0-9]+$ ]] || return 0
+  while [[ -n "$_rows" ]]; do
+    _l="${_rows%%$'\n'*}"; _rows="${_rows#*$'\n'}"
+    # US で割るのは bash の展開で（`read <<<` / ヒアドキュメントは 3.2 で一時ファイルを作る）。
+    # 空のフィールドも 1 個として積む — 末尾に US を足してから「残りが空になるまで」剥がす。
+    _fs=(); _f="$_l$_US"
+    while [[ -n "$_f" ]]; do _fs+=("${_f%%"$_US"*}"); _f="${_f#*"$_US"}"; done
+    _id="${_fs[0]:-}" _name="${_fs[1]:-}" _model="${_fs[2]:-}" _desc="${_fs[3]:-}"
+    _st="${_fs[4]:-}" _start="${_fs[5]:-}" _tok="${_fs[6]:-}" _eff="${_fs[7]:-}" _cwd="${_fs[8]:-}"
+    [[ -n "$_id" ]] || continue
+    _pm="" _mc=""
+    if [[ -n "$_model" ]]; then prettify_model "$_model" _pm; model_color _mc "$_pm" "$_model"; fi
+    # effort は数値のトークン予算で来ることもある — `32k` に畳んで既定色（`effort_color` の `*)`）
+    _ec=""
+    if [[ "$_eff" =~ ^[0-9]+$ ]]; then fmt_ctx_size "$((10#$_eff))" _eff; fi
+    [[ -n "$_eff" ]] && effort_color _ec "$_eff"
+    # 🌲 は**セッションと違う worktree で走っている行だけ**。セッション自身が worktree にいると
+    # 子も同じ cwd を継ぐので、比べないと全行に Line 2 と同じ名前が並ぶ（情報ゼロ）。
+    _wt=""
+    if [[ "$_cwd" == *"$WT_MARKER"* && "$_cwd" != "$_scwd" ]]; then
+      _wt="${_cwd##*"$WT_MARKER"}"; _wt="${_wt%%/*}"
+    fi
+    _t=()
+    if [[ "$_st" == running && "$_start" =~ ^[0-9]+$ ]] && ((_now >= _start)); then
+      _e=$((_now - _start))
+      if   ((_e < 60));   then _t+=("${_e}s")
+      elif ((_e < 3600)); then _t+=("$((_e / 60))m")
+      else                     _t+=("$((_e / 3600))h"); fi
+    fi
+    if [[ "$_tok" =~ ^[0-9]+$ ]] && ((_tok > 0)); then format_tokens "$_tok" _e; _t+=("$_e tokens"); fi
+    ids[_n]="$_id"; names[_n]="$_name"; mplain[_n]="$_pm"; mcol[_n]="$_mc"; descs[_n]="$_desc"
+    eplain[_n]="$_eff"; ecol[_n]="$_ec"; wts[_n]="$_wt"
+    _e=""; for _l in ${_t[@]+"${_t[@]}"}; do _e+="${_e:+ · }$_l"; done; tails[_n]="$_e"
+    ((${#_name} > _wn)) && _wn=${#_name}
+    ((${#_pm} > _wm)) && _wm=${#_pm}
+    _n=$((_n + 1))
+  done
+  for ((_i = 0; _i < _n; _i++)); do
+    _row=""
+    if ((_wn > 0)); then printf -v _sp '%*s' $((_wn - ${#names[_i]})) ''; _row+="${names[_i]}$_sp  "; fi
+    if ((_wm > 0)); then printf -v _sp '%*s' $((_wm - ${#mplain[_i]})) ''; _row+="${mcol[_i]}$_sp  "; fi
+    # effort と 🌲 は**値のある行にだけ置き、幅を揃えない** — 大半の行は空なので、揃えると空の列が
+    # 説明の前に大きな隙間を作る（2026-10-08 ユーザー確認）。桁を揃えるのは名前とモデルだけ。
+    [[ -n "${eplain[_i]}" ]] && _row+="${ecol[_i]}  "
+    [[ -n "${wts[_i]}" ]] && _row+="${DIM}🌲${wts[_i]}${RST}  "
+    [[ -n "${descs[_i]}" ]] && _row+="${descs[_i]}  "
+    _row+="${tails[_i]}"
+    _row="${_row%"${_row##*[! ]}"}"   # 末尾の空白を落とす（desc も経過も無い行）
+    [[ -n "$_row" ]] || continue       # 何も描けない行は既定に任せる
+    json_str "${ids[_i]}" _ji; json_str "$_row" _jr
+    _out+='{"id":"'"$_ji"'","content":"'"$_jr"'"}'$'\n'
+  done
+  [[ -n "$_out" ]] && printf '%s' "$_out"
+  return 0
+}
+
+[[ "${1:-}" == "--subagent" ]] && { subagent_rows; exit 0; }
 
 
 readonly CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
