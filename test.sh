@@ -689,11 +689,11 @@ check "subagent 行の外部プロセスは jq 1 個（date / git / security を
   "$(printf '%s' "$_trace" | grep -E '^\++ [a-z]' | grep -vE '^\++ (local|printf|\[\[|_)' | head -5)"
 
 C=$(mcol claude-haiku-5-5 'Haiku 5.5')
-check "Haiku 5.5 は 220 → 210 → 67 のスイープ（黄・赤・青のパネル）" \
-  "$(all "$(has ' 220 ' " $C")" "$(has ' 210 ' " $C")" "$(has ' 67 ' " $C")" "$(no ' 183 ' " $C")")" "色: $C"
+check "Haiku 5.5 は 168 → 175 → 222 のスイープ（ローズ・ピンク・麦わら。青を使わない）" \
+  "$(all "$(has ' 168 ' " $C")" "$(has ' 175 ' " $C")" "$(has ' 222 ' " $C")" "$(no ' 183 ' " $C")" "$(no ' 67 ' " $C")")" "色: $C"
 C=$(mcol claude-haiku-4-5-20251001 'Haiku 4.5')
 check "Haiku 4.5 は lavender 183 のまま（5.5 の arm に巻き込まれない）" \
-  "$(all "$(has ' 183 ' " $C")" "$(no ' 220 ' " $C")" "$(no ' 67 ' " $C")")" "色: $C"
+  "$(all "$(has ' 183 ' " $C")" "$(no ' 168 ' " $C")" "$(no ' 222 ' " $C")")" "色: $C"
 
 echo "── 衛生（メタテスト）──"
 # **`bash "$S"` と書くと最重要制約（3.2 互換）を一切検証しないテストになる。**
