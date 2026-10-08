@@ -68,7 +68,7 @@ git clone https://github.com/<owner>/claude-code-statusline.git ~/src/claude-cod
 **ステータスラインの機能ではありません。** Claude Code 本体の `footerLinksRegexes` は、会話の出力（ツールの結果と Claude の返答）に正規表現を当てて、マッチしたものをプロンプトの下のバッジにする別の機能です。ステータスラインの出力には効きません。相性がよいので、実際に使っている設定を置いておきます。
 
 ```
-PR #57  issue #12  artifact D23PRB
+PR #57  issue #12
 ```
 
 `~/.claude/settings.json` に（project の `.claude/settings.json` に書いても読まれません）:
@@ -87,28 +87,16 @@ PR #57  issue #12  artifact D23PRB
       "pattern": "https://github\\.com/(?<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?<repo>[\\w.-]+)/issues/(?<num>\\d+)",
       "url": "https://github.com/{owner}/{repo}/issues/{num}",
       "label": "issue #{num}"
-    },
-    {
-      "type": "regex",
-      "pattern": "https://claude\\.ai/artifact/(?<head>[A-Za-z0-9]{6})(?<rest>[A-Za-z0-9-]*)",
-      "url": "https://claude.ai/artifact/{head}{rest}",
-      "label": "artifact {head}"
-    },
-    {
-      "type": "regex",
-      "pattern": "https://claude\\.ai/code/artifact/(?<head>[A-Za-z0-9]{6})(?<rest>[A-Za-z0-9-]*)",
-      "url": "https://claude.ai/code/artifact/{head}{rest}",
-      "label": "artifact {head}"
     }
   ]
 }
 ```
 
-- **入れているのは GitHub の PR・GitHub の issue・claude.ai の Artifact の 3 種類だけ**です。直近 30 日の会話で、この 3 つが出現数と出たプロジェクト数の両方で上位でした
+- **入れているのは GitHub の PR と issue の 2 種類だけ**です。直近 30 日の会話で、この 2 つが出現数と出たプロジェクト数の両方で上位でした
 - **絞る理由はバッジが最大 5 個だからです。** 新しいマッチが古いものを押し出すので、パターンを増やすほど大事なバッジが追い出されます
 - **Slack は入れていません。** 会話に出る Slack のリンクの大半は自分で貼ったもので、バッジの対象（ツールの結果と返答）になりません。逆に検索結果は 1 回で数十件のリンクを返すので、一度当たると 5 枠が全部埋まります
 - PR と issue はパターンを分けています。1 本にまとめると、ラベルで `PR` と `issue` を書き分けられません
-- Artifact の ID は意味を持たないので、先頭 6 文字だけをラベルにしています。`/code/artifact/` の形は、キャプチャした `/` が URL エンコードされて崩れるので別のパターンにしています
+- **claude.ai の Artifact は入れていません。** 3 番目に多いリンクですが、そのセッションで公開したり開いたりした Artifact は、本体がフッターの右端に `⧉` 付きで出します。同じページのバッジが 2 つ並ぶだけでした
 - 今のブランチの PR は、本体が自前のバッジで出します（`prStatusFooterEnabled`）
 
 ## 要るもの
