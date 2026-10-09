@@ -3,7 +3,7 @@
 Claude Code の statusline を 3 行で描く bash スクリプト 1 本。macOS 専用。
 
 ```
-Anthropic(Max 20x)  Opus 5.5  high  v2.1.293
+Anthropic(Max 20x)  Opus 5.5  high  v2.1.295
 ~/dev/claude-code-statusline  main
 ⣿⣿⣿   62%/1M  $24.31  cache 5m 05:47  5h:⣿⣿⣀   43% 06:13  Fable:⣿⣿⣤   51% Sat 16:00
 ```

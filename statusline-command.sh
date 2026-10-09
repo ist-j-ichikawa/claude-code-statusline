@@ -5,7 +5,9 @@
 # **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
 # 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.293**（`experiments/upstream/2.1.293/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.295**（`experiments/upstream/2.1.295/` に教典 3 つを snapshot 済み）。
+# 2.1.293 → 295 はメインも subagent も payload のキーの増減ゼロ、フッターのバッジも不変（3 版のバイナリを照合）。
+# 295 から background session の子プロセスに `FORCE_COLOR` を渡さなくなったが、このスクリプトは読まない。
 # 2.1.286 → 293 でメインの payload のキーは増減ゼロ（291 / 292 / 293 のバイナリと 286 の抜き出しを照合。
 # 287〜290 のバイナリは残っていない）。subagent の `tasks[]` に `agentType` が増えた（293）ので名前列に使う。
 # 291 以降、`tasks[]` に来るのは `local_agent` だけ（fork worker と main-session は除外）。
