@@ -5,7 +5,8 @@
 # **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
 # 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.295**（`experiments/upstream/2.1.295/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.296**（`experiments/upstream/2.1.296/` に教典 3 つを snapshot 済み）。
+# 2.1.295 → 296 もキーの増減ゼロ。Sonnet 5.5 のキャッシュ読みの単価が下がり、`cost.total_cost_usd` の値だけが変わる。
 # 2.1.293 → 295 はメインも subagent も payload のキーの増減ゼロ、フッターのバッジも不変（3 版のバイナリを照合）。
 # 295 から background session の子プロセスに `FORCE_COLOR` を渡さなくなったが、このスクリプトは読まない。
 # 2.1.286 → 293 でメインの payload のキーは増減ゼロ（291 / 292 / 293 のバイナリと 286 の抜き出しを照合。
