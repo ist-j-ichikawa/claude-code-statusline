@@ -563,7 +563,7 @@ check "トークンは stdin で渡る（-H @-）" \
          "$(awk 'p && $0 == "@-" {f = 1} {p = ($0 == "-H")} END {exit !f}' "$SPY/argv" 2>/dev/null && echo 1)")" \
   "stdin: $(head -c 60 "$SPY/stdin" 2>/dev/null) / argv: $(cat "$SPY/argv" 2>/dev/null | tr '\n' ' ')"
 check "curl の argv に --config / -K が無い（設定ディレクティブ注入の経路）" \
-  "$(if [ ! -f "$SPY/argv" ] || ! grep -qE -- '^(--config|-K)' "$SPY/argv"; then echo 1; fi)" \
+  "$(if [ ! -f "$SPY/argv" ] || ! grep -qE -- '^(--config|-[a-zA-Z]*K)' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
 # **`mkdir -p -m 700` が実際に走る経路で見る。** `mktemp -d` は最初から 0700 なので、
 # それを stat するだけでは**この行を `mkdir -p` に書き換えても緑のまま**（mutation で実証）。
@@ -705,6 +705,30 @@ check "subagent 行の外部プロセスは jq 1 個（date / git / security を
   "$(all "$([ "$(printf '%s' "$_trace" | grep -cE '^\++ jq ')" = 1 ] && echo 1)" \
          "$([ "$(printf '%s' "$_trace" | grep -cE '^\++ (date|git|security|stat|md5|shasum|curl) ')" = 0 ] && echo 1)")" \
   "$(printf '%s' "$_trace" | grep -E '^\++ [a-z]' | grep -vE '^\++ (local|printf|\[\[|_)' | head -5)"
+
+# **上の _SA で拾えない壊し方を、別の入力で塞ぐ**（test-pin-auditor の指摘 6 件。2026-10-13）。_SA に足すと
+# x1 の桁数の厳密一致が崩れるので分けてある。
+# - label に `"` `\` ESC US を入れる — `json_str` の escape と jq の `[[:cntrl:]]` を、狭めたら赤くなるように
+#   （ESC は JSON を割らないので、`sact` が strip した後の文字列だけ見ていると ESC の注入を見逃す）
+# - 日付つき id（`prettify_model` の 8 桁落とし）/ 数値 effort の色 / 分の経過 / failed の行 / セッション cwd の型
+_SA2='{"cwd":"/s","tasks":[
+ {"id":"p1","name":"q","type":"local_agent","status":"running","label":"Q \"q\" back\\slash\u001b[31m\u001fend","startTime":'$((_ms - 90000))',"model":"claude-haiku-4-5-20251001","effort":32000},
+ {"id":"p2","name":"f","type":"local_agent","status":"failed","label":"F","startTime":'$((_ms - 90000))'}]}'
+setup; O=$(sa "$_SA2")
+_bad=$(printf '%s\n' "$O" | while IFS= read -r _l || [ -n "$_l" ]; do
+  printf '%s' "$_l" | jq -e 'type == "object" and (.content | type) == "string"' >/dev/null 2>&1 || printf '%s\n' "$_l"
+done)
+check "引用符とバックスラッシュ入りの label でも JSON として読め、文字が残る" \
+  "$(all "$([ -z "$_bad" ] && echo 1)" "$([ "$(printf '%s\n' "$O" | grep -c .)" = 2 ] && echo 1)" "$(has '"q" back\slash' "$(sact p1 "$O")")")" "$O"
+check "label の ESC を生で残さず（色の注入を塞ぐ）、US で行が割れない" \
+  "$(all "$(no '\u001b[31m' "$O")" "$(has 'end' "$(sact p1 "$O")")")" "$O"
+check "日付つき id は末尾 8 桁を落として Haiku 4.5 にする" \
+  "$(all "$(has 'Haiku 4.5' "$(sact p1 "$O")")" "$(no '2025' "$(sact p1 "$O")")")" "$(sact p1 "$O")"
+check "数値の effort（32k）も effort 色で出す" "$(has '\u001b[38;5;105m32k' "$O")" "$O"
+check "running の経過は 1 時間未満なら分で出す（1m）" "$(ends 'end  1m' "$(sact p1 "$O")")" "[$(sact p1 "$O")]"
+check "failed の行も経過を出さない（completed 以外の終わった状態）" "$(ends 'F' "$(sact p2 "$O")")" "[$(sact p2 "$O")]"
+setup; O=$(sa '{"cwd":5,"tasks":[{"id":"c1","type":"local_agent","label":"ok"}]}')
+check "セッションの cwd が文字列でなくても全行が既定に戻らない" "$(has 'ok' "$(sact c1 "$O")")" "[$O]"
 
 C=$(mcol claude-haiku-5-5 'Haiku 5.5')
 check "Haiku 5.5 は 168 → 175 → 222 のスイープ（ローズ・ピンク・麦わら。青を使わない）" \
