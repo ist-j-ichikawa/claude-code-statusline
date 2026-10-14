@@ -44,24 +44,14 @@ all() { local a; for a in "$@"; do [ -n "$a" ] || return 0; done; printf 1; }
 empty() { [ ! -s "$1" ] && printf 1; }                  # empty FILE
 strip() { sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\033\\]8;;[^\007]*\007//g'; }
 mkd() { local d; d=$(mktemp -d); TMPS="$TMPS $d"; printf '%s' "$d"; }
-# **背景の取得を固定の sleep で待たない。** 被験体はプランと枠を `( … ) & disown` の背景 subshell で取るので、
-# テストは「背景が書き終わった印」を待つ。固定の `sleep 1〜2` だと、負荷が高いときに背景が間に合わず
-# **毎回違う項目が落ちる**（2026-10-08、test.sh を 6 本並列で回して 12 回中 6 回 NG）。上限は 10 秒で、
-# 普段は 0.1 秒単位ですぐ抜ける（壊れて背景が書かなくなると 1 か所 10 秒かかるが、NG は出る）。
-waitfor() {  # waitfor TEST-ARGS… — `[ … ]` が真になるまで最大 10 秒待つ（偽のままなら rc=1）
-  local i; for ((i = 0; i < 100; i++)); do [ "$@" ] && return 0; sleep 0.1; done; return 1
-}
-# **書き途中の `account….tmp-PID` は数えない** — `mv` の前に覗くと一時ファイルの名前を拾い、PID が
-# 毎回違うので「キャッシュ名が分かれる」テストが鍵の計算に関係なく緑になる（/code-review 指摘）。
-waitcache() {  # waitcache DIR — DIR にキャッシュ本体が置かれるまで待つ（fork なしの glob で見る）
-  local i f
-  for ((i = 0; i < 100; i++)); do
-    for f in "$1"/account*; do case "$f" in *.tmp-*) ;; *) [ -e "$f" ] && return 0 ;; esac; done
-    sleep 0.1
-  done
-  return 1
-}
-cachename() { waitcache "$1"; ls "$1" 2>/dev/null | grep -v '\.tmp-' | head -1; }  # cachename DIR
+# **背景の取得は `CLAUDE_STATUSLINE_SYNC_FETCH=1` で前景で走らせて見る**（`SYNC` に入れて env に渡す）。
+# 被験体は本番ではプランと枠を背景 subshell で取るので、以前は「背景が書き終わった印」を 0.1 秒刻みで
+# 待っていた（固定の sleep は負荷で落ちた: 6 並列で 12 回中 6 回 NG）。同じ関数を前景で呼ぶ seam にしたので
+# 待ち合わせが要らない。**背景で走ること自体**は下の「描画は背景の取得を待たない」で別に pin する。
+SYNC="CLAUDE_STATUSLINE_SYNC_FETCH=1"
+# 一時ファイル `account….tmp-PID` は数えない（前景でも mv の失敗で残りうる。拾うと PID が毎回違うので
+# 「キャッシュ名が分かれる」テストが鍵の計算に関係なく緑になる。/code-review 指摘）
+cachename() { ls "$1" 2>/dev/null | grep -v '\.tmp-' | head -1; }  # cachename DIR
 # **背景の取得を実物に行かせない。** 偽の `security` と `curl` を PATH の先頭に置く — 置かないと
 # 背景が**開発者の実 Keychain を読み、本物の /usage を叩く**（並列で回すと 429 と同じ形の負荷）。
 NOBG=$(mkd)
@@ -262,7 +252,7 @@ check "古い側も即返す（stale-while-revalidate）" \
 _cn() {  # _cn CONFIGDIR SECUREDIR → 生成されたキャッシュのファイル名
   local d; d=$(mkd)
   printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$1" CLAUDE_SECURESTORAGE_CONFIG_DIR="$2" \
-    CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" PATH="$NOBG:$PATH" /bin/bash "$S" >/dev/null 2>&1
+    CLAUDE_STATUSLINE_V2_CACHE_DIR="$d" PATH="$NOBG:$PATH" "$SYNC" /bin/bash "$S" >/dev/null 2>&1
   cachename "$d"
 }
 _a=$(_cn /tmp/cfgX /tmp/ssA); _b=$(_cn /tmp/cfgX /tmp/ssB)
@@ -271,7 +261,7 @@ check "securestorage を分けたらキャッシュも分かれる" \
 # **既定ではファイル名を変えない**（変えると全ユーザーが一斉に取り直す = 429 事故と同じ負荷）
 _d1=$(mkd)
 printf '%s' "$(pay)" | env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR \
-  CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" PATH="$NOBG:$PATH" /bin/bash "$S" >/dev/null 2>&1
+  CLAUDE_STATUSLINE_V2_CACHE_DIR="$_d1" PATH="$NOBG:$PATH" "$SYNC" /bin/bash "$S" >/dev/null 2>&1
 _n1=$(cachename "$_d1")
 # **ファイルが無いときに緑にしない**（`no '__' ""` は 1 を返す。背景が書かなくなっても通ってしまう）
 check "securestorage 未設定ならキャッシュ名に接尾辞を付けない" \
@@ -543,15 +533,13 @@ cat > "$SPY/curl" <<'EOS'
 printf '%s\n' "$@" > "$SPYLOG"
 cat > "$SPYSTDIN"
 printf '%s' '{"limits":[]}'
-: > "$SPYDONE"
 EOS
 chmod +x "$SPY/curl"
 printf '#!/bin/bash\nprintf %%s %s\n' \
   "'{\"claudeAiOauth\":{\"subscriptionType\":\"max\",\"rateLimitTier\":\"default_claude_max_20x\",\"accessToken\":\"SECRET-TOKEN\"}}'" > "$SPY/security"
 chmod +x "$SPY/security"
 printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-  PATH="$SPY:$PATH" SPYLOG="$SPY/argv" SPYSTDIN="$SPY/stdin" SPYDONE="$SPY/done" /bin/bash "$S" >/dev/null 2>&1
-waitfor -e "$SPY/done"   # 偽 curl が stdin を読み切って返した印（argv だけ見ると stdin の書き途中を読む）
+  PATH="$SPY:$PATH" SPYLOG="$SPY/argv" SPYSTDIN="$SPY/stdin" "$SYNC" /bin/bash "$S" >/dev/null 2>&1
 check "トークンが curl の argv に出ない" \
   "$(if [ ! -f "$SPY/argv" ] || ! grep -q 'SECRET-TOKEN' "$SPY/argv"; then echo 1; fi)" \
   "$(cat "$SPY/argv" 2>/dev/null)"
@@ -575,6 +563,20 @@ printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_D
 check "スクリプトが作るキャッシュディレクトリは 700" \
   "$([ -d "$_cb" ] && [ "$(stat -f '%Sp' "$_cb")" = "drwx------" ] && echo 1)" \
   "$([ -d "$_cb" ] && stat -f '%Sp' "$_cb" || echo '作られなかった')"
+# **描画は背景の取得を待たない**（seam を入れたので、背景で走ること自体を別に pin する）。偽 curl を 3 秒
+# 寝かせても被験体は 1 秒以内に返ること。`& disown` を外す・`>/dev/null` を外す（親の stdout を握る）・
+# `2>&1` だけを外す、のどれでも $( ) が curl の終わりを待つので赤くなる（stderr も受けているので）。
+SLOW=$(mkd)
+cp "$NOBG/security" "$SLOW/security"
+printf '#!/bin/bash\ncat >/dev/null; sleep 3; printf %%s "{\\"limits\\":[]}"\n' > "$SLOW/curl"
+chmod +x "$SLOW/curl"
+setup
+_t0=$SECONDS
+_O=$(printf '%s' "$(pay)" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
+  PATH="$SLOW:$PATH" /bin/bash "$S" 2>&1)   # stderr も同じ pipe で受ける（`2>&1` だけ外す変更も捕まえる）
+_dt=$((SECONDS - _t0))
+check "描画は背景の取得を待たない（偽 curl が 3 秒かかっても 1 秒以内に返る）" \
+  "$(all "$([ "$_dt" -le 1 ] && echo 1)" "$_O")" "${_dt} 秒"
 # **Keychain のサービス名は config dir ごとに変わる**（決め打ちで引くと別アカウントの blob を読む）
 check "Keychain のサービス名に config dir の sha256 先頭 8 桁を付ける" \
   "$(grep -q 'shasum -a 256' "$S" && grep -q 'Claude Code-credentials' "$S" && echo 1)" ""
@@ -594,8 +596,7 @@ acct_of() {  # acct_of USER値 → security に渡った -a の値
   # **`LOGNAME` に囮を置く** — 開発機では `LOGNAME` = `id -un` なので、置かないと「`LOGNAME` に倒す」
   # 旧実装でも同じ値になって緑のまま通る（security-auditor の mutation で実証。2026-09-24）。
   printf '%s' "$(pay)" | env USER="$1" LOGNAME=zz-not-me CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-    PATH="$sp:$PATH" /bin/bash "$S" >/dev/null 2>&1
-  waitfor -s "$sp/argv"
+    PATH="$sp:$PATH" "$SYNC" /bin/bash "$S" >/dev/null 2>&1
   awk 'p{print; exit} $0=="-a"{p=1}' "$sp/argv" 2>/dev/null
 }
 A=$(acct_of alice)

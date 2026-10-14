@@ -974,7 +974,8 @@ fetch_account() {
     # 書くのは背景 subshell なので、起動前にここでディレクトリを用意する
     # （**BSD の `mkdir -p -m` は最後のディレクトリにしか mode を当てない**ので 1 段だけにする）
     [[ -d "$CACHE_BASE" ]] || mkdir -p -m 700 "$CACHE_BASE" 2>/dev/null
-    (
+    # 取得の本体は subshell を体にした関数（`f() ( … )`）— 背景で起こすか前景で待つかを呼ぶ側で選べる
+    _refresh_account() (
       local _blob="" _rec="" _tok="" _plan="" _tier="" _out="" _lim="" _lim_ok=""
       # **先に claim を打つ**（値は現状のまま、`at.*` だけ今の時刻にする）。これが無いと、
       # `refreshInterval` で定期再実行している**並走セッションが同じ瞬間に「期限切れ」と判定し、
@@ -1069,10 +1070,18 @@ fetch_account() {
       if [[ -n "$_plan" ]]; then _C_plan="$_plan"; _C_tier="$_tier"; _C_at_plan="$_NOW"; _C_ok_plan="$_NOW"; fi
       if [[ -n "$_lim_ok" ]]; then _C_lim="$_lim"; _C_at_lim="$_NOW"; _C_ok_lim="$_NOW"; fi
       write_acct_cache
+    )
     # **`>/dev/null 2>&1` が背景化の必須条件** — 付けないと subshell が親の stdout（Claude Code が
     # 読む pipe）を握ったままになり、読み手は最後の fd 保持者が終わるまで EOF を見ない。
     # ここが最も効く（`curl -m 4` は最大 4 秒粘るので、無いと描画が 4 秒止まる）。
-    ) >/dev/null 2>&1 & disown
+    # **`CLAUDE_STATUSLINE_SYNC_FETCH` はテストの seam**（`CLAUDE_STATUSLINE_NO_NET` と同じ扱い）— 前景で
+    # 取り終えてから返すので、テストが背景の書き終わりを推測して待たずに済む。本番では設定しない
+    # （描画が最大 4 秒止まる）。経路は同じ関数なので、背景で走るときと中身は変わらない。
+    if [[ -n "${CLAUDE_STATUSLINE_SYNC_FETCH:-}" ]]; then
+      _refresh_account >/dev/null 2>&1
+    else
+      _refresh_account >/dev/null 2>&1 & disown
+    fi
   fi
   return 0
 }
