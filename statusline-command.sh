@@ -454,7 +454,8 @@ format_tokens() {
 # 近似できるが推測値なので出さない（無表示 < 誤読）。
 # **既定から足したのはモデル名・effort・🌲worktree**（Line 1 と同じ `model_color` / `effort_color`。非選択の行は
 # 本体が dim をかける）。effort はセッションから継承すると来ない = **違うときだけ出る**（差分がシグナル）。
-# 並びは 名前 → モデル → effort → 🌲worktree → 説明（🌲 はセッションと違う worktree のときだけ）。モデルを名前の直後に置く — 右端から切られるので、右に置くと狭い窓で最初に消え、説明の後ろだと行ごとに
+# 並びは 名前 → モデル → effort → 🌲worktree → 説明（🌲 はセッションと違う worktree のときだけ。隔離した
+# サブエージェントの `agent-<hex>` は名前を出さず 🌲 だけ）。モデルを名前の直後に置く — 右端から切られるので、右に置くと狭い窓で最初に消え、説明の後ろだと行ごとに
 # 桁がずれて縦に見比べられない。
 # - **名前列は既定と同じ `name ?? agentType`**（`name` は名前付きで起動したときだけ来る）。`agentType`
 #   （`Explore` 等）は 2.1.293 で payload に入った — それより前の版では無名のエージェントの名前列が落ちる。
@@ -493,6 +494,7 @@ json_str() {
 subagent_rows() {
   local _US=$'\037' _rows _now _l _i _n=0 _wn=0 _wm=0 _pm _mc _sp _e _t _row _ji _jr _out=""
   local _id _name _model _desc _st _start _tok _eff _ec _cwd _scwd _wt _f _fs=()
+  local _agwt='^agent-a([0-9a-f]{16}|[0-9a-f]{7})$'
   local ids=() names=() mplain=() mcol=() eplain=() ecol=() wts=() descs=() tails=()
   # 各段に `?`、数値は `type == "number"` で守る — 1 task の型変更で抽出ごと abort すると
   # 全行が既定に戻る（壊れ方としては安全側だが、黙って効かなくなる）。
@@ -561,7 +563,14 @@ subagent_rows() {
     # effort と 🌲 は**値のある行にだけ置き、幅を揃えない** — 大半の行は空なので、揃えると空の列が
     # 説明の前に大きな隙間を作る（2026-10-08 ユーザー確認）。桁を揃えるのは名前とモデルだけ。
     [[ -n "${eplain[_i]}" ]] && _row+="${ecol[_i]}  "
-    [[ -n "${wts[_i]}" ]] && _row+="${DIM}🌲${wts[_i]}${RST}  "
+    # **隔離したサブエージェントの worktree は 🌲 だけにする** — 名前は `agent-a<16 桁の hex>`（旧形式は 7 桁。
+    # 2.1.299 のバイナリが自分の worktree を見分けるのに使う正規表現と同じ形に合わせる）
+    # で、人が読んでも照らし合わせにも使えないのに 23 桁を食う（2026-10-14 実機で説明を右に押し出した）。
+    # 知りたいのは「別の場所で動いている」ことだけ。自分で付けた名前（`fix-auth`、`agent-refactor`）は残す。
+    if [[ -n "${wts[_i]}" ]]; then
+      if [[ "${wts[_i]}" =~ $_agwt ]]; then _row+="${DIM}🌲${RST}  "
+      else _row+="${DIM}🌲${wts[_i]}${RST}  "; fi
+    fi
     [[ -n "${descs[_i]}" ]] && _row+="${descs[_i]}  "
     _row+="${tails[_i]}"
     _row="${_row%"${_row##*[! ]}"}"   # 末尾の空白を落とす（desc も経過も無い行）

@@ -693,6 +693,17 @@ check "running の行は経過を出す（2h）" "$(has '2h · 12.4k tokens' "$(
 check "effort と 🌲 が無い行は説明がモデル列の直後に来る" \
   "$([ "$(sact x1 "$O")" = "Explore$(printf '%20s' '')typed" ] && echo 1)" "[$(sact x1 "$O")]"
 check "running 以外の行は経過を出さない" "$(ends 'Find callers' "$(sact a2 "$O")")" "$(sact a2 "$O")"
+# **隔離したサブエージェントの `agent-<hex>` は 🌲 だけ、自分で付けた名前は残す**（対で持つ — 判定を
+# 「`agent-` で始まる」に緩めると `agent-refactor` が消え、判定を外すと 23 桁の ID が戻る）
+_SA3='{"cwd":"/r","tasks":[
+ {"id":"g1","type":"local_agent","label":"iso","cwd":"/r/.claude/worktrees/agent-aec6ab632b4eaf5e2"},
+ {"id":"g2","type":"local_agent","label":"named","cwd":"/r/.claude/worktrees/agent-refactor/src"},
+ {"id":"g3","type":"local_agent","label":"old","cwd":"/r/.claude/worktrees/agent-a1b2c3d4"}]}'
+setup; O=$(sa "$_SA3")
+check "隔離したサブエージェントの worktree（agent-<hex>）は 🌲 だけにする" \
+  "$(all "$(has '🌲  iso' "$(sact g1 "$O")")" "$(no 'aec6' "$(sact g1 "$O")")")" "[$(sact g1 "$O")]"
+check "旧形式の agent-a<7 桁> も 🌲 だけにする" "$(all "$(has '🌲  old' "$(sact g3 "$O")")" "$(no 'a1b2' "$(sact g3 "$O")")")" "[$(sact g3 "$O")]"
+check "agent- で始まっても自分で付けた名前は残す（agent-refactor）" "$(has '🌲agent-refactor  named' "$(sact g2 "$O")")" "[$(sact g2 "$O")]"
 setup; O=$(sa '{"tasks":"broken"}')
 check "tasks が配列でなければ何も出さない（全行が既定に戻る）" "$(all "$([ -z "$O" ] && echo 1)" "$(empty "$ERR")")" "$O / $(cat "$ERR")"
 setup; O=$(sa 'not json')
