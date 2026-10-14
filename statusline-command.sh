@@ -5,7 +5,9 @@
 # **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
 # 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.296**（`experiments/upstream/2.1.296/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.299**（`experiments/upstream/2.1.299/` に教典 3 つを snapshot 済み）。
+# 2.1.296 → 299（297 / 298 は欠番）もキーの増減ゼロ。5h と週間の `used_percentage` が 100 で頭打ちになった
+# （ゲージの 0〜100 の前提が上流で保証された）。隔離したサブエージェントの worktree は `agent-a<16hex>`。
 # 2.1.295 → 296 もキーの増減ゼロ。Sonnet 5.5 のキャッシュ読みの単価が下がり、`cost.total_cost_usd` の値だけが変わる。
 # 2.1.293 → 295 はメインも subagent も payload のキーの増減ゼロ、フッターのバッジも不変（3 版のバイナリを照合）。
 # 295 から background session の子プロセスに `FORCE_COLOR` を渡さなくなったが、このスクリプトは読まない。
