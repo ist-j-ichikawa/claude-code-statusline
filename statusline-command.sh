@@ -5,7 +5,10 @@
 # **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
 # 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.299**（`experiments/upstream/2.1.299/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.310**（`experiments/upstream/2.1.310/` に教典 3 つを snapshot 済み）。
+# 2.1.299 → 310 もメインも subagent も payload のキーの増減ゼロ（11 版のバイナリを照合）。301 から
+# subagent 行を求める対象に、終わっても `evictAfter` / `retain` を持つ行が残るようになった（行の形は不変）。
+# 304 から `cwd` / `workspace.current_dir` は cloud セッションでだけ cloud 側の cwd を優先する（手元は同じ値）。
 # 2.1.296 → 299（297 / 298 は欠番）もキーの増減ゼロ。5h と週間の `used_percentage` が 100 で頭打ちになった
 # （ゲージの 0〜100 の前提が上流で保証された）。隔離したサブエージェントの worktree は `agent-a<16hex>`。
 # 2.1.295 → 296 もキーの増減ゼロ。Sonnet 5.5 のキャッシュ読みの単価が下がり、`cost.total_cost_usd` の値だけが変わる。
