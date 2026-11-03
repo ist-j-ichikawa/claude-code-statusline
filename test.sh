@@ -275,7 +275,10 @@ t_time() {  # t_time NAME SETTINGS EXPECT
   check "$1 — stderr 空" "$([ ! -s "$ERR" ] && echo 1)" "$(cat "$ERR")"
 }
 t_time "timeZone: UTC"              '{"timeZone":"UTC"}'                    '10:30'
-t_time "timeZone: America/New_York" '{"timeZone":"America/New_York"}'        '06:30'
+# **夏時間の無いゾーンで見る** — `America/New_York` の `06:30` は夏時間の間だけ正しく、
+# 11 月に入った日から `05:30` になって落ちた（2026-11-04。時限爆弾の季節版）。
+# Kolkata は +05:30 固定で、開発機の JST とも UTC とも違うので設定が効いたことも見分けられる。
+t_time "timeZone: Asia/Kolkata"     '{"timeZone":"Asia/Kolkata"}'            '16:00'
 # **`12-hour` はゾーンも一緒に固定する** — 期待値をシステムの TZ に依存させると
 # **開発機のゾーン以外で落ちる**（JST 前提の `7:30 PM` が UTC で `10:30 AM` になった）。
 t_time "timeFormat: 12-hour"        '{"timeFormat":"12-hour","timeZone":"UTC"}'  '10:30 AM'
