@@ -150,8 +150,27 @@ setup
   printf 'limit%sFable%s7%s6 16:00\n' "$US" "$US" "$US"; } > "$(cfile "$CD" "$CFG")"
 O=$(render "$(pay)")
 check "未知キーがあっても既知の値を読む" \
-  "$(all "$(has 'Fable:' "$O")" "$(has 'Max 20x' "$O")")" "$O"
+  "$(all "$(has 'Fable:' "$O")" "$(has 'Ultra' "$O")")" "$O"
 check "未知キーで stderr が出ない" "$([ ! -s "$ERR" ] && echo 1)" "$(cat "$ERR")"
+
+# **プラン名は 2026-11 の公式表記**（Max 5x → Max、Max 20x → Ultra）。Keychain の値は旧名のままなので
+# 表示の側で畳む。**出さない倍率は 1 つずつ見る** — 「`Max` を含む」だけだと `Max 5x` のままでも緑になる。
+t_plan() {  # t_plan NAME SUB_TYPE RATE_TIER WANT [MUST_NOT]
+  setup
+  { printf 'schema%s1\n' "$US"; printf 'tz%s\n' "$US"; printf 'plan%s%s\n' "$US" "$2"
+    printf 'tier%s%s\n' "$US" "$3"; printf 'at.plan%s%s\n' "$US" "$NOW"; } > "$(cfile "$CD" "$CFG")"
+  local O; O=$(render "$(pay)" 1)
+  if [ -n "${5-}" ]; then
+    check "$1" "$(all "$(has "($4)" "$O")" "$(no "$5" "$O")")" "$O"
+  else
+    check "$1" "$(has "($4)" "$O")" "$O"
+  fi
+}
+t_plan "Max 5x は Max と出す"             max        default_claude_max_5x  'Max'        '5x'
+t_plan "Max 20x は Ultra と出す"          max        default_claude_max_20x 'Ultra'      '20x'
+t_plan "ultra が来ても Ultra（倍率なし）"   ultra      default_claude_max_20x 'Ultra'      '20x'
+t_plan "知らない倍率の Max は倍率ごと出す"  max        default_claude_max_50x 'Max 50x'
+t_plan "Enterprise の 5x は残す"          enterprise default_claude_max_5x  'Enterprise 5x'
 
 # **無いキーは既定値**（古い版が書いたファイルを新しい版が読んでも死なない）
 setup

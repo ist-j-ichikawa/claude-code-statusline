@@ -340,8 +340,10 @@ fmt_ctx_size() {
 }
 
 # plan_label VARNAME SUB_TYPE RATE_TIER — 契約種別 + レート枠を公式表記で組む (fork ゼロ)。
-# 公式プラン名は Free / Pro / **Max 5x** / **Max 20x** / Team / Enterprise (claude.com/pricing、
-# support.claude.com の Max プラン記事)。`subscriptionType` の生値は小文字なので正式表記に畳む。
+# 公式プラン名は Free / Pro / **Max** / **Ultra** / Team / Enterprise（2026-11 の claude.com/pricing。
+# 旧「Max 5x」は「Max」に、旧「Max 20x」は「Ultra」になった。Ultra ボタンのリンクは今も `plan=max_20x`）。
+# `subscriptionType` の生値は小文字なので正式表記に畳む。**Keychain の値は旧名のまま**（2.1.317 でも
+# `subscriptionType` は max、`rateLimitTier` は `default_claude_max_5x` / `_20x`）なので、名前は表示の側で直す。
 # **`${var^}` は使わない** (bash 4+)。case が写像そのものなので不要。
 #
 # **`rateLimitTier` の値を列挙しない** — 未文書で増えうるフィールドなので、suffix が `Nx` の形かだけを
@@ -349,7 +351,7 @@ fmt_ctx_size() {
 # 上流 issue #43639 で実在) → 枠なし。値を許可リストで受けると v1.69.0 の `nameSource` と同じ
 # 「未文書フィールドを列挙して実物で無言に壊れる」を繰り返す。
 # 枠は契約種別と**独立**に付く — 実測で Enterprise 契約が `default_claude_max_5x` を持つ (= 契約が
-# Enterprise でもレート枠は Max 5x 相当)。だから Team/Enterprise 専用の値を知らなくても壊れない。
+# Enterprise でもレート枠は Max（旧 Max 5x）相当)。だから Team/Enterprise 専用の値を知らなくても壊れない。
 plan_label() {
   local _st="$2" _rt="$3" _name _tier=""
   case "$_st" in
@@ -364,6 +366,15 @@ plan_label() {
   # だけを見る」という約束を満たしていなかった（列挙の粒度が値から桁数へ移っただけ。`/code-review` 指摘）
   local _sfx="${_rt##*_}"
   if [[ "$_sfx" == *x && "${_sfx%x}" =~ ^[0-9]+$ ]]; then _tier=" $_sfx"; fi
+  # **Max と Ultra は倍率を名前が持つ**ので suffix を付けない。Max の `5x` は名前と重複し、
+  # 旧 Max 20x は `Ultra` と呼ぶ。Ultra に `20x` を付けると誤読になる（公式の説明は「Pro の 10 倍」）。
+  # 知らない倍率（`max` で 5x / 20x 以外）だけは `Max Nx` のまま出す — 黙って `Max` に畳むと誤読側。
+  # Team / Enterprise の `5x` は残す（プランの中の枠の段で、名前からは分からない）。
+  case "$_st:$_tier" in
+    "max: 5x") _tier="" ;;
+    "max: 20x") _name="Ultra"; _tier="" ;;
+    ultra:*) _name="Ultra"; _tier="" ;;
+  esac
   printf -v "$1" '%s%s' "$_name" "$_tier"
 }
 
