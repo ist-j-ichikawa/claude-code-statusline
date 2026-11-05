@@ -5,7 +5,8 @@
 # **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
 # 返す（`subagent_rows`。3 行の経路には入らない）。
 #
-# **Built against Claude Code 2.1.317**（`experiments/upstream/2.1.317/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.318**（`experiments/upstream/2.1.318/` に教典 3 つを snapshot 済み）。
+# 2.1.317 → 318 もキーの増減ゼロ。
 # 2.1.310 → 317（313 は欠番）もキーの増減ゼロ。311 から `session_name` は Remote Control のセッション名を
 # 優先する（このスクリプトは park 中の出自マーカーでしか読まない）。
 # 2.1.299 → 310 もメインも subagent も payload のキーの増減ゼロ（11 版のバイナリを照合）。301 から
