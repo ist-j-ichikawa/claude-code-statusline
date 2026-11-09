@@ -6,7 +6,7 @@ Claude Code の statusline を 3 行で描く bash スクリプト 1 本です�
 
 | 行 | 出すもの |
 |---|---|
-| 1 | 課金先とプラン、モデル、reasoning effort、fast、Claude Code の版（追いついていれば薄く、遅れていれば赤） |
+| 1 | 宛名（セッション間メッセージの宛先。セッション名と同じなら出さない）、課金先とプラン、モデル、reasoning effort、fast、Claude Code の版（追いついていれば薄く、遅れていれば赤）、session id（薄く。会話ログ `projects/<dir>/<id>.jsonl` を引く鍵で、宛先には使えない） |
 | 2 | パス、worktree 名、ブランチ、進行中の git 操作、conflicts、ahead/behind |
 | 3 | コンテキストの消費、セッションの課金額、プロンプトキャッシュ（warm の間は TTL と切れる時刻、cold になったら原因と miss 回数）、5h・週間・モデル別の枠（**90% を超えた枠は赤**） |
 

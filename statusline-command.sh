@@ -8,7 +8,7 @@
 # **Built against Claude Code 2.1.318**（`experiments/upstream/2.1.318/` に教典 3 つを snapshot 済み）。
 # 2.1.317 → 318 もキーの増減ゼロ。
 # 2.1.310 → 317（313 は欠番）もキーの増減ゼロ。311 から `session_name` は Remote Control のセッション名を
-# 優先する（このスクリプトは park 中の出自マーカーでしか読まない）。
+# 優先する（このスクリプトは宛名が `session_name` と同じかの判定にだけ読む。park 中の出自マーカーは描かない）。
 # 2.1.299 → 310 もメインも subagent も payload のキーの増減ゼロ（11 版のバイナリを照合）。301 から
 # subagent 行を求める対象に、終わっても `evictAfter` / `retain` を持つ行が残るようになった（行の形は不変）。
 # 304 から `cwd` / `workspace.current_dir` は cloud セッションでだけ cloud 側の cwd を優先する（手元は同じ値）。
@@ -36,7 +36,7 @@
 # **左から順に優先度が高い** — 本体は全行を右端で切るので、
 # 並び順がそのまま「狭い窓で何が残るか」になる。
 #
-#   1 行目: provider(契約プラン) · 宛名 · モデル(tier 色) · effort · 版
+#   1 行目: 宛名（session name と違うときだけ） · provider(契約プラン) · モデル(tier 色) · effort · fast · 版 · session id
 #            ← どのセッションか / どのアカウントに課金されるか
 #   2 行目: パス · 🌲worktree · ブランチ · 進行中の操作 · conflicts · ahead/behind
 #            ← どこで何を触っているか / いま git の途中か
@@ -713,7 +713,7 @@ readonly _USEP=$'\037'
 # payload は未文書なので、上流が型を変える可能性は「無い」と決められない。
 # `// ""` を必ず付ける（古い Claude Code では要素が出ないだけで壊れない）。
 model="" model_id="" effort_level="" current_dir="." wt_name="" used_pct="" ctx_size=0
-five_pct="" five_at="" seven_pct="" seven_at="" session_id="" cc_version="" cost_cents=0
+five_pct="" five_at="" seven_pct="" seven_at="" session_id="" session_name="" cc_version="" cost_cents=0
 pc_state="" pc_cause="" pc_ttl="" pc_ep="" pc_exp="" pc_misses="" pc_detail="" _NOW=0 fast_mode=false _jq_ok=1
 tz_setting="" tf_setting="" five_ep="" seven_ep=""
 # **時刻表記の設定はユーザー settings から読む**（2.1.257+ の `timeZone`）。**既存の 1 回の jq に
@@ -745,7 +745,8 @@ _jq=$(jq -r --rawfile _settings "$_settings_file" '
   @sh "seven_pct=\(.rate_limits?.seven_day?.used_percentage? // null | if type != "number" then "" else round end)",
   @sh "seven_ep=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" else floor end)",
   @sh "seven_at=\(.rate_limits?.seven_day?.resets_at? // null | if type != "number" then "" elif . <= now then "now" else (((. + 30) / 60 | floor) * 60 | strflocaltime("%w %H:%M")) end)",
-  @sh "session_id=\(.session_id? // "")",
+  @sh "session_id=\(.session_id? // "" | tostring | if test("^[0-9A-Za-z-]+$") then . else "" end)",
+  @sh "session_name=\(.session_name? // "" | tostring | gsub("[[:cntrl:]]"; " "))",
   @sh "cost_cents=\(.cost?.total_cost_usd? // 0 | if type != "number" then 0 else . * 100 | round end)",
   @sh "fast_mode=\(.fast_mode // false)",
   @sh "pc_state=\(if (.prompt_cache|type) == "object" then (if .prompt_cache.caching_observed == false then "" elif .prompt_cache.warm == false then "cold" else "warm" end) else "" end)",
@@ -853,8 +854,13 @@ fmt_time pc_exp "$pc_exp"
 [[ "$_NOW" =~ ^[0-9]+$ ]] || _NOW=0
 
 # ── 宛名: `<config dir>/sessions/<pid>.json` の `name`（cross-session messaging のアドレス）──
-# stdin の `session_name` は**右上の表示名**（customTitle ?? aiTitle）で宛先ではないので使わない。
+# stdin の `session_name` は**右上の表示名**（customTitle ?? aiTitle）で宛先ではないので代わりに使わない。
 # `"formerNames"` から先は捨てる（過去の名前を拾うと誤配になる）。
+# **`session_name` と同じなら出さない**（2.17.0。ユーザー指示）— 自動で付いた名前（`nameSource:"auto"`）は
+# タイトルと同じ文字列になり、本体が常時出している session name の複製になる。違うとき（`/rename`・
+# Remote Control の名前）だけ出すので、送れない名前を宛先に見せる経路は増えない。
+# **session id を宛名の代わりにしない** — `SendMessage` は id を宛先として受けない（2.1.319 で実測:
+# 自分の名前は「自分自身」と判別され、自分の id は `No agent named … is reachable`）。id は行末に別に出す。
 peer=""
 if has_val "$session_id"; then
   for _sf in "${CONFIG_DIR}"/sessions/*.json; do
@@ -867,6 +873,7 @@ if has_val "$session_id"; then
     break
   done
 fi
+[[ -n "$peer" && "$peer" == "$session_name" ]] && peer=""
 
 # ── provider 検出（**fork ゼロ**。env と `model.id` だけ）────────────────────
 # **判定は `model_id`** — `model_show` には `display_name` の "Opus 5" が入りうる。Bedrock の
@@ -1266,8 +1273,15 @@ if has_val "$effort_level"; then effort_color _ec "$effort_level"; line1+=("$_ec
 # フィールド表（"Whether fast mode is enabled for the session"）と例示 payload だけが裏取り。
 # `cost` / `exceeds_200k_tokens` と同じクラスで、**プロンプトのスキーマは網羅ではない**。
 [[ "$fast_mode" == "true" ]] && line1+=("${FAST}fast${RST}")
-# 版は**行の最後**（行動に効かない参照情報なので、溢れたとき最初に削られてよい）
+# 版は**行末側**（session id の直前。行動に効かない参照情報なので、溢れたとき先に削られてよい）
 has_val "$cc_version" && line1+=("${ver_col}v${cc_version}${RST}")
+# **session id は版のさらに後ろ**（2.17.0。ユーザー指示）。用途は「会話を読む鍵」 —
+# `<config dir>/projects/<dir>/<id>.jsonl` が 1 本に決まるので、別ディレクトリ・worktree のセッションでも
+# id を渡せば読める（名前は重複しうる: `… 配布` と `… 配布 ⑂ codex` が並んだ実例）。**送る鍵ではない**
+# （宛先は宛名。上の抽出部）。**全桁で出す** — `--resume` は 8 桁の prefix を受けない。行末なので
+# 狭い窓では最初に切られ、他の要素を押し出さない。dim は役②（要素まるごと二次情報）。
+# jq 側で `[0-9A-Za-z-]` 以外を含む値は落とす（宛名の走査の glob にも入るので）。
+has_val "$session_id" && line1+=("${DIM}${session_id}${RST}")
 
 [[ "$_path" != "." ]] && line2+=("$_path")
 has_val "$wt_name" && line2+=("${DIM}🌲${wt_name}${RST}")

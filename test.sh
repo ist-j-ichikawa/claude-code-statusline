@@ -546,6 +546,33 @@ O=$(render "$(pay ',"prompt_cache":{"warm":false,"last_miss_cause":"s"}')")
 check "last_miss_cause が文字列でも抽出が生き残る" \
   "$(all "$(no 'jq error' "$O")" "$(has 'cold' "$O")")" "$O"
 
+echo "── 1 行目: 宛名と session id ──"
+# **宛名は `session_name` と同じなら出さない／違えば出す**を対で持つ（片方だけだと「常に出さない」
+# 変更が緑で通る）。**session id は行末に全桁**（`--resume` は 8 桁を受けない）。
+SID="8505e86d-3f0c-4c97-afc4-6237463f3650"
+peer_fixture() {  # peer_fixture NAME — sessions/<pid>.json を実物の並び（formerNames が後ろ）で置く
+  mkdir -p "$CFG/sessions"
+  printf '{"pid":1,"sessionId":"%s","name":"%s","nameSource":"auto","formerNames":[{"name":"OLDNAME"}]}' \
+    "$SID" "$1" > "$CFG/sessions/1.json"
+}
+setup; peer_fixture "same title"
+L=$(render "$(pay ",\"session_id\":\"$SID\",\"session_name\":\"same title\"")" 1)
+check "宛名が session_name と同じなら出さない" "$(no 'same title' "$L")" "$L"
+setup; peer_fixture "renamed-peer"
+L=$(render "$(pay ",\"session_id\":\"$SID\",\"session_name\":\"same title\"")" 1)
+check "宛名が session_name と違えば出す" "$(has 'renamed-peer' "$L")" "$L"
+setup; peer_fixture "renamed-peer"
+L=$(render "$(pay ",\"session_id\":\"$SID\"")" 1)
+check "session_name が無い（旧 CC）なら宛名を出す" "$(has 'renamed-peer' "$L")" "$L"
+ends_sid() { case "$1" in *" $SID") printf 1 ;; esac; }
+setup
+L=$(render "$(pay ",\"session_id\":\"$SID\"")" 1)
+check "session id は 1 行目の末尾に全桁で出す" "$(ends_sid "$L")" "$L"
+setup
+O=$(render "$(pay ",\"session_id\":\"a*b c\"")")
+check "英数字と - 以外を含む session id は出さない" \
+  "$(all "$(no 'a*b' "$O")" "$(no 'jq error' "$O")" "$(empty "$ERR")")" "$O / $(cat "$ERR")"
+
 echo "── セキュリティ ──"
 # **OAuth トークンを argv に出さない**（`ps aux` 漏れ）。偽 curl の argv を記録して確かめる。
 setup
