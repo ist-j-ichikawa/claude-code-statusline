@@ -123,7 +123,7 @@ echo "── 抽出: 型が変わっても全滅しない ──"
 for bad in \
   '{"version":1,"model":"s","effort":"s","workspace":"s","context_window":"s","rate_limits":"s","cost":"s","prompt_cache":"s","worktree":7}' \
   '{"rate_limits":{"five_hour":"s","seven_day":3},"prompt_cache":{"last_miss_cause":"s"},"cost":{"total_cost_usd":"s"},"context_window":{"used_percentage":"s"}}' \
-  '{"effort":"high"}' '{"model":5}' '{"cost":{"total_cost_usd":null}}'
+  '{"effort":"high"}' '{"model":5}' '{"cost":{"total_cost_usd":null}}' '{"fast_mode":{}}' '{"fast_mode":"true"}'
 do
   setup
   O=$(render "$bad")
@@ -451,8 +451,8 @@ check "caching_observed:false なら cold を出さない" \
   "$(all "$(no 'cold' "$O")" "$(no 'jq error' "$O")" "$(contract "$O")")" "$O"
 setup
 O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["ttl_expired_5m"]}}')")
-check "caching_observed:true なら cold と原因を出す" \
-  "$(all "$(has 'cold ttl_expired_5m' "$O")" "$(no 'jq error' "$O")")" "$O"
+check "caching_observed:true なら cold を出す" \
+  "$(all "$(has 'cold' "$O")" "$(no 'jq error' "$O")")" "$O"
 setup
 O=$(render "$(pay ',"prompt_cache":{"warm":false}')")
 check "caching_observed が無い旧 CC では cold を出す" \
@@ -464,7 +464,7 @@ O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":"yes"}')")
 check "caching_observed が文字列でも抽出が生き残る" \
   "$(all "$(no 'jq error' "$O")" "$(has '31%' "$O")")" "$O"
 
-echo "── prompt_cache: warm の TTL と期限 / cold の詳細 ──"
+echo "── prompt_cache: warm の TTL と期限 / miss の原因（warm）/ cold ──"
 # **期限は分に切り捨てる**（10:30:50 切れを 10:31 と出すと、間に合うと読んで間に合わない）。
 # 時刻は「未来の固定した分」+ ゾーン固定で起こす（`E5` の作法）。**経路は 2 本ある** — 既定は
 # 最初の jq がプロセスの TZ で整形し、`timeZone` があると `_rt` が整形し直す。片方だけ見ると
@@ -474,6 +474,7 @@ renderz() {  # renderz PROC_TZ PAYLOAD LINE — render をプロセスの TZ を
   printf '%s' "$2" | env TZ="$1" CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
     CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" 2>"$ERR" | strip | sed -n "${3}p"
 }
+# PCW は misses:4 を持つが last_miss_at が無い = TTL 内の miss が無いので、`×` は出ない
 PCW=',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","misses":4,"expires_at":'
 setup
 O=$(renderz UTC "$(pay "${PCW}$((E5 + 50))}")" 3)
@@ -504,49 +505,109 @@ for _t in '5m x' 'x5m'; do
   O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"'"$_t"'","expires_at":'"$E5"'}')" 3)
   check "形の崩れた TTL '$_t' は出さない" "$(all "$(no "$_t" "$O")" "$(has 'cache 10:30' "$O")")" "$O"
 done
-# **warm はピーチ 216、cold は氷青 81**（色の温度を状態に合わせる）。行末に置いて、閉じ忘れも一緒に見る
+# **warm は橙 209、cold は青 111**（2.19.0。色の温度を状態に合わせる）。行末に置いて、閉じ忘れも一緒に見る
 # **`case` は関数に出す** — bash 3.2 は `$( )` の中の `case` のパターンの `)` で置換を閉じてしまい、
 # 何を渡しても非空になる（RST を外した mutant が緑で通った）。
 ends() { case "$2" in *"$1") printf 1 ;; esac; }   # ends SUFFIX HAYSTACK
 setup
 _raw=$(rawr "$(pay "${PCW}${E5}}")" 3)
-check "warm はピーチ 216 で、行末で閉じる" \
-  "$(all "$(has $'\033[38;5;216mcache 5m' "$_raw")" "$(ends "$(printf '\033[0m')" "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
+check "warm は橙 209 で、行末で閉じる" \
+  "$(all "$(has $'\033[38;5;209mcache 5m' "$_raw")" "$(ends "$(printf '\033[0m')" "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
 setup
 _raw=$(rawr "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"ttl":"5m"}')" 3)
 check "cold は COLD の色で、行末で閉じる" \
-  "$(all "$(has $'\033[38;5;81mcold' "$_raw")" "$(ends "$(printf '\033[0m')" "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
+  "$(all "$(has $'\033[38;5;111mcold' "$_raw")" "$(ends "$(printf '\033[0m')" "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
+# **2.19.0: miss は warm の側に「miss <時刻> <原因>」で、miss の直後 5 分だけ出す。`×N` は出さない。**
+# miss でもキャッシュを書き直すので warm のまま。cold は放置で切れたときだけで、原因を付けない。
+# **対で持つ**: 窓の内（10 秒前）／外（400 秒前）／TTL が 1h でも 5 分で切る（1800 秒前）／未来の時刻。
+CW_SGR=$'\033[38;5;209m'  # warm の色（生リテラルで pin）
 setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"ttl":"5m","misses":4,"last_miss_cause":{"causes":["tools_changed"],"tools_added":2,"tools_removed":1}}')" 3)
-check "cold は TTL・原因・ツール増減・miss 回数を出す" "$(has 'cold 5m tools_changed +2 -1 ×4' "$O")" "$O"
+_raw=$(rawr "$(pay "$FIVE"',"cost":{"total_cost_usd":12.3}')" 3)
+check "5h は淡いアクア 116、\$ は金 179（2.19.0）" \
+  "$(all "$(has $'\033[38;5;116m5h:' "$_raw")" "$(has $'\033[38;5;179m$12.30' "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
+LM=$((NOW - 10)); MT=$(TZ=UTC date -r "$LM" +%H:%M)
+PCM=',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","expires_at":'"$E5"',"last_miss_at":'"$LM"
 setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["tools_changed"],"tools_added":0,"tools_removed":1}}')" 3)
+O=$(renderz UTC "$(pay "${PCM}"',"misses":4,"last_miss_cause":{"causes":["tools_changed"],"tools_added":2,"tools_removed":1}}')" 3)
+check "warm で miss の直後なら miss の時刻・原因・ツール増減を出す（×N は出さない）" \
+  "$(all "$(has "cache 5m 10:30 miss $MT tools_changed +2 -1" "$O")" "$(no '×' "$O")")" "$O"
+setup '{"timeZone":"Asia/Kolkata"}'
+O=$(renderz UTC "$(pay "${PCM}"',"last_miss_cause":{"causes":["effort_changed"]}}')" 3)
+check "miss の時刻も timeZone に追従する" "$(has "miss $(TZ=Asia/Kolkata date -r "$LM" +%H:%M) effort_changed" "$O")" "$O"
+setup '{"timeFormat":"12-hour","timeZone":"UTC"}'
+O=$(renderz Asia/Tokyo "$(pay "${PCM}"',"last_miss_cause":{"causes":["effort_changed"]}}')" 3)
+check "miss の時刻も timeFormat に追従する" "$(has "miss $(LC_ALL=C TZ=UTC date -r "$LM" '+%-I:%M %p') effort_changed" "$O")" "$O"
+setup
+O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","expires_at":'"$E5"',"last_miss_at":'"$((NOW - 400))"',"last_miss_cause":{"causes":["tools_changed"],"tools_added":2}}')" 3)
+check "5 分を過ぎた miss は出さない" \
+  "$(all "$(has 'cache 5m 10:30' "$O")" "$(no 'miss' "$O")" "$(no 'tools_changed' "$O")")" "$O"
+setup '{"timeZone":"Asia/Kolkata"}'
+O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","expires_at":'"$E5"',"last_miss_at":'"$((NOW - 400))"',"last_miss_cause":{"causes":["tools_changed"]}}')" 3)
+check "timeZone の経路でも 5 分を過ぎた miss は出さない" "$(all "$(has 'cache 5m' "$O")" "$(no 'miss' "$O")")" "$O"
+setup
+O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"1h","expires_at":'"$E5"',"last_miss_at":'"$((NOW - 1800))"',"last_miss_cause":{"causes":["model_changed"]}}')" 3)
+check "TTL が 1h でも窓は 5 分（30 分前の miss は出さない）" \
+  "$(all "$(has 'cache 1h 10:30' "$O")" "$(no 'model_changed' "$O")")" "$O"
+setup
+O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"1h","expires_at":'"$E5"',"last_miss_at":'"$((NOW - 240))"',"last_miss_cause":{"causes":["model_changed"]}}')" 3)
+check "4 分前の miss は出す（窓の内側）" "$(has 'cache 1h 10:30 miss' "$O")" "$O"
+setup
+O=$(renderz UTC "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","expires_at":'"$E5"',"last_miss_at":'"$((NOW + 600))"',"last_miss_cause":{"causes":["unknown"]}}')" 3)
+check "未来の last_miss_at は出さない（時計のずれ）" "$(all "$(has 'cache 5m 10:30' "$O")" "$(no 'miss' "$O")")" "$O"
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"ttl":"5m","misses":4,"last_miss_at":'"$LM"',"last_miss_cause":{"causes":["tools_changed"],"tools_added":2,"tools_removed":1}}')" 3)
+check "cold は TTL だけ（原因・miss・回数を出さない）" \
+  "$(all "$(has 'cold 5m' "$O")" "$(no 'tools_changed' "$O")" "$(no 'miss' "$O")" "$(no '×' "$O")")" "$O"
+setup
+O=$(render "$(pay "${PCM}"',"last_miss_cause":{"causes":["tools_changed"],"tools_added":0,"tools_removed":1}}')" 3)
 check "ツール増減は 0 の側を添えない" "$(all "$(has 'tools_changed -1' "$O")" "$(no '+0' "$O")")" "$O"
 setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"ttl":"1h","misses":0,"last_miss_cause":{"causes":["system_prompt_changed"],"system_char_delta":-340}}')" 3)
-check "文字数の減少は - つき、miss 0 回は出さない" \
-  "$(all "$(has 'cold 1h system_prompt_changed -340' "$O")" "$(no '×' "$O")")" "$O"
-setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["system_prompt_changed"],"system_char_delta":120}}')" 3)
-check "文字数の増加は + つき" "$(has 'system_prompt_changed +120' "$O")" "$O"
-setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["system_prompt_changed"],"system_char_delta":0.2}}')" 3)
-check "文字数の増減が 0 に丸まるなら添えない" "$(all "$(has 'system_prompt_changed' "$O")" "$(no '+0' "$O")")" "$O"
+O=$(render "$(pay "${PCM}"',"last_miss_cause":{"causes":["system_prompt_changed"],"system_char_delta":-340}}')" 3)
+check "システムプロンプトの文字数の増減は添えない" \
+  "$(all "$(has 'system_prompt_changed' "$O")" "$(no '340' "$O")")" "$O"
 # 原因と数の対応を取り違えない（ツール数は tools_changed のときだけ）
 setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"caching_observed":true,"last_miss_cause":{"causes":["ttl_expired_5m"],"tools_added":2}}')" 3)
-check "原因に対応しない数は添えない" "$(all "$(has 'cold ttl_expired_5m' "$O")" "$(no '+2' "$O")")" "$O"
+O=$(render "$(pay "${PCM}"',"last_miss_cause":{"causes":["ttl_expired_5m"],"tools_added":2}}')" 3)
+check "原因に対応しない数は添えない" "$(all "$(has 'ttl_expired_5m' "$O")" "$(no '+2' "$O")")" "$O"
+setup
+O=$(renderz UTC "$(pay "${PCM}"'}')" 3)
+check "原因が無い miss でも miss の時刻は出す" "$(has "miss $MT" "$O")" "$O"
+# **warm に付けた miss も 1 要素 1 色**（strip した文字列では色を外しても dim を足しても緑になるので、
+# 生の出力で「先頭の SGR から行末の RST まで別の SGR が無い」を見る）
+one_sgr() {  # one_sgr PREFIX HAYSTACK — PREFIX の後ろが RST 1 つで終わり、途中に ESC が無いなら 1
+  local r="${2#*"$1"}" e=$'\033[0m'
+  [ "$r" != "$2" ] || return 0
+  local b="${r%"$e"}"
+  [ "$b" != "$r" ] || return 0
+  case "$b" in *$'\033'*) ;; *) printf 1 ;; esac
+}
+setup
+_raw=$(rawr "$(pay "${PCM}"',"last_miss_cause":{"causes":["tools_changed"],"tools_added":2}}')" 3)
+check "warm に付けた miss も同じ 1 色で、行末で閉じる" \
+  "$(all "$(has 'tools_changed +2' "$_raw")" "$(one_sgr "${CW_SGR}cache 5m" "$_raw")")" "$(printf '%s' "$_raw" | cat -v)"
 # 型が変わっても抽出ごと落とさない
 setup
-O=$(render "$(pay ',"prompt_cache":{"warm":false,"ttl":5,"expires_at":"x","misses":"3","last_miss_cause":{"causes":["tools_changed"],"tools_added":"2"}}')")
+O=$(render "$(pay ',"prompt_cache":{"warm":false,"ttl":5,"expires_at":"x","misses":"3","last_miss_at":"x","last_miss_cause":{"causes":["tools_changed"],"tools_added":"2"}}')")
 check "prompt_cache の各フィールドの型が変わっても抽出が生き残る" \
-  "$(all "$(no 'jq error' "$O")" "$(has 'cold tools_changed' "$O")" "$(has '31%' "$O")")" "$O"
+  "$(all "$(no 'jq error' "$O")" "$(has 'cold' "$O")" "$(has '31%' "$O")")" "$O"
+setup
+O=$(render "$(pay "${PCM}"',"misses":"3","last_miss_cause":{"causes":["tools_changed"],"tools_added":"2"}}')")
+check "warm の miss の各フィールドの型が変わっても原因は生き残る" \
+  "$(all "$(no 'jq error' "$O")" "$(has 'tools_changed' "$O")" "$(no '+2' "$O")")" "$O"
+setup
+O=$(render "$(pay ',"prompt_cache":{"warm":true,"caching_observed":true,"ttl":"5m","expires_at":'"$E5"',"last_miss_at":"x","last_miss_cause":{"causes":["tools_changed"]}}')")
+check "last_miss_at が数でなければ miss を出さない（抽出は生き残る）" \
+  "$(all "$(no 'jq error' "$O")" "$(no 'tools_changed' "$O")" "$(has 'cache 5m' "$O")")" "$O"
 setup
 O=$(render "$(pay ',"prompt_cache":{"warm":false,"last_miss_cause":"s"}')")
 check "last_miss_cause が文字列でも抽出が生き残る" \
   "$(all "$(no 'jq error' "$O")" "$(has 'cold' "$O")")" "$O"
 
 echo "── 1 行目: 宛名と session id ──"
+setup; L=$(render "$(pay ',"fast_mode":true')" 1)
+check "fast_mode が true なら fast を出す" "$(has 'fast' "$L")" "$L"
+setup; L=$(render "$(pay ',"fast_mode":"true"')" 1)
+check "fast_mode が文字列の true なら出さない" "$(no 'fast' "$L")" "$L"
 # **宛名は `session_name` と同じなら出さない／違えば出す**を対で持つ（片方だけだと「常に出さない」
 # 変更が緑で通る）。**session id は行末に全桁**（`--resume` は 8 桁を受けない）。
 SID="8505e86d-3f0c-4c97-afc4-6237463f3650"
@@ -564,10 +625,25 @@ check "宛名が session_name と違えば出す" "$(has 'renamed-peer' "$L")" "
 setup; peer_fixture "renamed-peer"
 L=$(render "$(pay ",\"session_id\":\"$SID\"")" 1)
 check "session_name が無い（旧 CC）なら宛名を出す" "$(has 'renamed-peer' "$L")" "$L"
+# 比較は**完全一致**（部分一致にすると `… 配布` と `… 配布 ⑂ codex` の実例で宛名が消える）
+setup; peer_fixture "same title"
+L=$(render "$(pay ",\"session_id\":\"$SID\",\"session_name\":\"same title ⑂ codex\"")" 1)
+check "宛名が session_name の前方部分なだけなら出す" "$(has 'same title' "$L")" "$L"
+# **JSON のエスケープを含む宛名は出さない**（最初の `"` で切るので `a \"b\" c` が `a \` になる）
+setup; mkdir -p "$CFG/sessions"
+printf '{"pid":1,"sessionId":"%s","name":"a \\"b\\" c","nameSource":"user"}' "$SID" > "$CFG/sessions/1.json"
+L=$(render "$(pay ",\"session_id\":\"$SID\",\"session_name\":\"other\"")" 1)
+check "エスケープを含む宛名は出さない" "$(all "$(no 'a \' "$L")" "$(no 'other' "$L")")" "$L"
+setup; peer_fixture "plain-peer"
+L=$(render "$(pay ",\"session_id\":\"$SID\",\"session_name\":\"other\"")" 1)
+check "エスケープを含まない宛名は出す（上の対）" "$(has 'plain-peer' "$L")" "$L"
 ends_sid() { case "$1" in *" $SID") printf 1 ;; esac; }
 setup
 L=$(render "$(pay ",\"session_id\":\"$SID\"")" 1)
 check "session id は 1 行目の末尾に全桁で出す" "$(ends_sid "$L")" "$L"
+setup
+_raw=$(rawr "$(pay ",\"session_id\":\"$SID\"")" 1)
+check "session id は dim で出す" "$(has $'\033[2m'"$SID"$'\033[0m' "$_raw")" "$(printf '%s' "$_raw" | cat -v)"
 setup
 O=$(render "$(pay ",\"session_id\":\"a*b c\"")")
 check "英数字と - 以外を含む session id は出さない" \
