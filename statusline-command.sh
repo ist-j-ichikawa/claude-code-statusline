@@ -2,10 +2,11 @@
 # statusline-command.sh — 並列セッションで困る 3 つ（「これはどのセッションか」「どのアカウントに
 # 課金されるか」「枠の残り」）に絞った 3 行。**1 ファイルで完結**（旧 `lib.sh` は取り込み済み。
 # `source` しないのでどのディレクトリから起動しても動く）。
-# **`--subagent` を渡すと別モード**になり、`subagentStatusLine` 用に `{"id","content"}` を 1 行 1 件で
-# 返す（`subagent_rows`。3 行の経路には入らない）。
+# **`--subagent` モードは 2.18.0 で削除した** — 上流が `subagentStatusLine` を 2.1.323 で削除し、2.1.326 で
+# 「非推奨・まだ動く・いずれ止まる（mods へ移行）」として戻した。非推奨のものは持たない（2026-11-17 ユーザー指示）。
 #
-# **Built against Claude Code 2.1.318**（`experiments/upstream/2.1.318/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.326**（`experiments/upstream/2.1.326/` に教典 3 つを snapshot 済み）。
+# 2.1.318 → 326（320 は欠番）もメインの payload のキーの増減ゼロ（8 版のバイナリを照合）。
 # 2.1.317 → 318 もキーの増減ゼロ。
 # 2.1.310 → 317（313 は欠番）もキーの増減ゼロ。311 から `session_name` は Remote Control のセッション名を
 # 優先する（このスクリプトは宛名が `session_name` と同じかの判定にだけ読む。park 中の出自マーカーは描かない）。
@@ -72,8 +73,7 @@ set -uo pipefail
 # `source` で 2 本に割る理由が無くなった。**取り込みは丸ごと** — 旧 `lib.sh` の 63%（12 関数 /
 # 31 定数）は実際に使っており、選択抽出すると 1 行関数（`gradient` / `rainbow`）の範囲を誤る。
 # **未使用のまま残しているものがある**（`osc8` / `editor_url` / `fmt_elapsed` / vim 色 /
-# `FORK_GLYPH` / `AGENT` / `DRAFT` 等）。park 中のフッター等の要素で使うもので（`--subagent` の行は
-# このうち何も使わない）、色の根拠と
+# `FORK_GLYPH` / `AGENT` / `DRAFT` 等）。park 中のフッター等の要素で使うもので、色の根拠と
 # `%` エンコード順の教訓が乗っているので**消さない**。**剪定を試みて撤回した**理由も残す:
 # `(( ))` の算術は変数を `$` なしで参照するので、`$` ベースで未使用を数えると `ACCT_TTL` を
 # 「未参照」と誤判定する（37 行の削減にリスクを払う価値がない）。
@@ -94,68 +94,48 @@ readonly GIT=$'\033[38;5;202m'
 # **枠 90%+** / 遅れた版は「問題」、`+N -N ↑N ↓N` は「量」なので、色の役割を混ぜない。
 readonly DIFF_ADD=$'\033[38;5;71m'    # GitHub dark --fgColor-success 相当 (#5faf5f)
 readonly DIFF_DEL=$'\033[38;5;203m'   # GitHub dark --fgColor-danger  相当 (#ff5f5f)
-readonly CORAL_N=173   # Opus の粘土コーラル。SGR 文字列と OPUS5_PAL の両方がここから派生する
-readonly CORAL=$'\033[38;5;'"${CORAL_N}"'m' TEAL=$'\033[38;5;79m' AMBER=$'\033[38;5;214m' LAVENDER=$'\033[38;5;183m'
-# 公式単色が無いモデルのアートワーク由来パレット (rainbow=文字ごとの循環 / gradient=1回スイープ)。
-# 公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
-readonly FABLE_PAL=(178 172 130 167 143 107 66)   # Fable 5: 蝶標本図版 — 暖色循環 gold→amber→rust→red→olive→green→teal
-# Fable 5.1 以降: 発表記事の図版が Venus / Magellan のレーダー画像なので別パレットにする
-# (**「ヒーローアートワーク」ではない** — 5.1 の発表ページは記事のヒーロー画像を持たず、この
-# レーダー画像と標高マップは本文「Computational analysis and modeling」節の図版。Fable 5.1 自身が
-# Magellan のレーダー画像から Venus の 1/3 の高解像度標高マップを作った、という成果の説明図)
-# (蝶標本は `FABLE_PAL` として **Fable 5 専用に残す** — 旧モデルを選んだ人の画面は変えない)。
-# 実写の明度分位から 1 周ぶんの物語を取る: 暗いレーダー地表 → tan の地形 → amber の空 → 明るい山頂。
-# **アートワークの生値そのままにはしない** — 実測の最暗は `#4a4338` (238 = 純グレー) で黒地では
-# 先頭文字がほぼ沈み、最明は near-white で light テーマで飛ぶ。**知覚明度を 38 ずつ等間隔**に
-# 引き直した (`L = 0.2126R + 0.7152G + 0.0722B` = 相対輝度で 103.5/140.6/179.4/212.1、ΔL +37/+39/+33。
-# 式は `/model-colors` の規則と同じもので **CIE L* ではない**)。**180 は使わない** — すぐ左の `Anthropic` ラベルと同じ色なので
-# 1 塊に見えて要素の境界が消える。214 は Sonnet 4.5 の flat 色と同値だが、スイープ内部の 1 ストップ
-# なので衝突しない (Opus 5 が 173 = Opus 4.x 色を内部に持つのと同じ前例)。
-readonly FABLE51_PAL=(95 137 214 187)            # Fable 5.1: Venus レーダー — brick→tan→amber→cream の 1 回スイープ
-readonly SONNET5_PAL=(28 70 148 154)              # Sonnet 5: 植物モチーフ — 濃緑→黄緑
-# Opus 5: 鳥卵標本図版 (支配色が無いので単色を選べない)。Sonnet 5 と同じ「単色相を暗→明にスイープ」構造で、
-# 色相を Opus の coral 一族に取る: dark orange→CORAL→gold。彩度と明度レンジを稼ぐのが要点 —
-# 実測に忠実な低彩度の tan/olive はターミナルでくすんで「グラデーション」に見えなかった (v1.50.0 で差し替え)。
-# 両端とも mid/high 彩度なので light テーマでも飛ばない (near-white の 216/223 は不可)。
-# **ストップは知覚明度で 30 以上離す** — 隣接ストップの明度差が 10 未満だと見分けられず、スロットの無駄に
-# なる (v1.53.0 までの 5 ストップ版は 130/166 と 173/209 が各 8.5 差でほぼ同色。実質 3 段だった)。
-readonly OPUS5_PAL=(130 $CORAL_N 215)
-# **Opus 5.5 = 軌道から見た夜明けの地平線**（発表ページ https://www.anthropic.com/news/claude-opus-5-5
-# の **og:image = シェア用画像**、2026-09-22。本文にヒーロー画像は無く、figcaption はベンチマークの
-# 図だけ = 「アートワーク由来」の裏は og:image でしか取れない）。中央パネルを縦に実測すると
-# 空の青 `#6886ab`（xterm 67）→ **くすんだ灰紫 `#8e869f`（103）** → 淡い砂色 `#d8b089`（180）→
-# 橙の地平線 `#c2652f`（130）。**実物の紫は彩度の低い細い帯**で、青と明度がほぼ同じ（L≈134）。
-# **生値のままだと ΔL が 9 で見分けられない**ので、規則（ΔL 28 以上・彩度レンジ > 忠実さ）に従い
-# **青を藍へ暗く・紫を明るく**寄せた: L = 100.8 → 146.4 → 186.3（+46 / +40）。**紫は 139（`#af87af`、
-# 灰みの藤色）** — 実物の帯はピンク寄りのくすんだ色なので、試した 140（`#af87d7`、青みの薄紫）より
-# 色相が近い（2026-09-24 にユーザーが「公式に近い方」を選んだ）。**青と橙は実物から離したまま** —
-# 実物の青 67 は紫との明度差が 17 で規則を割り、実物の橙 130 は紫より暗くて暗→明の並びが崩れる
-# （しかも 130 は Opus 5 の先頭色で、世代の見分けが消える）。
-# **180（`Anthropic` と同色）と 104 / 105（隣の `effort` の periwinkle）は使わない**。
-# **末尾の 215 は Opus 5 と共有** — 系譜が 1 文字で読める（先頭の色で世代を分ける）。
-# 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
-readonly OPUS55_PAL=(61 139 215)
-# **Sonnet 5.5 = 宇宙船の窓から見た地球**（発表ページ https://www.anthropic.com/claude-sonnet-5-5 の
-# **og:image**、2026-09-29。`/news/` の下ではなくトップ直下にある = サイトマップで引く。本文の図版は
-# ベンチマークとデモ動画だけ）。黒い宇宙・青い地球・白い雲で、地球部分の 72% が青。明度分位の実測:
-# 深い海 `#1b6194`（≒25）→ 海と大気 `#6c99b8`（≒68）→ 雲 `#b1bdcb`（≒146/153）。**層の順に暗→明**
-# に並べ、大気と雲の間に 110 を 1 段足して明度をほぼ等間隔にした: L = 81 → 132 → 169 → 209
-# （+51 / +37 / +40）。**実測の最近傍（24 / 67 / 109 / 146）は低彩度で端末ではくすむ**ので採らない
-# （Opus 5 の初版と同じ理由）。**Sonnet 5 の緑とは系統ごと変わる** — Opus 5.5 のように末尾を共有する
-# 形は、アートワークに緑が無いので取らなかった。2026-09-29 にユーザーが 3 案から選んだ。
-# 公式の単色は未発表（出たら flat へ差し替える判断をユーザーに仰ぐ）。
-readonly SONNET55_PAL=(25 68 110 153)
-# Haiku 5.5 = 発表ページ https://www.anthropic.com/claude-haiku-5-5 の **og:image**（2026-10-08）。白地に
-# 3 枚のパネル: 左の黄 `#f4ca36`（≒220）・中央の赤い線 `#f19394`（≒210）・右の青 `#375d8a`（≒67）。
-# **青を使わず、ピンクと黄だけで暗→明にスイープする**（ローズ 168 → ピンク 175 → 麦わら 222、
-# L = 123 → 155 → 218）。青は Opus 5.5 の先頭（藍 61）と Sonnet 5.5 の全体が使っているので、藍 → ピンク →
-# 暖色にすると Opus 5.5 と同じ骨組みに見える（実機で「Opus と似てる」）。向きと彩度（0.4〜0.6）は
-# 他の 5.5 系に揃えた。**初版は画像の生の 3 色（220 → 210 → 67）を左→右の順に並べたが、1 本だけ明→暗の
-# 逆向きで、原色の黄（彩度 1.0）が浮いて「ださい」と撤回した**（2026-10-08）。外した色: 178（effort
-# `low`）/ 173（Opus の coral）/ 203（削除行の赤）/ 25・61（Sonnet 5.5 / Opus 5.5 の先頭色）。末尾の麦わら
-# 222 は隣の `low` 178 と同系なので、詰まって見えたら最初に疑う。2026-10-08 にユーザーが 5 案から R2 を選んだ。
-# Haiku 4.5 以前は flat の lavender のまま（旧モデルを選んだ人の画面を変えない）。公式の単色は未発表。
-readonly HAIKU55_PAL=(168 175 222)
+# **モデルの色は tier ごとに 1 本 = 最新の版の発表アートワーク**（2.18.0、2026-11-11 ユーザー指示
+# 「最新以外の色取っといても仕方ない／最新しか使わない」）。**最新より古い版はグレー**（下の `MODEL_OLD`）、
+# 版が読めない（3 行目の `Fable:39%` = `/usage` が版を返さない）か最新以上の版は tier の色。旧い版の色
+# （Opus 4.x の coral / Sonnet 4.6 の teal / Sonnet 4.5 の amber / Haiku 4.x の lavender / Opus 5・Sonnet 5・
+# Fable 5・5.1 の多色）は消した。値と出典は `/model-colors` に記録として残してある。
+# **色を持つのが 4 本だけなので、4 本の色相を分けることを最優先にする**（2026-11-11 に 4 本並べてユーザーが
+# 選んだ）: Opus = 橙 / Sonnet = 青 / Haiku = ローズ / Fable = 紫。次の版が出たらパレットを差し替えるだけで
+# arm は増やさない（作り直すときは残り 3 本と被らないかを先に見る）。全部 gradient（1 回スイープ。
+# rainbow=循環は呼び出しが無い）。公式色が claude.ai に現れたら flat 単色へ差し替える前提の暫定色。
+# **180（`Anthropic` と同色）と 104 / 105（隣の `effort`）はどのパレットにも使わない**。
+#
+# **Fable = 5.2** の発表ページ（`/claude-fable-and-mythos-5-2`）の og:image — 本文の図は全部ベンチマーク。
+# 軌道から見た縁の紫と左のフレア。縁の実測は 61/103/139。**縁の紫だけの単色相の暗→明**:
+# L 112.2 → 149.3 → 186.4（ΔL +37/+37）。没: 錆色→ローズ→淡い蘭色（131 175 219）— 末尾 219 が 3 行目の
+# `cache` のピーチ 216 と並んで溶ける。
+readonly FABLE_PAL=(98 140 182)                  # Fable 5.2: 夜明けの縁の紫 — violet→lavender→orchid
+# **Opus = 5.5** の発表ページ（https://www.anthropic.com/claude-opus-5-5）の og:image。上が空の青・中央に
+# 橙の地平線・左に黄・右に赤茶のパネル。**空の青は Sonnet と被るので使わず、地平線の暖色だけ**: 帯の実測
+# （`--crop 0.17,0.5,0.82,0.6`）が 130 → 173、左の黄のパネルが 178 / 215 で、暗→明に並べた
+# （L = 105.1 → 149.1 → 186.2、+44 / +37）。173 は Opus 4.x の coral と同じ番号。以前（〜2.17.0）の
+# `61 139 215`（藍 → 灰みの藤 → 橙）は、頭の藍が Sonnet の青・Fable の紫と近く、中間の 139 が Fable の 140 と
+# ほぼ同じだった。末尾 215 は Haiku の末尾 222 と同じ淡い暖色だが、同じ行には並ばない。
+readonly OPUS_PAL=(130 173 215)                  # Opus 5.5: 地平線の暖色 — rust→coral→gold
+# **Sonnet = 5.5** の発表ページ（https://www.anthropic.com/claude-sonnet-5-5、トップ直下）の og:image。
+# 宇宙船の窓から見た地球で、地球部分の 72% が青。深い海 `#1b6194`（≒25）→ 海と大気 `#6c99b8`（≒68）→
+# 雲 `#b1bdcb`（≒146/153）を**層の順に暗→明**に並べ、大気と雲の間に 110 を 1 段足した: L = 81 → 132 →
+# 169 → 209（+51 / +37 / +40）。実測の最近傍（24 / 67 / 109 / 146）は低彩度で端末ではくすむので採らない。
+# 2026-09-29 にユーザーが 3 案から選んだ。
+readonly SONNET_PAL=(25 68 110 153)              # Sonnet 5.5: 窓から見た地球 — deep sea→cloud
+# **Haiku = 5.5** の発表ページ（https://www.anthropic.com/claude-haiku-5-5）の og:image。白地に 3 枚の
+# パネル: 左の黄 `#f4ca36`（≒220）・中央の赤い線 `#f19394`（≒210）・右の青 `#375d8a`（≒67）。
+# **青を使わず、ピンクと黄だけで暗→明**（ローズ 168 → ピンク 175 → 麦わら 222、L = 123 → 155 → 218）。
+# 青は Sonnet が使う。没: 生の 3 色を左→右（220 → 210 → 67。明→暗で原色の黄が浮く）/ 藍 → ピンク → 暖色
+# （当時の Opus 5.5 と同じ骨組み）/ 2026-11-11 の黄（136 179 221・100 142 220）と赤い線（167 210 217）—
+# ユーザーは今の色を選んだ。外した色: 178（effort `low`）/ 203（削除行の赤）。末尾 222 は隣の `low` 178 と
+# 同系なので、詰まって見えたら最初に疑う。2026-10-08 にユーザーが 5 案から R2 を選んだ。
+readonly HAIKU_PAL=(168 175 222)                 # Haiku 5.5: rose→pink→straw
+# tier ごとの最新の版（`model_key` の正規形）。これより古い版はモデル名をグレー 1 色（`MODEL_OLD`）で描く。
+# **新しい版が出たらここの 1 語とその tier のパレットを差し替える**（arm は増やさない）。
+readonly MODEL_LATEST=("opus 5.5" "sonnet 5.5" "haiku 5.5" "fable 5.2")
+# 244 = `#808080`。同じ行の版（`DIMVER` 248）より一段暗くして、古いモデル名と版の数字が 1 塊に見えないようにする。
+readonly MODEL_OLD=$'\033[38;5;244m'
 readonly AGENT=$'\033[38;5;213m' DIMVER=$'\033[38;5;248m'
 # 最新版から遅れている時だけの色。**アラーム色 = 既存の赤**（ユーザー選択、2026-08-17）—
 # 明度だけ上げる白 (231) は「気づく」には弱かった。赤はこの statusline で既に
@@ -233,9 +213,9 @@ osc8() {
 editor_url() { printf -v "$2" 'file://%s' "$1"; }
 
 # rainbow  VARNAME TEXT COLOR... — 文字ごとにパレットを循環。順序に意味が無いパレット向け
-#   (Fable: 蝶標本の多色を均等に出したい)。
+#   (今は呼び出しが無い。Fable 5 の蝶標本で使っていた。2.18.0 で Fable は gradient 1 本になった)。
 # gradient VARNAME TEXT COLOR... — パレットを1回スイープ。順序に意味があるパレット向け
-#   (Sonnet 5 / Opus 5: 暗→明の方向が絵になる)。先頭文字は必ずパレット先頭色になるが、
+#   (全モデルのパレット: 暗→明の方向が絵になる)。先頭文字は必ずパレット先頭色になるが、
 #   それ以外の色位置は文字数依存なので特定の語には固定できない。
 # どちらも fork ゼロ (printf -v)。パレット未指定なら無色テキストへ degrade —
 # 呼び出しは ${PAL[@]+"${PAL[@]}"} で展開すること (bash 3.2 の set -u は空配列の "${a[@]}" で即死し、
@@ -267,7 +247,7 @@ _paint() {
 # inference-profile を 1 つの正規形に畳む。
 # 正規形は**必ず小文字**になる (tier 名はループのリテラルから取るので bash 4+ の ${var,,} が不要)。
 # **サポート下限は 4.x** (3.x 系は全廃止済み)。旧形式 id (版が tier より前、`claude-3-5-sonnet-…`)
-# は版スロットに日付が入る (`sonnet 20241022`) が、generic tier 色に落ちるだけで壊れない。
+# は版スロットに日付が入る (`sonnet 20241022`) が、「古くない」扱いで tier の色になるだけで壊れない。
 model_key() {
   local _s="$2|${3:-}" _t _mi _out=""
   shopt -s nocasematch
@@ -278,11 +258,11 @@ model_key() {
       # 版スロットには**日付が来ることがある** — minor を持たない tier の dated id
       # (`claude-opus-4-20250514` / `claude-opus-5-20260101`) では第 2 group が `-20250514` になる。
       # 5 桁以上を日付とみなして捨て、正規形を常に `tier N[.N]` に保つ。これがあるので
-      # model_color の arm は完全一致で足り「新モデルはパレット 1 行 + arm 1 行」が本当に成立する。
+      # 正規形がぶれない（model_color はこの版を `MODEL_LATEST` と比べて古い版をグレーにする）。
       _mi="${BASH_REMATCH[2]}"
       [[ ${#_mi} -le 3 ]] && _out="$_out${_mi/-/.}"   # "-5" も ".5" も ".5" に寄せる
     else
-      _out="$_t"          # 版が読めない ("Opus" 単体等) — generic tier 色に落ちる
+      _out="$_t"          # 版が読めない ("Opus" 単体等) — グレーにせず tier の色
     fi
     break
   done
@@ -291,30 +271,34 @@ model_key() {
 }
 
 # model_color VARNAME MODEL_SHOW [MODEL_ID] — sets VARNAME to MODEL_SHOW fully rendered in its
-# tier color (no subshell)。Shared by Line 1 (main) and the subagent rows so both use identical
-# model coloring。判定は model_key の正規形に対する**完全一致**で、順序ルールは 2 つ:
-# 「generic tier の arm を最後に置く」と「`5.5` の arm を `5.`* の arm より前に置く」（後ろだと
-# `5.`* が `5.5` を拾う。テストが 5 と 5.5 の色を対で pin）。新モデルはパレット 1 行 + arm 1 行で足せる。
-# Fable / Sonnet 5・5.5 / Opus 5・5.5 / Haiku 5.5 は公式単色が無いので多色描画 (rainbow/gradient)。
-# **Fable は 2 本ある** — `fable 5` だけが蝶標本の循環で、5.1 と**版が読めない裸の `Fable`**
-# (`/usage` の `limits[]` は `"Fable"` しか返さない) は Venus のスイープに落ちる。既定モデルが
-# 5.1 なので、Line 3 の `Fable:39%` が Line 1 と揃うのはこの向きだけ。
+# tier color (no subshell)。**色の arm は tier ごとに 1 つ**（2.18.0。パレットは最新の版の 1 本 — 理由は
+# `FABLE_PAL` の上のコメント）。**その前に `MODEL_LATEST` と版を比べ、古ければグレーで返す**。
+# 新しい版は `MODEL_LATEST` とパレットの差し替え、新しい tier は arm 1 行と `MODEL_LATEST` 1 語。
+# **最新より古い版はグレー 1 色**（`MODEL_OLD`。2.18.0、2026-11-11 ユーザー指示「最新以外は、最新を
+# 使えって促す色」→ グレー。指示当時はサブエージェントの行も対象だったが、その行は同じ版で削除した）。赤にしないのは、旧い版はわざと選ぶことがあり
+# （コスト・Bedrock で最新が無い）赤の希少性を食うから。**判定は「`MODEL_LATEST` の版より古い」だけ** —
+# 「一致しない」で判定すると、スクリプトの更新前に出た新しい版（Opus 5.6）を古く見せる = 誤読。
+# 版が読めない tier（3 行目の `Fable:` / `Opus:`、裸の `Opus`）は古くないので tier の色。
+# 新しい版が出たら `MODEL_LATEST` の 1 語とパレットを差し替える。
 model_color() {
-  local _ms="$2" _key
+  local _ms="$2" _key _t _lv
   model_key _key "$2" "${3:-}"
+  if [[ "$_key" == *" "* ]]; then
+    for _lv in ${MODEL_LATEST[@]+"${MODEL_LATEST[@]}"}; do
+      _t="${_lv%% *}"
+      [[ "${_key%% *}" == "$_t" ]] || continue
+      if ver_older "${_key#* }" "${_lv#* }"; then
+        printf -v "$1" '%s' "${MODEL_OLD}${_ms}${RST}"; return 0
+      fi
+      break
+    done
+  fi
   case "$_key" in
-    "fable 5")                  rainbow  "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
-    fable*)                     gradient "$1" "$_ms" ${FABLE51_PAL[@]+"${FABLE51_PAL[@]}"} ;;
-    "opus 5.5"|"opus 5.5"*)     gradient "$1" "$_ms" ${OPUS55_PAL[@]+"${OPUS55_PAL[@]}"} ;;
-    "opus 5"|"opus 5."*)        gradient "$1" "$_ms" ${OPUS5_PAL[@]+"${OPUS5_PAL[@]}"} ;;
-    "sonnet 5.5"|"sonnet 5.5"*) gradient "$1" "$_ms" ${SONNET55_PAL[@]+"${SONNET55_PAL[@]}"} ;;
-    "sonnet 5"|"sonnet 5."*)    gradient "$1" "$_ms" ${SONNET5_PAL[@]+"${SONNET5_PAL[@]}"} ;;
-    "sonnet 4.5")               printf -v "$1" '%s' "${AMBER}${_ms}${RST}" ;;
-    opus*)                      printf -v "$1" '%s' "${CORAL}${_ms}${RST}" ;;
-    sonnet*)                    printf -v "$1" '%s' "${TEAL}${_ms}${RST}" ;;
-    "haiku 5.5"|"haiku 5.5"*)   gradient "$1" "$_ms" ${HAIKU55_PAL[@]+"${HAIKU55_PAL[@]}"} ;;
-    haiku*)                     printf -v "$1" '%s' "${LAVENDER}${_ms}${RST}" ;;
-    *)                          printf -v "$1" '%s' "$_ms" ;;
+    fable*)  gradient "$1" "$_ms" ${FABLE_PAL[@]+"${FABLE_PAL[@]}"} ;;
+    opus*)   gradient "$1" "$_ms" ${OPUS_PAL[@]+"${OPUS_PAL[@]}"} ;;
+    sonnet*) gradient "$1" "$_ms" ${SONNET_PAL[@]+"${SONNET_PAL[@]}"} ;;
+    haiku*)  gradient "$1" "$_ms" ${HAIKU_PAL[@]+"${HAIKU_PAL[@]}"} ;;
+    *)       printf -v "$1" '%s' "$_ms" ;;
   esac
 }
 
@@ -380,11 +364,8 @@ plan_label() {
 }
 
 # effort_color VARNAME LEVEL — sets VARNAME to LEVEL rendered in its effort color (no subshell)。
-# Line 1 と `--subagent` の行の両方から呼び、語彙と配色を揃える。
 # **未知のレベルは既定の薄紫に落とす** — 上流がレベルを増やしても無色にならず、色だけが既知の
 # ランプから外れる（旧 Claude Code / 新レベルの両方で graceful degradation）。
-# `effort` は数値のトークン予算で来ることもある（subagent の payload。`32k` に畳んで渡す）ので、
-# その場合も既定色に落ちる。
 effort_color() {
   case "$2" in
     low)    printf -v "$1" '%s' "${EFFORT_LOW}$2${RST}" ;;
@@ -462,147 +443,11 @@ format_tokens() {
   fi
 }
 
-# ── subagent 行（`subagentStatusLine` から `--subagent` で呼ぶ）──────────────────
-# **起点は本体の既定の行で、そこからの差分だけを足す**（2026-09-29 ユーザー方針）。既定は
-# `名前列  説明  経過 · ↓ 12.4k tokens · N queued`（2.1.284 のバイナリで確認。名前列だけ 293 で `name ?? agentType` になった）。本体は
-# **前置き（選択カーソル / ツリー線 / 状態の丸）だけ残して、その右を `content` で丸ごと差し替える**
-# ので、足したい要素が 1 つでも既定の中身を描き直すことになる。
-# **差し替えるのは `type == "local_agent"` の行だけ** — teammate / workflow / bash / remote は id を
-# 出さず既定のまま残す（`idle` / `awaiting approval` はそちらの語彙）。差し替えた行で**失うもの**は
-# stdin に来ない 3 つ: `waiting`（待機中）・`N queued`・↓/↑（直近の活動）。↓/↑ は `tokenSamples` から
-# 近似できるが推測値なので出さない（無表示 < 誤読）。
-# **既定から足したのはモデル名・effort・🌲worktree**（Line 1 と同じ `model_color` / `effort_color`。非選択の行は
-# 本体が dim をかける）。effort はセッションから継承すると来ない = **違うときだけ出る**（差分がシグナル）。
-# 並びは 名前 → モデル → effort → 🌲worktree → 説明（🌲 はセッションと違う worktree のときだけ。隔離した
-# サブエージェントの `agent-<hex>` は名前を出さず 🌲 だけ）。モデルを名前の直後に置く — 右端から切られるので、右に置くと狭い窓で最初に消え、説明の後ろだと行ごとに
-# 桁がずれて縦に見比べられない。
-# - **名前列は既定と同じ `name ?? agentType`**（`name` は名前付きで起動したときだけ来る）。`agentType`
-#   （`Explore` 等）は 2.1.293 で payload に入った — それより前の版では無名のエージェントの名前列が落ちる。
-# - **経過は `running` のときだけ** — payload に `endTime` が無いので、終わった行に出すと
-#   `now - startTime` が伸び続ける（誤読）。一時停止の時間も来ないので、その分は含む。
-# - 名前とモデルは差し替えた行どうしで桁を揃える（全行が 1 回の呼び出しで来る）。effort と 🌲 は揃えない。
-# 外部プロセスは抽出の jq 1 個（`now` も jq から取る = `date` fork ゼロ）。
 
-# prettify_model ID VARNAME — `claude-sonnet-5-5[1m]` / Bedrock の `[us.]anthropic.claude-…-v1:0` を
-# `Sonnet 5.5` に畳む。**日付つき id の末尾 8 桁だけを落とす**（「末尾の数字」で消すと版を食う）。
-prettify_model() {
-  local m="$1"
-  [[ "$m" == *anthropic.* ]] && m="${m##*anthropic.}"   # region prefix（`us.`）が無い素の id も剥がす
-  m="${m#claude-}"; m="${m%\[1m\]}"
-  m="${m%%:*}"; m="${m%-v[0-9]*}"   # Bedrock の版接尾辞（実 id は `-v1:0`）。`:N` を先に落とす
-  m="${m%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]}"
-  local tier="${m%%-*}" ver="${m#*-}" _t
-  case "$tier" in
-    opus) _t=Opus;; sonnet) _t=Sonnet;; haiku) _t=Haiku;; fable) _t=Fable;;
-    *) printf -v "$2" '%s' "$m"; return;;
-  esac
-  [[ "$m" != *-* ]] && ver=""        # 版が無い id（`opus`）は tier のみ
-  ver="${ver//-/.}"
-  printf -v "$2" '%s%s' "$_t" "${ver:+ $ver}"
-}
-
-# json_str TEXT VARNAME — JSON 文字列の中身に escape する。**順序 `\` → `"` → ESC は不変条件**
-# （`\` を後にすると自分で足した `\` を二重にする）。制御文字は jq 側で空白にしてあるので
-# 残るのは色の ESC だけ。
-json_str() {
-  local s="$1"
-  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\033'/\\u001b}"
-  printf -v "$2" '%s' "$s"
-}
-
-subagent_rows() {
-  local _US=$'\037' _rows _now _l _i _n=0 _wn=0 _wm=0 _pm _mc _sp _e _t _row _ji _jr _out=""
-  local _id _name _model _desc _st _start _tok _eff _ec _cwd _scwd _wt _f _fs=()
-  local _agwt='^agent-a([0-9a-f]{16}|[0-9a-f]{7})$'
-  local ids=() names=() mplain=() mcol=() eplain=() ecol=() wts=() descs=() tails=()
-  # 各段に `?`、数値は `type == "number"` で守る — 1 task の型変更で抽出ごと abort すると
-  # 全行が既定に戻る（壊れ方としては安全側だが、黙って効かなくなる）。
-  _rows=$(jq -r '
-    ((now | floor | tostring) + "\u001f"
-     + (.cwd? | if type == "string" then gsub("[[:cntrl:]]"; " ") else "" end)),
-    (.tasks? | if type == "array" then .[] else empty end
-     | select(type == "object" and .type? == "local_agent")
-     | [ .id?,
-         (if (.name? | type) == "string" and .name != "" then .name else .agentType? end),
-         .model?,
-         (if (.label? | type) == "string" and .label != "" then .label else .description? end),
-         .status?,
-         (.startTime? | if type == "number" then (. / 1000 | floor | tostring) else "" end),
-         (.tokenCount? | if type == "number" then (floor | tostring) else "" end),
-         (.effort? | if type == "object" then .level? else . end
-                   | if type == "number" then (floor | tostring) else . end),
-         .cwd? ]
-     | map(if type == "string" then gsub("[[:cntrl:]]"; " ") else "" end)
-     | join("\u001f"))' 2>/dev/null) || return 0
-  _now="${_rows%%$'\n'*}"
-  _scwd="${_now#*"$_US"}"; _now="${_now%%"$_US"*}"
-  [[ "$_rows" == *$'\n'* ]] || return 0
-  _rows="${_rows#*$'\n'}"$'\n'
-  [[ "$_now" =~ ^[0-9]+$ ]] || return 0
-  while [[ -n "$_rows" ]]; do
-    _l="${_rows%%$'\n'*}"; _rows="${_rows#*$'\n'}"
-    # US で割るのは bash の展開で（`read <<<` / ヒアドキュメントは 3.2 で一時ファイルを作る）。
-    # 空のフィールドも 1 個として積む — 末尾に US を足してから「残りが空になるまで」剥がす。
-    _fs=(); _f="$_l$_US"
-    while [[ -n "$_f" ]]; do _fs+=("${_f%%"$_US"*}"); _f="${_f#*"$_US"}"; done
-    _id="${_fs[0]:-}" _name="${_fs[1]:-}" _model="${_fs[2]:-}" _desc="${_fs[3]:-}"
-    _st="${_fs[4]:-}" _start="${_fs[5]:-}" _tok="${_fs[6]:-}" _eff="${_fs[7]:-}" _cwd="${_fs[8]:-}"
-    [[ -n "$_id" ]] || continue
-    _pm="" _mc=""
-    if [[ -n "$_model" ]]; then prettify_model "$_model" _pm; model_color _mc "$_pm" "$_model"; fi
-    # effort は数値のトークン予算で来ることもある — `32k` に畳んで既定色（`effort_color` の `*)`）
-    _ec=""
-    if [[ "$_eff" =~ ^[0-9]+$ ]]; then fmt_ctx_size "$((10#$_eff))" _eff; fi
-    [[ -n "$_eff" ]] && effort_color _ec "$_eff"
-    # 🌲 は**セッションと違う worktree で走っている行だけ**。セッション自身が worktree にいると
-    # 子も同じ cwd を継ぐので、比べないと全行に Line 2 と同じ名前が並ぶ（情報ゼロ）。
-    _wt=""
-    if [[ "$_cwd" == *"$WT_MARKER"* && "$_cwd" != "$_scwd" ]]; then
-      _wt="${_cwd##*"$WT_MARKER"}"; _wt="${_wt%%/*}"
-    fi
-    _t=()
-    if [[ "$_st" == running && "$_start" =~ ^[0-9]+$ ]] && ((_now >= _start)); then
-      _e=$((_now - _start))
-      if   ((_e < 60));   then _t+=("${_e}s")
-      elif ((_e < 3600)); then _t+=("$((_e / 60))m")
-      else                     _t+=("$((_e / 3600))h"); fi
-    fi
-    if [[ "$_tok" =~ ^[0-9]+$ ]] && ((_tok > 0)); then format_tokens "$_tok" _e; _t+=("$_e tokens"); fi
-    ids[_n]="$_id"; names[_n]="$_name"; mplain[_n]="$_pm"; mcol[_n]="$_mc"; descs[_n]="$_desc"
-    eplain[_n]="$_eff"; ecol[_n]="$_ec"; wts[_n]="$_wt"
-    _e=""; for _l in ${_t[@]+"${_t[@]}"}; do _e+="${_e:+ · }$_l"; done; tails[_n]="$_e"
-    ((${#_name} > _wn)) && _wn=${#_name}
-    ((${#_pm} > _wm)) && _wm=${#_pm}
-    _n=$((_n + 1))
-  done
-  for ((_i = 0; _i < _n; _i++)); do
-    _row=""
-    if ((_wn > 0)); then printf -v _sp '%*s' $((_wn - ${#names[_i]})) ''; _row+="${names[_i]}$_sp  "; fi
-    if ((_wm > 0)); then printf -v _sp '%*s' $((_wm - ${#mplain[_i]})) ''; _row+="${mcol[_i]}$_sp  "; fi
-    # effort と 🌲 は**値のある行にだけ置き、幅を揃えない** — 大半の行は空なので、揃えると空の列が
-    # 説明の前に大きな隙間を作る（2026-10-08 ユーザー確認）。桁を揃えるのは名前とモデルだけ。
-    [[ -n "${eplain[_i]}" ]] && _row+="${ecol[_i]}  "
-    # **隔離したサブエージェントの worktree は 🌲 だけにする** — 名前は `agent-a<16 桁の hex>`（旧形式は 7 桁。
-    # 2.1.299 のバイナリが自分の worktree を見分けるのに使う正規表現と同じ形に合わせる）
-    # で、人が読んでも照らし合わせにも使えないのに 23 桁を食う（2026-10-14 実機で説明を右に押し出した）。
-    # 知りたいのは「別の場所で動いている」ことだけ。自分で付けた名前（`fix-auth`、`agent-refactor`）は残す。
-    if [[ -n "${wts[_i]}" ]]; then
-      if [[ "${wts[_i]}" =~ $_agwt ]]; then _row+="${DIM}🌲${RST}  "
-      else _row+="${DIM}🌲${wts[_i]}${RST}  "; fi
-    fi
-    [[ -n "${descs[_i]}" ]] && _row+="${descs[_i]}  "
-    _row+="${tails[_i]}"
-    _row="${_row%"${_row##*[! ]}"}"   # 末尾の空白を落とす（desc も経過も無い行）
-    [[ -n "$_row" ]] || continue       # 何も描けない行は既定に任せる
-    json_str "${ids[_i]}" _ji; json_str "$_row" _jr
-    _out+='{"id":"'"$_ji"'","content":"'"$_jr"'"}'$'\n'
-  done
-  [[ -n "$_out" ]] && printf '%s' "$_out"
-  return 0
-}
-
-[[ "${1:-}" == "--subagent" ]] && { subagent_rows; exit 0; }
-
+# **`--subagent` で呼ばれたら何も出さずに終わる**（2.18.0 でモードを削除）。settings に `subagentStatusLine` を
+# 残したまま pull した人の行を守るため — 何も出さなければ本体は全行を既定の見た目で描く。3 行を出すと
+# 本体が「non-JSON line」を行ごとにログへ書く（stdin の JSON を main の payload として読んでしまう）。
+[[ "${1:-}" == "--subagent" ]] && exit 0
 
 readonly CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
@@ -623,7 +468,8 @@ fi
 # **v2 専用の色はここに置く**。
 # `cold` = 氷の青（xterm 81）。**最初 AMBER 214 にして外した** — ① 語が "cold" なのに暖色で
 # **意味と色が逆** ② 隣の `$`（COST 136 ブロンズ）と同系で**並ぶと溶ける**（実機で確認）
-# ③ 214 は Fable 5.1 の Venus パレット（95/137/214/187）と番号が衝突する。
+# ③ 214 は当時の Fable 5.1 の Venus パレット（95/137/214/187）と番号が衝突した（2.18.0 で Fable は
+# 98/140/182 の 1 本になり、衝突は消えた）。
 # 81 は取り込み済みの使用番号（33 39 71 72 79 82 99 105 117 136 178 180 183 190 202 203
 # 213 214 220 231 245 248）に無く、**3 行目の他の色（緑 82 / ブロンズ 136 / タン 180）が
 # 全部暖色〜緑なので、寒色は 1 つで際立つ**。provider のブランド色（33/39/72）は避けた。
@@ -654,8 +500,8 @@ readonly CACHE_WARM=$'\033[38;5;216m'
 #    context のバーが緑で成立するのは、**あの要素が識別色を持たない**（ラベルも無く閾値色が
 #    唯一の色）から。識別色を持つ要素に足すと境界が読めなくなる。
 # ③ **名前と同じ gradient をバーにスイープ** — 埋まり桁が 1 つだと `gradient` の添字が 0 に
-#    なり、**パレット先頭の一番暗い色**が当たる（Fable 5.1 は `95` = brick）。名前は
-#    `brick→tan→amber→cream` と流れて cream で終わるので、直後のバーが brick に戻って**逆走**する。
+#    なり、**パレット先頭の一番暗い色**が当たる（当時の Fable 5.1 は `95` = brick）。名前は
+#    当時は `brick→tan→amber→cream` と流れて cream で終わるので、直後のバーが brick に戻って**逆走**する。
 #
 # **近接警告の色は 2026-09-16 に入れた**（v2.2.0。それまでは「バーの形と数値で読む」だけだった）。
 # 入れ方は**要素まるごと赤**で、**バーだけ赤は②に戻る**ので採っていない。閾値と 3 箇所の
@@ -1392,7 +1238,7 @@ fi
 # アラーム（detached / behind / context 90%+ / **枠 90%+** / 遅れた版）が薄れる。
 # **枠 90%+ を赤にした 2026-09-16 以降も、この判断は変えていない** — cold は毎日正常に起きるが、
 # 枠が 9 割を超えるのは稀で「手が止まる」直前を指すので、赤の希少性を食わない。**AMBER も外した**理由は
-# 上の `COLD` の定義に書いた（意味と色が逆・隣の `$` と溶ける・Venus パレットと番号衝突）。
+# 上の `COLD` の定義に書いた（意味と色が逆・隣の `$` と溶ける・当時の Venus パレットと番号衝突）。
 if [[ "$pc_state" == "cold" ]]; then
   _pcm=""; [[ "$pc_misses" =~ ^[0-9]+$ ]] && ((10#$pc_misses > 0)) && _pcm=" ×$pc_misses"
   line3+=("${COLD}cold${pc_ttl:+ $pc_ttl}${pc_cause:+ $pc_cause}${pc_detail:+ $pc_detail}${_pcm}${RST}")
@@ -1416,21 +1262,22 @@ if [[ "$seven_pct" =~ ^[0-9]+$ ]] && ((seven_pct > 0)); then
   # 依存して見た目がテーマで動く。新しい色相は 1 つも増やさない（3 行目は緑 82・金 136・
   # 氷青 81・タン 180・モデルのパレットで色の予算がほぼ埋まっている）。
   # **既知のリスク**: dim を 256 色と合成しない端末では `5h` と同じ色に見える。そのときの
-  # 代替は色相を変えない一段暗い単色だが、**素直な「一段暗い 180」は 137 で Fable の
-  # パレットに取られている**ので `144` / `101` へ振るしかなく色相がずれる（採らなかった）。
+  # 代替は色相を変えない一段暗い単色だが、**素直な「一段暗い 180」は 137 で、当時は Fable の
+  # パレットに取られていた**ので `144` / `101` へ振るしかなく色相がずれる（採らなかった。
+  # 2.18.0 で Fable が 98/140/182 の 1 本になり 137 は空いた — 代替が要る日はまず 137 を見る）。
   # **90%+ では dim も外す** — dim の役②（要素まるごと二次情報）と「アラーム」は両立しない。
   # 尽きかけている枠は二次情報ではないので、**RED 単独**にして輝度を落とさない。
   _sc="${DIM}${ANTH}"; ((10#$seven_pct >= LIMIT_HI)) && _sc="$RED"
   line3+=("${_sc}week:${_sb} ${seven_pct}%${seven_at:+ $seven_at}${RST}")
 fi
 # ── モデル別の週間枠（`Fable:44%`）— stdin に無いので `/usage` から ──────────
-# **モデル名は Line 1 と同じ `model_color`**（Fable なら Venus パレットの多色スイープ）。
+# **モデル名は Line 1 と同じ `model_color`**（Fable なら紫のスイープ）。
 # **`:` から先（バー・`N%`・時刻）は `_ecol` = 名前が終わった色の単色** — 1 要素に色系統を
 # 2 つ入れない（グラデを担うのは名前だけ。下の「バー以降はグラデにしない」が経緯）。
 # **90%+ ではスイープごと捨てて RED 1 色**（`LIMIT_HI`）。
 # **`/usage` の `limits[]` は版を持たない `"Fable"` しか返さない**ので、`model_color` の
-# generic な arm に落ちる。`model_color` の generic arm は**新しい方（5.1 = Venus）**に
-# 向けてあるので Line 1 と色が揃う。
+# tier の色になる。最新の版を使っていれば Line 1 と揃う。旧い版を選んでいると Line 1 はグレー、
+# こちらは tier の色で食い違うが、枠は版を持たないので tier の色が正しい（許容）。
 #
 # **リセット時刻は `week:` と違うときだけ出す**（差分がシグナル。`effort` / `fast` と同じ作法）。
 # 当初は「隣の `week:` が既に時刻を持つので重複」として落としていたが、**再検討条件に挙げていた
@@ -1483,7 +1330,7 @@ while [[ -n "$_rest" ]]; do
   #
   # **`model_color` を section ごとに呼び直すだけでよい** — `model_key` は `SHOW|ID` を連結して
   # tier を**部分一致**で探すので、SHOW にバーや数字を渡しても ID 側の名前でキーが決まる。
-  # パレットに触らずに済むので、**gradient / rainbow / flat / 色なしの 4 経路が全部そのまま
+  # パレットに触らずに済むので、**gradient / rainbow（今は未使用）/ flat / 色なしの 4 経路が全部そのまま
   # 効く**（flat なモデルは全 section 同色 = 従来と同じ絵、色なしは無色のまま）。
   # `printf -v` なのでフォークは増えない。
   #
@@ -1492,12 +1339,12 @@ while [[ -n "$_rest" ]]; do
   # **空白（バーの空き）はスイープに入れない** — 見えない桁にストップを食われて、
   # 埋まっている側が先頭色だけになる。
   #
-  # **各 section が先頭色（Fable なら `95` = brick）から始まることは受け入れる。** 名前の
-  # `F` が既に brick で、それは気に入られている形なので、**全 section が同じ所から始まれば
-  # 反復のリズムになる**（1 箇所だけ brick に戻ると「逆走」に見えたのが前案の問題だった）。
+  # **各 section が先頭色（Fable なら `98` = 紫）から始まることは受け入れる。** 名前の
+  # `F` が既に先頭色なので、**全 section が同じ所から始まれば反復のリズムになる**
+  # （1 箇所だけ先頭色に戻ると「逆走」に見えたのが前案の問題だった）。
   # **名前が終わった色を取り出す。** `_mcol` は既に色付きの名前なので**追加の呼び出しも
   # フォークも要らない** — 末尾の RST を落として「最後の `ESC[`」以降を読めば、gradient でも
-  # rainbow でも flat でも**最終文字に載った色**が取れる（Fable 5.1 なら `187` = cream）。
+  # rainbow でも flat でも**最終文字に載った色**が取れる（Fable なら `182` = orchid）。
   # **色が付かないモデル（`model_color` の `*)` arm）では空にする** — ESC が無い文字列から
   # 切り出すと、名前そのものを色コードとして書き出してしまう。
   _ecol=""

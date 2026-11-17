@@ -6,13 +6,11 @@ Claude Code の statusline を 3 行で描く bash スクリプト 1 本です�
 
 | 行 | 出すもの |
 |---|---|
-| 1 | 宛名（セッション間メッセージの宛先。セッション名と同じなら出さない）、課金先とプラン、モデル、reasoning effort、fast、Claude Code の版（追いついていれば薄く、遅れていれば赤）、session id（薄く。会話ログ `projects/<dir>/<id>.jsonl` を引く鍵で、宛先には使えない） |
+| 1 | 宛名（セッション間メッセージの宛先。セッション名と同じなら出さない）、課金先とプラン、モデル（色が付くのは各モデルの最新の版だけで、古い版はグレー）、reasoning effort、fast、Claude Code の版（追いついていれば薄く、遅れていれば赤）、session id（薄く。会話ログ `projects/<dir>/<id>.jsonl` を引く鍵で、宛先には使えない） |
 | 2 | パス、worktree 名、ブランチ、進行中の git 操作、conflicts、ahead/behind |
 | 3 | コンテキストの消費、セッションの課金額、プロンプトキャッシュ（warm の間は TTL と切れる時刻、cold になったら原因と miss 回数）、5h・週間・モデル別の枠（**90% を超えた枠は赤**） |
 
 **出さないものの方が多いです。** Claude Code が画面に常に出しているもの（PR の状態、セッション名、vim モード、変更行数）は重ねて出しません。スラッシュコマンドで見られるものも、窓が閉じたら見られなくなるものか、その数字が無いとコマンドを打つべきかも判断できないもの以外は出しません。
-
-サブエージェントの行にも、モデル名・effort・worktree を足せます（[下](#サブエージェントの行)）。
 
 ## インストール
 
@@ -43,7 +41,7 @@ git clone https://github.com/ist-j-ichikawa/claude-code-statusline.git ~/src/cla
 
 別の場所に置いた場合は、下の `~/src/claude-code-statusline` を読み替えてください。
 
-**3. settings に足す**（ほかの設定は残したまま、`statusLine` と `subagentStatusLine` だけを書き込みます。元のファイルは `.bak` に残ります）
+**3. settings に足す**（ほかの設定は残したまま、`statusLine` だけを書き込みます。以前の版で入れた `subagentStatusLine` が残っていれば消します。元のファイルは `.bak` に残ります）
 
 ```sh
 f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
@@ -52,7 +50,7 @@ d="$HOME/src/claude-code-statusline"
 cp "$f" "$f.bak"
 jq --arg d "$d" '
   .statusLine = {"type": "command", "command": ("/bin/bash " + $d + "/statusline-command.sh"), "refreshInterval": 30}
-  | .subagentStatusLine = {"type": "command", "command": ("/bin/bash " + $d + "/statusline-command.sh --subagent")}
+  | del(.subagentStatusLine)
 ' "$f.bak" > "$f"
 ```
 
@@ -68,7 +66,14 @@ printf '%s' '{"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"worksp
 ### 更新・元に戻す
 
 - **更新**: `git -C ~/src/claude-code-statusline pull`（settings は触りません）
-- **元に戻す**: settings から `statusLine` と `subagentStatusLine` を消します
+  - **2.18.0 でサブエージェントの行（`--subagent`）を廃止しました**。Claude Code 2.1.326 で `subagentStatusLine` が非推奨になった（まだ動くが、いずれ止まる）ためです。settings に `subagentStatusLine` が残っていたら消してください（残っていても壊れませんが、Claude Code が非推奨の通知を出します）
+
+    ```sh
+    f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+    jq 'del(.subagentStatusLine)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    ```
+
+- **元に戻す**: settings から `statusLine`（と、以前の版で入れた `subagentStatusLine`）を消します
 
   ```sh
   f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
@@ -81,20 +86,6 @@ printf '%s' '{"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"worksp
 - `refreshInterval` の単位は**秒**です。30 で十分です（1 回の描画は約 50ms）
 - vim モードを使うなら、`statusLine.hideVimModeIndicator` は**付けないでください**。この statusline は vim モードを出さないので、付けると組み込みの `-- INSERT --` まで消えます
 - **ダークテーマ前提**です。白地では読みにくい色があります
-
-## サブエージェントの行
-
-プロンプトの下のエージェントパネルで、サブエージェントの行に**モデル名**・**effort**・**worktree** を足します。並びは Claude Code の既定の行と同じです。
-
-![既定の行と、--subagent の行の比較](https://github.com/user-attachments/assets/b78caf9b-7a1a-4e49-8f9f-2aae0869eee4)
-
-- **モデル名**は 1 行目と同じ色で出ます。サブエージェントをどのモデルで走らせているかが一目で分かります
-- **effort** は、セッションと違う値を指定したときだけ出ます（継承したときは Claude Code が値を渡さないため）
-- **`🌲`** は、セッションと別の worktree で動いているときだけ出ます。自分で付けた worktree 名（`🌲fix-auth`）は名前ごと、`isolation: worktree` で隔離したサブエージェント（名前が ID）は `🌲` だけです
-- 書き換えるのは普通のサブエージェントの行だけです。チームメイト・ワークフロー・シェル・クラウドの行は既定のまま残ります
-- 書き換えた行では、Claude Code がスクリプトに渡さない `waiting`・`N queued`・活動中かどうかの ↓/↑ が消えます。経過時間は実行中の行だけに出ます
-
-「手順」の 3 で一緒に入ります。要らなければ `subagentStatusLine` を消してください。
 
 ## 何を読み、どこと通信するか
 

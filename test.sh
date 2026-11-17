@@ -668,135 +668,47 @@ check "USER が空なら実ユーザー名を使う（service だけで引かな
 
 echo "── モデル色 ──"
 # **色 assert は生のリテラルで書く**（`$OPUS55_PAL` のような定数で書くと、どんな値に変えても通って
-# 無断の再調整を検出できない）。**Opus 5 と Opus 5.5 を対で見る** — 5.5 の arm を足すと、並びしだいで
-# 5 の配色が巻き込まれて変わる（`"opus 5."*` が `opus 5.5` も拾うので arm の順序が意味を持つ）。
+# 無断の再調整を検出できない）。**色は tier ごとに 1 本（最新の版）で、旧い版も同じ色**（2.18.0）。
+# 版ごとに 1 件ずつ見る — 「どれかが合う」で束ねると、旧い版の arm を戻す変更が緑のまま通る。
+# 旧い版の色（Opus 4.x coral 173 / Opus 5 の先頭 130 / Sonnet 4.6 teal 79 / Sonnet 4.5 amber 214 /
+# Sonnet 5 の先頭 28 / Haiku 4.x lavender 183 / Fable 5 の先頭 178 / Fable 5.1 の先頭 95）が無いことも見る。
 mcol() {  # mcol ID DISPLAY → Line 1 のモデル名に載った 38;5;N を空白区切りで
   setup
   printf '{"version":"2.1.281","model":{"id":"%s","display_name":"%s"},"workspace":{"current_dir":"/tmp"}}' "$1" "$2" \
     | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" 2>/dev/null \
     | head -1 | grep -o $'\033\\[38;5;[0-9]*m' | sed 's/.*;//; s/m//' | sort -un | tr '\n' ' '
 }
-C=$(mcol claude-opus-5-5 'Opus 5.5')
-check "Opus 5.5 は 61 → 139 → 215 のスイープ（夜明けの地平線）" \
-  "$(all "$(has ' 61 ' " $C")" "$(has ' 139 ' " $C")" "$(has ' 215 ' " $C")" "$(no ' 130 ' " $C")")" "色: $C"
-C=$(mcol claude-opus-5 'Opus 5')
-check "Opus 5 は 130 → 173 → 215 のまま（5.5 の arm に巻き込まれない）" \
-  "$(all "$(has ' 130 ' " $C")" "$(has ' 173 ' " $C")" "$(no ' 61 ' " $C")" "$(no ' 139 ' " $C")")" "色: $C"
-# Sonnet も同じ形（`"sonnet 5."*` が `sonnet 5.5` を拾うので、5.5 の arm は前に置く）
-C=$(mcol claude-sonnet-5-5 'Sonnet 5.5')
-check "Sonnet 5.5 は 25 → 68 → 110 → 153 のスイープ（窓から見た地球）" \
-  "$(all "$(has ' 25 ' " $C")" "$(has ' 68 ' " $C")" "$(has ' 110 ' " $C")" "$(has ' 153 ' " $C")" "$(no ' 28 ' " $C")")" "色: $C"
-C=$(mcol claude-sonnet-5 'Sonnet 5')
-check "Sonnet 5 は 28 → 70 → 148 → 154 のまま（5.5 の arm に巻き込まれない）" \
-  "$(all "$(has ' 28 ' " $C")" "$(has ' 154 ' " $C")" "$(no ' 25 ' " $C")" "$(no ' 153 ' " $C")")" "色: $C"
+# **最新より古い版はグレー 244 の 1 色**（スイープの色が 1 つも載らない）。**スクリプトより新しい版
+# （Opus 5.6）は古くない** — 「最新と一致しない」で判定する実装に戻すと、ここが赤くなる。
+for _mv in \
+  'claude-opus-5-5|Opus 5.5|130 173 215|61 139 244' 'claude-opus-5-6|Opus 5.6|130 173 215|244' \
+  'claude-opus-5|Opus 5|244|130 173 215 61 139' 'claude-opus-4-6|Opus 4.6|244|130 173 215 61' \
+  'claude-sonnet-5-5|Sonnet 5.5|25 68 110 153|28 79 214 244' \
+  'claude-sonnet-5|Sonnet 5|244|25 68 110 153 28' 'claude-sonnet-4-6|Sonnet 4.6|244|25 68 110 153 79' \
+  'claude-sonnet-4-5-20250929|Sonnet 4.5|244|25 68 110 153 214' \
+  'claude-haiku-5-5|Haiku 5.5|168 175 222|183 244' 'claude-haiku-4-5-20251001|Haiku 4.5|244|168 175 222 183' \
+  'claude-fable-5-2|Fable 5.2|98 140 182|178 95 244' 'claude-fable-5-1|Fable 5.1|244|98 140 182 95' \
+  'claude-fable-5|Fable 5|244|98 140 182 178'; do
+  IFS='|' read -r _id _dn _want _old <<EOF_MV
+$_mv
+EOF_MV
+  C=$(mcol "$_id" "$_dn"); _ok=1
+  for _n in $_want; do [ -n "$(has " $_n " " $C")" ] || _ok=""; done
+  for _n in $_old; do [ -n "$(no " $_n " " $C")" ] || _ok=""; done
+  check "$_dn は ${_want// / → }（最新は tier の色・古い版はグレー）" "$_ok" "色: $C"
+done
+# 3 行目の `Fable:` は版を持たない（`/usage` の `limits[]` は `"Fable"` だけ）= generic の arm。
+# 名前の先頭が 98、`:` から先が名前の終わった色 182 になる（Line 1 と揃う）。
+setup; seed "" 39 "6 16:00"; O=$(rawr "$(pay "$FIVE")" 3)
+check "3 行目の版なし Fable: も 98 で始まり 182 で続く" \
+  "$(all "$(has $'\033[38;5;98mF' "$O")" "$(has $'\033[38;5;182m:' "$O")")" "$(printf '%s' "$O" | cat -v)"
 
-echo "── subagent 行（--subagent）──"
-# 本体は stdout を 1 行ずつ `{"id","content"}` として読み、**読めない行はログに書いて捨てる**だけ
-# （画面は既定の行に戻るので、壊れても気付けない）。だから守るのは「読める形か」「差し替える行を
-# 間違えないか」「1 task の型不正で全滅しないか」「外部プロセスが増えていないか」。
-# **`setup` は `sa` の外で呼ぶ** — `O=$(sa …)` の subshell の中で呼ぶと `$ERR` が親に戻らず、
-# stderr の検査が前のケースのファイル（または存在しないファイル = 空）を見て**素通りする**。
-sa() {  # sa PAYLOAD → stdout は被験体の出力、stderr は $ERR（先に setup しておく）
-  printf '%s' "$1" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" --subagent 2>"$ERR"
-}
-sact() { printf '%s' "$2" | jq -r --arg id "$1" 'select(.id == $id) | .content' 2>/dev/null | strip; }  # sact ID OUT
-_ms=$((NOW * 1000))
-_SA='{"columns":120,"cwd":"/s/.claude/worktrees/main-wt","tasks":[
- {"id":"a1","name":"rev","agentType":"general-purpose","type":"local_agent","status":"running","label":"Review\ndiff\u001b[31m","startTime":'$((_ms - 7200000))',"model":"claude-sonnet-5-5","tokenCount":12432,"effort":"low","cwd":"/r/.claude/worktrees/fix-auth/sub"},
- {"id":"a2","type":"local_agent","status":"completed","description":"Find callers","startTime":'$((_ms - 7200000))',"model":"claude-opus-5-5[1m]","effort":32000,"cwd":"/s/.claude/worktrees/main-wt","name":"","agentType":"code-reviewer"},
- {"id":"x1","type":"local_agent","model":{"bad":1},"startTime":"oops","tokenCount":"9","label":["x"],"name":7,"agentType":"Explore","description":"typed","effort":["bad"]},
- {"id":"b1","type":"local_bash","status":"running","label":"npm test"},
- {"id":"t1","type":"in_process_teammate","status":"running","label":"alice"},
- {"id":"w1","type":"local_workflow","status":"running","label":"wf"},
- {"id":"r1","type":"remote_agent","status":"running","label":"cloud"}]}'
-setup; O=$(sa "$_SA")
-_bad=$(printf '%s\n' "$O" | while IFS= read -r _l || [ -n "$_l" ]; do
-  printf '%s' "$_l" | jq -e 'type == "object" and (.id | type) == "string" and (.content | type) == "string" and (keys == ["content","id"])' >/dev/null 2>&1 || printf '%s\n' "$_l"
-done)
-check "各行が {id, content} の JSON 1 行（改行・ESC 入りの label でも割れない）" \
-  "$(all "$([ -z "$_bad" ] && echo 1)" "$([ "$(printf '%s\n' "$O" | grep -c .)" = 3 ] && echo 1)")" "読めない行: $_bad / 出力: $O"
-check "差し替えるのは local_agent の行だけ（bash / teammate / workflow / remote は既定に残す）" \
-  "$(all "$(has '"a1"' "$O")" "$(has '"a2"' "$O")" "$(no '"b1"' "$O")" "$(no '"t1"' "$O")" "$(no '"w1"' "$O")" "$(no '"r1"' "$O")")" "$O"
-check "型不正の task が 1 件あっても他の行が残る" \
-  "$(all "$(has 'Sonnet 5.5' "$(sact a1 "$O")")" "$(has 'typed' "$(sact x1 "$O")")" "$(empty "$ERR")")" "$O / stderr: $(cat "$ERR")"
-check "モデル名は prettify してモデル色で出す（Sonnet 5.5 = 25 始まりのスイープ）" \
-  "$(all "$(has 'Sonnet 5.5  low  🌲fix-auth  Review diff' "$(sact a1 "$O")")" "$(has $'\\u001b[38;5;25mS' "$O")")" "$(sact a1 "$O")"
-# effort は文字列（`low`）と数値のトークン予算（`32000` → `32k`）の両方で来る。数値の経路を落とすと
-# 予算を指定した行だけ effort が消える（画面では「継承した」と区別できない）ので対で持つ。
-check "effort は文字列はそのまま・数値は 32k に畳んで effort 色で出す" \
-  "$(all "$(has $'\\u001b[38;5;178mlow' "$O")" "$(has 'Opus 5.5    32k  Find callers' "$(sact a2 "$O")")")" "$O"
-# 名前列は既定と同じ `name ?? agentType`（2.1.293+）。`name` が空文字や非文字列なら `agentType` に倒す。
-# 対で持つ — `name` を優先する側（a1 は agentType も持つが name="rev" を出す）と倒れる側。
-check "名前列は name、無ければ agentType（空の name・型不正の name でも）" \
-  "$(all "$(has 'code-reviewer  Opus 5.5' "$(sact a2 "$O")")" "$(has 'Explore' "$(sact x1 "$O")")" "$(has 'rev  ' "$(sact a1 "$O")")" "$(no 'general-purpose' "$(sact a1 "$O")")")" "$O"
-# 🌲 は**セッションと違う worktree の行だけ**。対で持つ — 比較を外すと、セッションが worktree に
-# いるとき全行に同じ名前が並ぶ（a2 はセッションと同じ cwd）。
-check "セッションと違う worktree の行には 🌲名前 を出す" "$(has '🌲fix-auth' "$(sact a1 "$O")")" "$(sact a1 "$O")"
-check "セッションと同じ worktree の行には 🌲 を出さない" "$(no '🌲' "$(sact a2 "$O")")" "$(sact a2 "$O")"
-# **経過は running のときだけ**（payload に endTime が無いので、終わった行では伸び続ける）。
-# 対で持つ — 「出さない」だけだと経過を丸ごと消す変更でも緑になる。
-check "running の行は経過を出す（2h）" "$(has '2h · 12.4k tokens' "$(sact a1 "$O")")" "$(sact a1 "$O")"
-# 値の無い effort / 🌲 の列は詰める（幅を揃えると説明の前に空白の塊ができる）。x1 は両方とも無い。
-# x1 = 名前列 13 桁 + 空 2 + モデル列 10 桁（x1 は model 無し）+ 空 2 の直後に説明。旧実装は effort（3 桁）と
-# 🌲（10 桁）の空の列ぶん、さらに 17 桁ずれていた。
-check "effort と 🌲 が無い行は説明がモデル列の直後に来る" \
-  "$([ "$(sact x1 "$O")" = "Explore$(printf '%20s' '')typed" ] && echo 1)" "[$(sact x1 "$O")]"
-check "running 以外の行は経過を出さない" "$(ends 'Find callers' "$(sact a2 "$O")")" "$(sact a2 "$O")"
-# **隔離したサブエージェントの `agent-<hex>` は 🌲 だけ、自分で付けた名前は残す**（対で持つ — 判定を
-# 「`agent-` で始まる」に緩めると `agent-refactor` が消え、判定を外すと 23 桁の ID が戻る）
-_SA3='{"cwd":"/r","tasks":[
- {"id":"g1","type":"local_agent","label":"iso","cwd":"/r/.claude/worktrees/agent-aec6ab632b4eaf5e2"},
- {"id":"g2","type":"local_agent","label":"named","cwd":"/r/.claude/worktrees/agent-refactor/src"},
- {"id":"g3","type":"local_agent","label":"old","cwd":"/r/.claude/worktrees/agent-a1b2c3d4"}]}'
-setup; O=$(sa "$_SA3")
-check "隔離したサブエージェントの worktree（agent-<hex>）は 🌲 だけにする" \
-  "$(all "$(has '🌲  iso' "$(sact g1 "$O")")" "$(no 'aec6' "$(sact g1 "$O")")")" "[$(sact g1 "$O")]"
-check "旧形式の agent-a<7 桁> も 🌲 だけにする" "$(all "$(has '🌲  old' "$(sact g3 "$O")")" "$(no 'a1b2' "$(sact g3 "$O")")")" "[$(sact g3 "$O")]"
-check "agent- で始まっても自分で付けた名前は残す（agent-refactor）" "$(has '🌲agent-refactor  named' "$(sact g2 "$O")")" "[$(sact g2 "$O")]"
-setup; O=$(sa '{"tasks":"broken"}')
-check "tasks が配列でなければ何も出さない（全行が既定に戻る）" "$(all "$([ -z "$O" ] && echo 1)" "$(empty "$ERR")")" "$O / $(cat "$ERR")"
-setup; O=$(sa 'not json')
-check "stdin が JSON でなくても exit 0 で何も出さない" "$(all "$([ -z "$O" ] && echo 1)" "$(empty "$ERR")")" "$O / $(cat "$ERR")"
-# **外部プロセスは jq 1 個が床**（`now` も jq から取る）。git も走らない = main の経路に落ちていない。
-setup
-_trace=$(printf '%s' "$_SA" | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" \
-    CLAUDE_STATUSLINE_NO_NET=1 /bin/bash -x "$S" --subagent 2>&1 >/dev/null)
-check "subagent 行の外部プロセスは jq 1 個（date / git / security を呼ばない）" \
-  "$(all "$([ "$(printf '%s' "$_trace" | grep -cE '^\++ jq ')" = 1 ] && echo 1)" \
-         "$([ "$(printf '%s' "$_trace" | grep -cE '^\++ (date|git|security|stat|md5|shasum|curl) ')" = 0 ] && echo 1)")" \
-  "$(printf '%s' "$_trace" | grep -E '^\++ [a-z]' | grep -vE '^\++ (local|printf|\[\[|_)' | head -5)"
-
-# **上の _SA で拾えない壊し方を、別の入力で塞ぐ**（test-pin-auditor の指摘 6 件。2026-10-13）。_SA に足すと
-# x1 の桁数の厳密一致が崩れるので分けてある。
-# - label に `"` `\` ESC US を入れる — `json_str` の escape と jq の `[[:cntrl:]]` を、狭めたら赤くなるように
-#   （ESC は JSON を割らないので、`sact` が strip した後の文字列だけ見ていると ESC の注入を見逃す）
-# - 日付つき id（`prettify_model` の 8 桁落とし）/ 数値 effort の色 / 分の経過 / failed の行 / セッション cwd の型
-_SA2='{"cwd":"/s","tasks":[
- {"id":"p1","name":"q","type":"local_agent","status":"running","label":"Q \"q\" back\\slash\u001b[31m\u001fend","startTime":'$((_ms - 90000))',"model":"claude-haiku-4-5-20251001","effort":32000},
- {"id":"p2","name":"f","type":"local_agent","status":"failed","label":"F","startTime":'$((_ms - 90000))'}]}'
-setup; O=$(sa "$_SA2")
-_bad=$(printf '%s\n' "$O" | while IFS= read -r _l || [ -n "$_l" ]; do
-  printf '%s' "$_l" | jq -e 'type == "object" and (.content | type) == "string"' >/dev/null 2>&1 || printf '%s\n' "$_l"
-done)
-check "引用符とバックスラッシュ入りの label でも JSON として読め、文字が残る" \
-  "$(all "$([ -z "$_bad" ] && echo 1)" "$([ "$(printf '%s\n' "$O" | grep -c .)" = 2 ] && echo 1)" "$(has '"q" back\slash' "$(sact p1 "$O")")")" "$O"
-check "label の ESC を生で残さず（色の注入を塞ぐ）、US で行が割れない" \
-  "$(all "$(no '\u001b[31m' "$O")" "$(has 'end' "$(sact p1 "$O")")")" "$O"
-check "日付つき id は末尾 8 桁を落として Haiku 4.5 にする" \
-  "$(all "$(has 'Haiku 4.5' "$(sact p1 "$O")")" "$(no '2025' "$(sact p1 "$O")")")" "$(sact p1 "$O")"
-check "数値の effort（32k）も effort 色で出す" "$(has '\u001b[38;5;105m32k' "$O")" "$O"
-check "running の経過は 1 時間未満なら分で出す（1m）" "$(ends 'end  1m' "$(sact p1 "$O")")" "[$(sact p1 "$O")]"
-check "failed の行も経過を出さない（completed 以外の終わった状態）" "$(ends 'F' "$(sact p2 "$O")")" "[$(sact p2 "$O")]"
-setup; O=$(sa '{"cwd":5,"tasks":[{"id":"c1","type":"local_agent","label":"ok"}]}')
-check "セッションの cwd が文字列でなくても全行が既定に戻らない" "$(has 'ok' "$(sact c1 "$O")")" "[$O]"
-
-C=$(mcol claude-haiku-5-5 'Haiku 5.5')
-check "Haiku 5.5 は 168 → 175 → 222 のスイープ（ローズ・ピンク・麦わら。青を使わない）" \
-  "$(all "$(has ' 168 ' " $C")" "$(has ' 175 ' " $C")" "$(has ' 222 ' " $C")" "$(no ' 183 ' " $C")" "$(no ' 67 ' " $C")")" "色: $C"
-C=$(mcol claude-haiku-4-5-20251001 'Haiku 4.5')
-check "Haiku 4.5 は lavender 183 のまま（5.5 の arm に巻き込まれない）" \
-  "$(all "$(has ' 183 ' " $C")" "$(no ' 168 ' " $C")" "$(no ' 222 ' " $C")")" "色: $C"
+echo "── --subagent は削除した（2.18.0）──"
+# settings に `subagentStatusLine` が残っている人のために、`--subagent` では**何も出さず exit 0**。
+# 出力があると本体が行ごとに「non-JSON line」をログに書く。stderr も空であること。
+setup; O=$(printf '%s' '{"columns":120,"tasks":[{"id":"a1","type":"local_agent","label":"x","model":"claude-haiku-4-5"}]}' \
+  | env CLAUDE_CONFIG_DIR="$CFG" CLAUDE_STATUSLINE_V2_CACHE_DIR="$CD" CLAUDE_STATUSLINE_NO_NET=1 /bin/bash "$S" --subagent 2>"$ERR"; echo "rc=$?")
+check "--subagent では何も出さず exit 0（既定の行に任せる）" "$(all "$([ "$O" = "rc=0" ] && echo 1)" "$(empty "$ERR")")" "[$O] stderr: $(cat "$ERR")"
 
 echo "── 衛生（メタテスト）──"
 # **`bash "$S"` と書くと最重要制約（3.2 互換）を一切検証しないテストになる。**

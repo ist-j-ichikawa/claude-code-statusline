@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.18.0] - 2026-11-17
+
+### Changed
+
+- **モデル名の色は、Opus / Sonnet / Haiku / Fable それぞれ最新の版だけが持つようにしました。最新より古い版はグレー 1 色で出します。** 古い版を使っていると一目で分かり、最新へ切り替えるきっかけになります
+  - 最新は Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.2 です。スクリプトの更新より先に出た新しい版（たとえば Opus 5.6）はグレーにせず、その系列の色で出します
+  - 3 行目のモデル別の枠（`Fable:` / `Opus:`）は版を持たないので、その系列の色のままです
+  - 古い版の色（Opus 4.x の coral、Sonnet 4.6 の teal、Sonnet 4.5 の amber、Haiku 4.x の lavender、Opus 5 / Sonnet 5 / Fable 5 / Fable 5.1 の多色）は使わなくなりました
+- **Claude Fable 5.2 の色を、発表画像（軌道から見た夜明けの縁）の紫にしました。** 紫 → 藤色 → 蘭色の 1 回スイープ（`98` → `140` → `182`）です
+- **Claude Opus 5.5 の色を、発表画像の地平線の暖色に変えました。** 錆色 → coral → 金のスイープ（`130` → `173` → `215`）です。これまでの藍 → 藤 → 橙は、Sonnet 5.5 の青や Fable 5.2 の紫と始まりの色が近かったためです。これで 4 本の色が、Opus = 橙、Sonnet = 青、Haiku = ローズ、Fable = 紫に分かれます
+- Built against を Claude Code **2.1.326** に追従しました（2.1.319〜2.1.326 の CHANGELOG 1065 項目と、2.1.318〜2.1.326 のバイナリを照合。2.1.320 は欠番）。**ステータスラインが受け取る JSON のキーは増減していません**
+
+### Removed
+
+- **サブエージェントの行（`--subagent`）を廃止しました。** Claude Code は 2.1.323 で `subagentStatusLine` を削除し、2.1.326 で「非推奨。まだ動くが、いずれ止まる（mods へ移行）」として戻しました。非推奨の仕組みには乗らないことにしました。サブエージェントの行は Claude Code の既定の見た目に戻ります
+  - settings に `subagentStatusLine` が残っていても壊れません（`--subagent` で呼ばれたら何も出さずに終わり、既定の行に任せます）。ただし Claude Code が非推奨の通知を出すので、消してください: `jq 'del(.subagentStatusLine)'`（README の「更新」）
+  - README の手順 3 は `statusLine` だけを書き込み、残っている `subagentStatusLine` を消すようにしました
+
 ## [2.17.0] - 2026-11-09
 
 ### Changed
