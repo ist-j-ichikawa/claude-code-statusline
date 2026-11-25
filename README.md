@@ -2,7 +2,7 @@
 
 Claude Code の statusline を 3 行で描く bash スクリプト 1 本です。macOS 専用です。
 
-![3 行の statusline](https://github.com/user-attachments/assets/0e2a6e08-c757-4d29-ad65-d11a8e8d5e88)
+![3 行の statusline](https://github.com/user-attachments/assets/5cd659a7-8803-4d57-aacf-e1b9c68279eb)
 
 | 行 | 出すもの |
 |---|---|
