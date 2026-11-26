@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.0] - 2026-11-26
+
+### Changed
+
+- Built against を Claude Code **2.1.332** に追従しました（CHANGELOG 150 項目と、2.1.331 / 2.1.332 のバイナリを照合）。**ステータスラインが受け取る JSON のキーは増減していません**。`/statusline` の作法に「git で `git lfs` を走らせない・`GIT_CONFIG_PARAMETERS` を消さない」が加わりましたが、このスクリプトはどちらもしていません。表示は変わりません
+
 ## [2.19.0] - 2026-11-17
 
 ### Changed

@@ -5,7 +5,10 @@
 # **`--subagent` モードは 2.18.0 で削除した** — 上流が `subagentStatusLine` を 2.1.323 で削除し、2.1.326 で
 # 「非推奨・まだ動く・いずれ止まる（mods へ移行）」として戻した。非推奨のものは持たない（2026-11-17 ユーザー指示）。
 #
-# **Built against Claude Code 2.1.331**（`experiments/upstream/2.1.331/` に教典 3 つを snapshot 済み）。
+# **Built against Claude Code 2.1.332**（`experiments/upstream/2.1.332/` に教典 3 つを snapshot 済み）。
+# 2.1.331 → 332 もキーの増減ゼロ。教典①に「git は `git lfs` を走らせず、`GIT_CONFIG_PARAMETERS` を消さない
+# （`env -i` / unset / 上書きをしない。sandbox ではこれで LFS の filter を止めている）」が足された。
+# このスクリプトの git は `--no-optional-locks status` の 1 回だけで、env に触らないので守れている。
 # 2.1.329 → 331 は payload のキーの増減ゼロ。2.1.331 で Keychain の資格情報に「封をして別の項目へ溢れさせる」
 # 仕組み（`overflow` / `sealed`）が入った。手元の項目はまだ平文の JSON で `.claudeAiOauth` を直接持つ（2026-11-25 実測）。
 # 封をされた項目になったら `.claudeAiOauth` が読めずプラン名が消える（= 無表示に倒れる。誤読はしない）。
